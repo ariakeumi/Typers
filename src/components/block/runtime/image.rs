@@ -3,10 +3,12 @@
 use super::*;
 
 impl Block {
+    /// Returns the resolved standalone-image runtime, if one is available.
     pub(crate) fn image_runtime(&self) -> Option<&ImageRuntime> {
         self.image_runtime.as_ref()
     }
 
+    /// Returns whether this block kind or table cell can display a lone image.
     pub(super) fn can_present_as_image(&self) -> bool {
         self.is_table_cell()
             || matches!(
@@ -26,13 +28,25 @@ impl Block {
         self.can_present_as_image() && self.standalone_image_markdown_for_runtime().is_some()
     }
 
+    /// Resolves image syntax against reference definitions and the base path.
     pub(super) fn compute_image_runtime(
         &self,
         base_dir: Option<&Path>,
         syntax: ImageSyntax,
     ) -> Option<ImageRuntime> {
+        self.can_present_as_image()
+            .then(|| self.resolve_image_runtime(base_dir, syntax))
+            .flatten()
+    }
+
+    /// Resolves image syntax for inline HTML or table content regardless of block kind.
+    fn resolve_image_runtime(
+        &self,
+        base_dir: Option<&Path>,
+        syntax: ImageSyntax,
+    ) -> Option<ImageRuntime> {
         let resolved_target = syntax.resolve_target(&self.image_reference_definitions)?;
-        self.can_present_as_image().then(|| ImageRuntime {
+        Some(ImageRuntime {
             alt: syntax.alt.clone(),
             src: resolved_target.src.clone(),
             title: resolved_target.title.clone(),
@@ -40,14 +54,18 @@ impl Block {
         })
     }
 
+    /// Resolves image syntax using this block's configured base directory.
     pub(crate) fn image_runtime_for_syntax(&self, syntax: ImageSyntax) -> Option<ImageRuntime> {
-        self.compute_image_runtime(self.image_base_dir.as_deref(), syntax)
+        self.resolve_image_runtime(self.image_base_dir.as_deref(), syntax)
     }
 
+    /// Returns the directory used to resolve relative image sources.
     pub(crate) fn image_base_dir(&self) -> Option<&Path> {
         self.image_base_dir.as_deref()
     }
 
+    /// Rebuilds the standalone-image runtime and clears expansion state if
+    /// the block no longer resolves to an eligible image.
     pub(super) fn sync_image_runtime(&mut self) {
         let next_runtime = if self.can_present_as_image() {
             self.standalone_image_markdown_for_runtime()
@@ -66,6 +84,7 @@ impl Block {
         self.image_runtime = next_runtime;
     }
 
+    /// Finds lone-image syntax in visible text or serialized inline Markdown.
     fn standalone_image_markdown_for_runtime(&self) -> Option<String> {
         let visible = self.record.title.visible_text();
         if parse_standalone_image(&visible).is_some() {
@@ -78,12 +97,14 @@ impl Block {
             .then_some(serialized)
     }
 
+    /// Queues expansion into editable text when an image runtime exists.
     pub(crate) fn request_image_edit_expansion(&mut self) {
         if self.image_runtime.is_some() {
             self.image_expand_requested = true;
         }
     }
 
+    /// Expands a queued image edit and moves the caret to the title end.
     pub(super) fn consume_requested_image_edit_expansion(&mut self) -> bool {
         if self.image_runtime.is_some() && self.image_expand_requested && !self.image_edit_expanded
         {
@@ -103,6 +124,8 @@ impl Block {
         false
     }
 
+    /// Applies focus transitions to image edit expansion; returns whether the
+    /// visible editing state changed.
     pub(crate) fn sync_image_focus_state(&mut self, focused: bool) -> bool {
         if self.image_runtime.is_none() {
             if self.image_edit_expanded || self.image_expand_requested {
@@ -127,6 +150,7 @@ impl Block {
         false
     }
 
+    /// Returns whether the resolved image widget is currently shown.
     pub(crate) fn showing_rendered_image(&self) -> bool {
         self.image_runtime.is_some() && !self.is_source_raw_mode() && !self.image_edit_expanded
     }

@@ -8,10 +8,14 @@ use gpui::{SharedUri, http_client::Uri};
 
 use crate::net;
 
+use super::link::parse_link_target;
+
 /// Active fenced code block while scanning for image reference definitions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FenceInfo {
+    /// Backtick or tilde used by the opening fence.
     ch: char,
+    /// Opening run length; closing runs must match exactly in this scanner.
     len: usize,
 }
 
@@ -21,25 +25,43 @@ enum HtmlBlockStart {
     Comment,
     /// HTML tag block whose closing behavior depends on the tag.
     Tag {
+        /// Source-cased tag name used for matching the closing line.
         name: String,
+        /// Whether the trimmed opening line ends with a self-closing marker.
         self_closing: bool,
+        /// Whether the opening line contains an exact closing-tag spelling.
         closes_same_line: bool,
     },
 }
 
-/// Parsed standalone image expression.
+/// Parsed image expression, shared by standalone images and table-cell segments.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ImageSyntax {
+    /// Alternative text with ASCII punctuation escapes removed, not parsed as inline markup.
     pub(crate) alt: String,
+    /// Direct source or normalized reference label awaiting document context.
     pub(crate) target: ImageTarget,
+}
+
+/// A complete image line in an HTML container, optionally wrapped by a link.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct HtmlContainerImage {
+    /// Image source and alternative text shared with native image rendering.
+    pub(crate) syntax: ImageSyntax,
+    /// Destination of `[![alt](image)](destination)`, if present.
+    pub(crate) link_target: Option<String>,
 }
 
 /// Inline image/text segment used only by native table-cell rendering.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TableCellInlineImageSegment {
+    /// Uninterpreted Markdown between recognized image expressions.
     Text(String),
+    /// One image expression with its original spelling and parsed target.
     Image {
+        /// Exact substring, retained for editing or unresolved-image fallback.
         markdown: String,
+        /// Parsed alt text and direct/reference target.
         syntax: ImageSyntax,
     },
 }
@@ -48,24 +70,37 @@ pub(crate) enum TableCellInlineImageSegment {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ImageTarget {
     /// Direct image target from `![alt](src "title")`.
-    Direct { src: String, title: Option<String> },
-    /// Reference image target from `![alt][label]`.
-    Reference { label: String },
+    Direct {
+        /// Source after punctuation unescaping and URI angle-wrapper removal.
+        src: String,
+        /// Optional double-quoted title, without its delimiters.
+        title: Option<String>,
+    },
+    /// Full, collapsed, or shortcut reference image target.
+    Reference {
+        /// Whitespace-collapsed lowercase key used in the definition map.
+        label: String,
+    },
 }
 
 /// Global reference definition for a reference-style image label.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ImageReferenceDefinition {
+    /// Normalized source string; local paths are not yet resolved.
     pub(crate) src: String,
+    /// Optional double-quoted title from the definition.
     pub(crate) title: Option<String>,
 }
 
+/// First-seen image definitions keyed by normalized reference labels.
 pub(crate) type ImageReferenceDefinitions = HashMap<String, ImageReferenceDefinition>;
 
 /// Resolved image target ready for path or URL loading.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ResolvedImageTarget {
+    /// Direct or reference-defined source before local/remote classification.
     pub(crate) src: String,
+    /// Title copied from the direct target or matched definition.
     pub(crate) title: Option<String>,
 }
 
@@ -79,6 +114,7 @@ pub(crate) enum ImageResolvedSource {
 }
 
 impl ImageSyntax {
+    /// Copies a direct target or looks up the normalized label, failing if undefined.
     pub(crate) fn resolve_target(
         &self,
         reference_definitions: &ImageReferenceDefinitions,
@@ -99,6 +135,8 @@ impl ImageSyntax {
     }
 }
 
+/// Classifies a remote source using the network policy; otherwise resolves a local path.
+/// Relative paths stay relative without `base_dir`; no existence or containment check is made.
 pub(crate) fn resolve_image_source(source: &str, base_dir: Option<&Path>) -> ImageResolvedSource {
     if net::is_remote_image_source(source) {
         return ImageResolvedSource::Remote(SharedUri::from(source.to_string()));
@@ -115,6 +153,8 @@ pub(crate) fn resolve_image_source(source: &str, base_dir: Option<&Path>) -> Ima
     ImageResolvedSource::Local(resolved)
 }
 
+/// Parses a trimmed, single-line image in direct, full, collapsed, or shortcut form.
+/// Requires a terminal target delimiter when present; target contents are parsed permissively.
 pub(crate) fn parse_standalone_image(markdown: &str) -> Option<ImageSyntax> {
     if markdown.contains('\n') || markdown.contains('\r') {
         return None;
@@ -171,6 +211,31 @@ pub(crate) fn parse_standalone_image(markdown: &str) -> Option<ImageSyntax> {
     }
 }
 
+/// Finds a lone image line inside an HTML container, including linked badges.
+///
+/// The original line remains the serialization source for the containing HTML block.
+pub(crate) fn parse_html_container_image_line(line: &str) -> Option<HtmlContainerImage> {
+    let line = line.trim();
+    if let Some(syntax) = parse_standalone_image(line) {
+        return Some(HtmlContainerImage {
+            syntax,
+            link_target: None,
+        });
+    }
+
+    let inner = line.strip_prefix('[')?;
+    let (_, syntax, end) = parse_inline_image_at(inner, 0)?;
+    let link_tail = inner.get(end..)?;
+    let target = link_tail.strip_prefix("](")?.strip_suffix(')')?;
+    let (link_target, _) = parse_link_target(target)?;
+    Some(HtmlContainerImage {
+        syntax,
+        link_target: Some(link_target),
+    })
+}
+
+/// Splits table-cell Markdown around unescaped image expressions, preserving source text.
+/// Immediately link-wrapped images remain text; code-span context is not tracked.
 pub(crate) fn parse_table_cell_inline_images(markdown: &str) -> Vec<TableCellInlineImageSegment> {
     let mut segments = Vec::new();
     let mut text_start = 0usize;
@@ -226,6 +291,8 @@ pub(crate) fn parse_table_cell_inline_images(markdown: &str) -> Vec<TableCellInl
     }
 }
 
+/// Parses an image at a valid UTF-8 byte offset and returns source, syntax, and exclusive end.
+/// Direct targets end at the first unescaped `)`, without nested-parenthesis tracking.
 fn parse_inline_image_at(markdown: &str, start: usize) -> Option<(String, ImageSyntax, usize)> {
     if !markdown[start..].starts_with("![") {
         return None;
@@ -284,6 +351,7 @@ fn parse_inline_image_at(markdown: &str, start: usize) -> Option<(String, ImageS
     }
 }
 
+/// Detects an unmatched label opener before the image and an immediate link suffix after it.
 fn is_link_wrapped_inline_image(markdown: &str, start: usize, end: usize) -> bool {
     let mut cursor = 0usize;
     let mut open_label = None;
@@ -304,6 +372,9 @@ fn is_link_wrapped_inline_image(markdown: &str, start: usize, end: usize) -> boo
     open_label.is_some() && markdown[end..].starts_with("](")
 }
 
+/// Scans container-prefixed lines for definitions, retaining the first normalized label.
+/// HTML regions and fences with nonblank info tails suppress scanning via line heuristics.
+/// Bare fences do not activate suppression, and closing runs must match the opener exactly.
 pub(crate) fn parse_image_reference_definitions(markdown: &str) -> ImageReferenceDefinitions {
     let lines = markdown.split('\n').collect::<Vec<_>>();
     let normalized_lines = lines
@@ -392,6 +463,7 @@ pub(crate) fn parse_image_reference_definitions(markdown: &str) -> ImageReferenc
     definitions
 }
 
+/// Collapses Unicode whitespace to single spaces and lowercases a nonempty reference label.
 pub(crate) fn normalize_reference_label(label: &str) -> Option<String> {
     // Single-pass concat: walk the words once, push to the output with a
     // leading separator on all but the first. Avoids the intermediate
@@ -411,6 +483,8 @@ pub(crate) fn normalize_reference_label(label: &str) -> Option<String> {
     }
 }
 
+/// Parses a definition and optional indented title candidate after container stripping.
+/// Returns the normalized label, source metadata, and consumed line count.
 fn parse_image_reference_definition(
     lines: &[&str],
     start: usize,
@@ -450,6 +524,7 @@ fn parse_image_reference_definition(
     Some((label, ImageReferenceDefinition { src, title }, consumed))
 }
 
+/// Repeatedly removes quote/list markers before reference and raw-block recognition.
 fn strip_reference_scan_container_prefixes(mut line: &str) -> &str {
     loop {
         let original = line;
@@ -467,6 +542,7 @@ fn strip_reference_scan_container_prefixes(mut line: &str) -> &str {
     }
 }
 
+/// Removes a quote marker after at most three spaces and one optional following space.
 fn strip_reference_scan_quote_prefix(line: &str) -> Option<&str> {
     let leading_spaces = line.bytes().take_while(|b| *b == b' ').count();
     if leading_spaces > 3 {
@@ -481,6 +557,7 @@ fn strip_reference_scan_quote_prefix(line: &str) -> Option<&str> {
     Some(rest[1..].strip_prefix(' ').unwrap_or(&rest[1..]))
 }
 
+/// Removes an indented bullet or one-to-nine-digit ordered marker and one separator.
 fn strip_reference_scan_list_marker(line: &str) -> Option<&str> {
     let indent_bytes = line
         .chars()
@@ -516,6 +593,8 @@ fn strip_reference_scan_list_marker(line: &str) -> Option<&str> {
     Some(&rest[digit_len + 2..])
 }
 
+/// Recognizes a column-zero fence of at least three markers after container stripping.
+/// Rejects backtick info strings containing another backtick.
 fn parse_reference_scan_opening_fence(line: &str) -> Option<FenceInfo> {
     let trimmed = line.trim_end();
     let ch = trimmed.chars().next()?;
@@ -530,6 +609,7 @@ fn parse_reference_scan_opening_fence(line: &str) -> Option<FenceInfo> {
     (len >= 3).then_some(FenceInfo { ch, len })
 }
 
+/// Requires the opening marker and exact run length followed only by whitespace.
 fn is_reference_scan_closing_fence(line: &str, opener: FenceInfo) -> bool {
     let trimmed = line.trim_end();
     if !trimmed.starts_with(opener.ch) {
@@ -543,6 +623,7 @@ fn is_reference_scan_closing_fence(line: &str, opener: FenceInfo) -> bool {
     run_len == opener.len && trimmed[opener.ch.len_utf8() * run_len..].trim().is_empty()
 }
 
+/// Detects a comment or opening tag at the trimmed line start without validating HTML.
 fn parse_reference_scan_html_block_start(line: &str) -> Option<HtmlBlockStart> {
     let rest = line.trim_start().trim_end();
     if rest.starts_with("<!--") {
@@ -576,6 +657,7 @@ fn parse_reference_scan_html_block_start(line: &str) -> Option<HtmlBlockStart> {
     })
 }
 
+/// Reads a leading closing-tag name, retaining source casing for the scanner match.
 fn parse_reference_scan_html_close_tag_name(line: &str) -> Option<String> {
     let rest = line.trim_start().trim_end();
     let tagged = rest.strip_prefix("</")?;
@@ -597,6 +679,8 @@ fn parse_reference_scan_html_close_tag_name(line: &str) -> Option<String> {
     Some(name.to_string())
 }
 
+/// Splits a nonempty source from an optional whitespace-separated double-quoted title.
+/// Single-quoted and parenthesized title candidates remain part of the source.
 fn parse_image_target(inner: &str) -> Option<(String, Option<String>)> {
     if inner.is_empty() {
         return None;
@@ -619,6 +703,7 @@ fn parse_image_target(inner: &str) -> Option<(String, Option<String>)> {
     Some((normalize_image_source(inner), None))
 }
 
+/// Detects an indented quoted or parenthesized continuation candidate, not a parsed title.
 fn is_reference_definition_title_continuation(line: &str) -> bool {
     let indent_bytes = line
         .chars()
@@ -635,6 +720,7 @@ fn is_reference_definition_title_continuation(line: &str) -> bool {
         || (trimmed.starts_with('(') && trimmed.ends_with(')'))
 }
 
+/// Finds the last unescaped double quote before a closing byte offset, after whitespace.
 fn find_open_title_quote(input: &str, close_quote: usize) -> Option<usize> {
     let bytes = input.as_bytes();
     (0..close_quote).rev().find(|&index| {
@@ -645,6 +731,7 @@ fn find_open_title_quote(input: &str, close_quote: usize) -> Option<usize> {
     })
 }
 
+/// Unescapes ASCII punctuation and removes angle wrappers when the inner string parses as a URI.
 fn normalize_image_source(source: &str) -> String {
     let source = unescape_ascii_punctuation(source);
     if source.starts_with('<')
@@ -657,6 +744,7 @@ fn normalize_image_source(source: &str) -> String {
     }
 }
 
+/// Removes a backslash only when it precedes ASCII punctuation.
 fn unescape_ascii_punctuation(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
@@ -670,11 +758,13 @@ fn unescape_ascii_punctuation(input: &str) -> String {
     output
 }
 
+/// Finds an unescaped ASCII delimiter at or after the supplied byte offset.
 fn find_unescaped_char(input: &str, start: usize, target: u8) -> Option<usize> {
     let bytes = input.as_bytes();
     (start..bytes.len()).find(|&index| bytes[index] == target && !is_escaped(input, index))
 }
 
+/// Tests for an odd-length backslash run immediately before a valid byte offset.
 fn is_escaped(input: &str, index: usize) -> bool {
     if index == 0 {
         return false;
@@ -698,8 +788,9 @@ fn is_escaped(input: &str, index: usize) -> bool {
 mod tests {
     use super::{
         ImageReferenceDefinition, ImageResolvedSource, ImageSyntax, ImageTarget,
-        TableCellInlineImageSegment, normalize_reference_label, parse_image_reference_definitions,
-        parse_standalone_image, parse_table_cell_inline_images, resolve_image_source,
+        TableCellInlineImageSegment, normalize_reference_label, parse_html_container_image_line,
+        parse_image_reference_definitions, parse_standalone_image, parse_table_cell_inline_images,
+        resolve_image_source,
     };
     use std::path::Path;
 
@@ -714,6 +805,28 @@ mod tests {
                 title: None,
             }
         );
+    }
+
+    #[test]
+    fn parses_complete_images_and_linked_badges_in_html_containers() {
+        let banner =
+            parse_html_container_image_line("![banner](./assets/icon/velotype-banner.png)")
+                .expect("banner image");
+        assert!(matches!(banner.syntax.target, ImageTarget::Direct { .. }));
+        assert_eq!(banner.link_target, None);
+
+        let badge = parse_html_container_image_line(
+            "[![Rust](https://img.shields.io/badge/Rust-2024)](https://www.rust-lang.org/)",
+        )
+        .expect("linked badge");
+        assert!(matches!(badge.syntax.target, ImageTarget::Direct { .. }));
+        assert_eq!(
+            badge.link_target.as_deref(),
+            Some("https://www.rust-lang.org/")
+        );
+        assert!(parse_html_container_image_line("prefix ![alt](x.png)").is_none());
+        assert!(parse_html_container_image_line("`![alt](x.png)`").is_none());
+        assert!(parse_html_container_image_line("[![alt](x.png)]").is_none());
     }
 
     #[test]

@@ -101,79 +101,143 @@ pub struct OpenRecentFile {
     pub path: String,
 }
 
+/// Group used to organize editable shortcuts in preferences.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum ShortcutCategory {
+    /// Document and window commands.
     File,
+    /// Text and clipboard commands.
     Edit,
+    /// Caret, selection, and view navigation.
     Navigation,
+    /// Inline text formatting commands.
     Formatting,
+    /// Block structure commands.
     Block,
+    /// Commands outside the other groups.
     Other,
 }
 
+/// Command identity for shortcut configuration and GPUI action binding.
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum ShortcutCommand {
+    /// Insert a line break or split the current block.
     Newline,
+    /// Delete backward from the caret.
     DeleteBack,
+    /// Delete forward from the caret.
     Delete,
+    /// Delete the preceding word.
     WordDeleteBack,
+    /// Delete the following word.
     WordDeleteForward,
+    /// Focus the previous block.
     FocusPrev,
+    /// Focus the next block.
     FocusNext,
+    /// Move the caret left.
     MoveLeft,
+    /// Move the caret right.
     MoveRight,
+    /// Move the caret one word left.
     WordMoveLeft,
+    /// Move the caret one word right.
     WordMoveRight,
+    /// Move to the start of the current line.
     Home,
+    /// Move to the end of the current line.
     End,
+    /// Move to the preceding block.
     BlockUp,
+    /// Move to the following block.
     BlockDown,
+    /// Move one page upward.
     PageUp,
+    /// Move one page downward.
     PageDown,
+    /// Move to the start of the document.
     JumpToTop,
+    /// Move to the end of the document.
     JumpToBottom,
+    /// Extend the selection left.
     SelectLeft,
+    /// Extend the selection right.
     SelectRight,
+    /// Extend the selection one word left.
     WordSelectLeft,
+    /// Extend the selection one word right.
     WordSelectRight,
+    /// Extend the selection to the start of the line.
     SelectHome,
+    /// Extend the selection to the end of the line.
     SelectEnd,
+    /// Cycle through the editor's select-all scopes.
     SelectAll,
+    /// Copy the current selection.
     Copy,
+    /// Cut the current selection.
     Cut,
+    /// Paste clipboard content.
     Paste,
+    /// Undo the latest edit.
     Undo,
+    /// Redo the latest undone edit.
     Redo,
+    /// Toggle bold formatting on the selection.
     BoldSelection,
+    /// Toggle italic formatting on the selection.
     ItalicSelection,
+    /// Toggle underline formatting on the selection.
     UnderlineSelection,
+    /// Toggle inline code formatting on the selection.
     CodeSelection,
+    /// Increase block indentation.
     IndentBlock,
+    /// Decrease block indentation.
     OutdentBlock,
+    /// Leave a fenced code block.
     ExitCodeBlock,
+    /// Save the current document.
     SaveDocument,
+    /// Save the document under a chosen path.
     SaveDocumentAs,
+    /// Open a new editor window.
     NewWindow,
+    /// Prompt to open a document.
     OpenFile,
+    /// Request guarded application quit.
     QuitApplication,
+    /// Request closing the current window.
     CloseWindow,
+    /// Dismiss transient editor UI.
     DismissTransientUi,
+    /// Toggle the editor's view mode.
     ToggleViewMode,
+    /// Toggle workspace visibility.
     ToggleWorkspace,
 }
 
+/// Shortcut metadata used for defaults, preference labels, and binding context.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ShortcutDefinition {
+    /// Command represented by this definition.
     pub(crate) command: ShortcutCommand,
+    /// Stable key used in persisted shortcut preferences.
     pub(crate) id: &'static str,
+    /// Group displayed in shortcut preferences.
     pub(crate) category: ShortcutCategory,
+    /// Platform-specific fallback keystrokes.
     pub(crate) default_keys: &'static [&'static str],
+    /// GPUI key context, or `None` for a global command.
     pub(crate) context: Option<&'static str>,
 }
 
+/// GPUI key context shared by block-editing commands.
 const BLOCK_CONTEXT: Option<&str> = Some("BlockEditor");
+/// Current persisted identifier for the unified select-all action.
 const SELECT_ALL_ID: &str = "select_all";
+/// Older preference identifiers migrated to unified select-all.
 const LEGACY_SELECT_ALL_IDS: &[&str] = &[
     "select_all_source_text",
     "select_focused_block_text_rendered",
@@ -181,16 +245,21 @@ const LEGACY_SELECT_ALL_IDS: &[&str] = &[
 
 // On macOS cmd-q is the system quit shortcut; Windows/Linux use Alt+F4 (OS-handled).
 #[cfg(target_os = "macos")]
+/// macOS application quit binding.
 const QUIT_APPLICATION_DEFAULT_KEYS: &[&str] = &["cmd-q"];
 #[cfg(not(target_os = "macos"))]
+/// Empty app-level quit binding on platforms with OS-managed quit keys.
 const QUIT_APPLICATION_DEFAULT_KEYS: &[&str] = &[];
 
 // On macOS cmd-w closes the current window; no app-level binding needed on other platforms.
 #[cfg(target_os = "macos")]
+/// macOS current-window close binding.
 const CLOSE_WINDOW_DEFAULT_KEYS: &[&str] = &["cmd-w"];
 #[cfg(not(target_os = "macos"))]
+/// Non-macOS current-window close binding.
 const CLOSE_WINDOW_DEFAULT_KEYS: &[&str] = &["ctrl-q"];
 
+/// Canonical command catalog and default key assignments.
 const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
     ShortcutDefinition {
         command: ShortcutCommand::Newline,
@@ -526,10 +595,12 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
     },
 ];
 
+/// Returns the canonical, ordered shortcut catalog.
 pub(crate) fn shortcut_definitions() -> &'static [ShortcutDefinition] {
     SHORTCUT_DEFINITIONS
 }
 
+/// Parses and deduplicates keystrokes, rejecting invalid, empty, or IME input.
 pub(crate) fn normalize_shortcut_keys(keys: &[String]) -> Option<Vec<String>> {
     let mut seen = BTreeSet::new();
     let mut normalized = Vec::new();
@@ -546,6 +617,7 @@ pub(crate) fn normalize_shortcut_keys(keys: &[String]) -> Option<Vec<String>> {
     (!normalized.is_empty()).then_some(normalized)
 }
 
+/// Copies a command's default keystrokes into owned strings.
 fn default_keys(definition: ShortcutDefinition) -> Vec<String> {
     definition
         .default_keys
@@ -583,6 +655,7 @@ fn configured_shortcut_keys(
         })
 }
 
+/// Finds shared keys only when two commands use the same GPUI context.
 fn shortcuts_conflict(
     left: ShortcutDefinition,
     left_keys: &[String],
@@ -592,6 +665,10 @@ fn shortcuts_conflict(
     left.context == right.context && left_keys.iter().any(|key| right_keys.contains(key))
 }
 
+/// Keeps valid nondefault overrides and drops conflicting custom bindings.
+///
+/// Legacy select-all ids are mapped to the current id; conflicting overrides
+/// revert to defaults until the effective binding set has no conflicts.
 pub(crate) fn normalize_shortcut_config(
     config: &BTreeMap<String, Vec<String>>,
 ) -> BTreeMap<String, Vec<String>> {
@@ -644,6 +721,7 @@ pub(crate) fn normalize_shortcut_config(
         .collect()
 }
 
+/// Returns a command's normalized override or its default keystrokes.
 pub(crate) fn resolved_shortcut_keys(
     config: &BTreeMap<String, Vec<String>>,
     command: ShortcutCommand,
@@ -659,6 +737,7 @@ pub(crate) fn resolved_shortcut_keys(
         .unwrap_or_else(|| default_keys(*definition))
 }
 
+/// Finds the first command conflicting with valid proposed keys, if any.
 pub(crate) fn shortcut_conflict_for(
     command: ShortcutCommand,
     proposed_keys: &[String],
@@ -680,6 +759,7 @@ pub(crate) fn shortcut_conflict_for(
     None
 }
 
+/// Constructs the GPUI key binding for a command and context.
 fn key_binding_for(
     command: ShortcutCommand,
     key: &str,
@@ -736,6 +816,7 @@ fn key_binding_for(
     }
 }
 
+/// Builds GPUI bindings from normalized custom keys and defaults.
 pub(crate) fn resolved_keybindings(config: &BTreeMap<String, Vec<String>>) -> Vec<KeyBinding> {
     let normalized = normalize_shortcut_config(config);
     let mut bindings = Vec::new();
@@ -752,6 +833,7 @@ pub(crate) fn resolved_keybindings(config: &BTreeMap<String, Vec<String>>) -> Ve
     bindings
 }
 
+/// Installs the resolved shortcut set in GPUI.
 pub(crate) fn install_keybindings(cx: &mut App, config: &BTreeMap<String, Vec<String>>) {
     cx.bind_keys(resolved_keybindings(config));
 }
@@ -762,6 +844,7 @@ pub fn init(cx: &mut App) {
     install_keybindings(cx, &BTreeMap::new());
 }
 
+/// Initializes action bindings with the supplied shortcut preferences.
 pub(crate) fn init_with_keybindings(cx: &mut App, config: &BTreeMap<String, Vec<String>>) {
     install_keybindings(cx, config);
 }

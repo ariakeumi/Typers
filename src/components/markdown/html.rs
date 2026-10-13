@@ -3,10 +3,16 @@
 //! The parser keeps the original source as the serialization truth and builds
 //! a conservative semantic tree only for tags that can be rendered safely in
 //! GPUI. Anything risky, unknown, malformed, or ambiguous becomes raw text.
+//! The semantic allowlist and attribute checks are a rendering policy, not a
+//! complete implementation of browser HTML parsing or URL validation.
 
 use std::ops::Range;
 
 use cssparser::color::{parse_hash_color, parse_named_color};
+use pulldown_cmark::{Parser as MarkdownParser, html};
+
+use super::image::{HtmlContainerImage, ImageTarget, parse_html_container_image_line};
+use super::inline::InlineTextTree;
 
 #[cfg(feature = "html-native")]
 use tree_sitter::Parser;
@@ -27,6 +33,10 @@ pub(crate) enum HtmlNodeKind {
     InlineSemantic,
     /// Safe block tag that maps to a native block-like GPUI element.
     BlockSemantic,
+    /// A complete Markdown image line inside an HTML `div`.
+    MarkdownImage(HtmlContainerImage),
+    /// Cached inline Markdown from a text line inside an HTML `div`.
+    MarkdownInline(InlineTextTree),
     /// Opaque raw source that must not be interpreted as HTML.
     RawTextBlock,
 }
@@ -54,41 +64,62 @@ pub(crate) enum HtmlCssColor {
 /// RGBA channels normalized enough for both GPUI rendering and export CSS.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct HtmlCssRgba {
+    /// Eight-bit sRGB red channel.
     pub(crate) red: u8,
+    /// Eight-bit sRGB green channel.
     pub(crate) green: u8,
+    /// Eight-bit sRGB blue channel.
     pub(crate) blue: u8,
+    /// Opacity in the inclusive zero-to-one range for parsed colors.
     pub(crate) alpha: f32,
 }
 
 /// Parsed CSS font-size value from a safe inline `style` attribute.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum HtmlCssFontSize {
+    /// Absolute CSS pixel size.
     Px(f32),
+    /// Multiplier of the parent text size.
     Em(f32),
+    /// Multiplier of the root text size.
     Rem(f32),
+    /// Percentage of the parent text size, with `100.0` denoting no change.
     Percent(f32),
+    /// Named size resolved using the editor's fixed keyword scale.
     Keyword(HtmlCssFontSizeKeyword),
 }
 
 /// CSS absolute and relative font-size keywords supported by rendered HTML.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HtmlCssFontSizeKeyword {
+    /// `xx-small`, resolved to 0.6 times the root size.
     XxSmall,
+    /// `x-small`, resolved to 0.75 times the root size.
     XSmall,
+    /// `small`, resolved to 0.875 times the root size.
     Small,
+    /// `medium`, resolved to the root size.
     Medium,
+    /// `large`, resolved to 1.125 times the root size.
     Large,
+    /// `x-large`, resolved to 1.5 times the root size.
     XLarge,
+    /// `xx-large`, resolved to twice the root size.
     XxLarge,
+    /// `smaller`, resolved to 0.833 times the parent size.
     Smaller,
+    /// `larger`, resolved to 1.2 times the parent size.
     Larger,
 }
 
 /// Whitelisted visual CSS parsed from a safe HTML `style` attribute.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct HtmlInlineStyle {
+    /// Supported foreground override; absent values inherit from the renderer.
     pub(crate) color: Option<HtmlCssColor>,
+    /// Supported background override.
     pub(crate) background_color: Option<HtmlCssColor>,
+    /// Supported font-size override, resolved against parent/root sizes at render time.
     pub(crate) font_size: Option<HtmlCssFontSize>,
 }
 
@@ -97,16 +128,22 @@ impl Eq for HtmlInlineStyle {}
 /// Safe data extracted from a standalone HTML `<img>` block.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct HtmlImageBlock {
+    /// Nonempty trimmed source, still requiring local/remote resolution by the caller.
     pub(crate) src: String,
+    /// Literal attribute value for alternative text, defaulting to empty.
     pub(crate) alt: String,
+    /// Display scale; parsed values are clamped to 0.1 through 3.0.
     pub(crate) zoom: f32,
 }
 
 impl HtmlImageBlock {
+    /// Returns the stored display scale clamped to the supported range.
     pub(crate) fn zoom_factor(&self) -> f32 {
         self.zoom.clamp(0.1, 3.0)
     }
 
+    /// Emits an image with escaped replacement source, alt text, and nondefault zoom only.
+    /// The caller supplies a suitable source; this method does not validate URL schemes.
     pub(crate) fn to_sanitized_html_with_src(&self, src: &str) -> String {
         let mut html = format!("<img src=\"{}\"", escape_html_attr(src));
         if !self.alt.is_empty() {
@@ -129,9 +166,9 @@ impl HtmlImageBlock {
 pub(crate) struct HtmlNode {
     /// Rendering category selected by the safety policy.
     pub(crate) kind: HtmlNodeKind,
-    /// Lowercase tag name, or `#text` for text nodes.
+    /// Lowercase tag name, or a synthetic `#text`/`#raw` node label.
     pub(crate) tag_name: String,
-    /// Safe attributes retained as semantic data.
+    /// Parsed attributes for semantic tags; empty for text and opaque raw nodes.
     pub(crate) attrs: Vec<HtmlAttr>,
     /// Classified child nodes. Empty for raw text nodes.
     pub(crate) children: Vec<HtmlNode>,
@@ -153,6 +190,7 @@ pub(crate) struct HtmlDocument {
 }
 
 impl HtmlDocument {
+    /// Preserves the source as a single opaque node covering its entire byte range.
     pub(crate) fn raw(raw_source: impl Into<String>) -> Self {
         let raw_source = raw_source.into();
         Self {
@@ -162,12 +200,14 @@ impl HtmlDocument {
         }
     }
 
+    /// Reports whether the fragment contains semantic nodes, possibly alongside raw ones.
     pub(crate) fn is_semantic(&self) -> bool {
         self.safety == HtmlSafetyClass::Semantic
     }
 }
 
 impl HtmlCssColor {
+    /// Formats `currentColor` or numeric RGBA CSS, clamping alpha and using three decimals.
     pub(crate) fn to_css(self) -> String {
         match self {
             Self::CurrentColor => "currentColor".to_string(),
@@ -183,6 +223,8 @@ impl HtmlCssColor {
 }
 
 impl HtmlCssFontSize {
+    /// Resolves size units/keywords to pixels and clamps finite results to 6 through 96.
+    /// Nonfinite results fall back to the supplied parent size without clamping it.
     pub(crate) fn resolve(self, parent_px: f32, root_px: f32) -> f32 {
         let resolved = match self {
             Self::Px(value) => value,
@@ -209,6 +251,7 @@ impl HtmlCssFontSize {
         }
     }
 
+    /// Serializes the stored size with its unit or keyword, without resolving it to pixels.
     pub(crate) fn to_css(self) -> String {
         match self {
             Self::Px(value) => format!("{}px", css_number(value)),
@@ -232,10 +275,12 @@ impl HtmlCssFontSize {
 }
 
 impl HtmlInlineStyle {
+    /// Reports whether none of the supported visual properties has a value.
     pub(crate) fn is_empty(&self) -> bool {
         self.color.is_none() && self.background_color.is_none() && self.font_size.is_none()
     }
 
+    /// Emits supported declarations in a stable order with a trailing semicolon, if any.
     pub(crate) fn to_css(self) -> Option<String> {
         if self.is_empty() {
             return None;
@@ -255,24 +300,35 @@ impl HtmlInlineStyle {
     }
 }
 
+/// Syntactic tag category before semantic safety classification.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum TagKind {
+    /// Opening tag, including void or explicitly self-closing tags.
     Open,
+    /// Closing tag matched by normalized name during recursive parsing.
     Close,
+    /// Comment, declaration, or processing instruction kept opaque.
     CommentLike,
 }
 
+/// One lexical HTML tag with byte offsets into the original fragment.
 #[derive(Clone, Debug)]
 struct TagToken {
+    /// Lexical category, independent of whether the tag is allowed.
     kind: TagKind,
+    /// ASCII-lowercase name, or a synthetic label for comment-like tokens.
     name: String,
+    /// Parsed source attributes; closing and comment-like tokens have none.
     attrs: Vec<HtmlAttr>,
+    /// Explicit self-closing slash, or an inherently complete comment-like token.
     self_closing: bool,
+    /// Half-open byte range covering the entire tag token.
     source_range: Range<usize>,
 }
 
 /// Parses and classifies a raw HTML fragment. The returned document always
 /// preserves `raw_source` exactly, even when semantic parsing succeeds.
+/// Without `html-native`, all fragments use the opaque raw fallback.
 pub(crate) fn parse_html_document(raw_source: &str) -> HtmlDocument {
     if raw_source.trim().is_empty() {
         return HtmlDocument::raw(raw_source);
@@ -301,12 +357,13 @@ pub(crate) fn parse_html_document(raw_source: &str) -> HtmlDocument {
     }
 }
 
-/// Rewrites an HTML fragment for document export: safe semantic nodes keep
-/// their HTML shape, while raw text nodes are escaped so browsers cannot
-/// execute or interpret them.
-pub(crate) fn sanitize_html_for_export(raw_source: &str) -> String {
+/// Rewrites safe semantic tags for export and lets the caller embed local images.
+pub(crate) fn sanitize_html_for_export_with_image_src(
+    raw_source: &str,
+    image_src: &dyn Fn(&str) -> String,
+) -> String {
     if let Some(image) = parse_html_image_block(raw_source) {
-        return image.to_sanitized_html_with_src(&image.src);
+        return image.to_sanitized_html_with_src(&image_src(&image.src));
     }
 
     let document = parse_html_document(raw_source);
@@ -320,7 +377,7 @@ pub(crate) fn sanitize_html_for_export(raw_source: &str) -> String {
     document
         .nodes
         .iter()
-        .map(sanitize_node_for_export)
+        .map(|node| sanitize_node_for_export(node, image_src))
         .collect::<String>()
 }
 
@@ -337,12 +394,50 @@ pub(crate) fn style_for_node(node: &HtmlNode) -> HtmlInlineStyle {
     parse_inline_style(style)
 }
 
-fn sanitize_node_for_export(node: &HtmlNode) -> String {
+/// Recursively serializes classified nodes, escaping opaque nodes and preserving text source.
+fn sanitize_node_for_export(node: &HtmlNode, image_src: &dyn Fn(&str) -> String) -> String {
     if node.kind == HtmlNodeKind::RawTextBlock {
         return format!(
             "<span class=\"vlt-raw-html\">{}</span>",
             escape_html(&node.raw_source)
         );
+    }
+
+    if let HtmlNodeKind::MarkdownImage(image) = &node.kind {
+        let ImageTarget::Direct { src, .. } = &image.syntax.target else {
+            return escape_html(&node.raw_source);
+        };
+        let src_attr = HtmlAttr {
+            name: "src".into(),
+            value: Some(src.clone()),
+            raw_source: String::new(),
+        };
+        if has_dangerous_attrs(&[src_attr]) {
+            return escape_html(&node.raw_source);
+        }
+        let rendered = HtmlImageBlock {
+            src: src.clone(),
+            alt: image.syntax.alt.clone(),
+            zoom: 1.0,
+        }
+        .to_sanitized_html_with_src(&image_src(src));
+        if let Some(target) = &image.link_target {
+            let href = HtmlAttr {
+                name: "href".into(),
+                value: Some(target.clone()),
+                raw_source: String::new(),
+            };
+            if !has_dangerous_attrs(&[href]) {
+                return format!("<a href=\"{}\">{rendered}</a>", escape_html_attr(target));
+            }
+        }
+        return rendered;
+    }
+
+    if matches!(node.kind, HtmlNodeKind::MarkdownInline(_)) {
+        let mut rendered = String::new();
+        html::push_html(&mut rendered, MarkdownParser::new(&node.raw_source));
+        return rendered;
     }
 
     if node.tag_name == "#text" {
@@ -362,11 +457,13 @@ fn sanitize_node_for_export(node: &HtmlNode) -> String {
     let children = node
         .children
         .iter()
-        .map(sanitize_node_for_export)
+        .map(|child| sanitize_node_for_export(child, image_src))
         .collect::<String>();
     format!("{}{children}{close}", sanitized_open_tag(node))
 }
 
+/// Rebuilds a semantic opening tag, retaining non-style attributes and only supported CSS.
+/// Image tags use the restricted image serializer when their source can be extracted.
 fn sanitized_open_tag(node: &HtmlNode) -> String {
     if node.tag_name == "img"
         && let Some(image) = parse_html_image_block(&node.raw_source)
@@ -391,11 +488,13 @@ fn sanitized_open_tag(node: &HtmlNode) -> String {
     open
 }
 
+/// Finds the last ASCII-case-insensitive closing-tag prefix as a byte offset.
 fn find_closing_tag_start(raw_source: &str, tag_name: &str) -> Option<usize> {
     let needle = format!("</{tag_name}");
     raw_source.to_ascii_lowercase().rfind(&needle)
 }
 
+/// Escapes ampersands, less-than signs, and double quotes for a double-quoted attribute.
 fn escape_html_attr(value: &str) -> String {
     let mut escaped = String::new();
     for ch in value.chars() {
@@ -409,6 +508,7 @@ fn escape_html_attr(value: &str) -> String {
     escaped
 }
 
+/// Escapes HTML metacharacters, including both quote forms, for raw text export.
 fn escape_html(value: &str) -> String {
     let mut escaped = String::new();
     for ch in value.chars() {
@@ -424,6 +524,8 @@ fn escape_html(value: &str) -> String {
     escaped
 }
 
+/// Parses siblings until a matching closer or EOF, preserving rejected regions as raw nodes.
+/// Returns nodes, the next byte offset, and whether the requested scope was closed.
 fn parse_nodes(
     raw: &str,
     mut index: usize,
@@ -432,17 +534,13 @@ fn parse_nodes(
     let mut nodes = Vec::new();
     while index < raw.len() {
         let Some(tag_start_relative) = raw[index..].find('<') else {
-            if closing_tag.is_some() {
-                push_text_node(raw, index..raw.len(), &mut nodes);
-            } else {
-                push_text_node(raw, index..raw.len(), &mut nodes);
-            }
+            push_scoped_text_nodes(raw, index..raw.len(), closing_tag, &mut nodes);
             return (nodes, raw.len(), closing_tag.is_none());
         };
 
         let tag_start = index + tag_start_relative;
         if tag_start > index {
-            push_text_node(raw, index..tag_start, &mut nodes);
+            push_scoped_text_nodes(raw, index..tag_start, closing_tag, &mut nodes);
         }
 
         let Some(token) = parse_tag_token(raw, tag_start) else {
@@ -500,6 +598,8 @@ fn parse_nodes(
     (nodes, index, closing_tag.is_none())
 }
 
+/// Reads one quote-aware tag/comment token at a valid byte boundary, normalizing tag names.
+/// Unterminated tokens return `None`; attribute parsing is intentionally permissive.
 fn parse_tag_token(raw: &str, start: usize) -> Option<TagToken> {
     let rest = raw.get(start..)?;
     if !rest.starts_with('<') {
@@ -594,19 +694,14 @@ fn parse_tag_token(raw: &str, start: usize) -> Option<TagToken> {
     None
 }
 
-/// Peek the next char at `index` without advancing. Returns `None` at EOF.
+/// Peeks at a valid UTF-8 byte boundary; returns `None` at EOF without advancing.
 #[inline]
 fn peek_char(source: &str, index: usize) -> Option<char> {
     source[index..].chars().next()
 }
 
-/// Advance `index` past the next char and return it. Returns `None` at EOF.
-/// Encapsulates the byte-index ↔ UTF-8-boundary invariant so callers that
-/// don't need the char's value can't drift into a panic by hand-incrementing
-/// `index` by anything other than `ch.len_utf8()`. Loops that *do* need the
-/// char for a check should peek with [`peek_char`], inspect the value, and
-/// then advance with `index += ch.len_utf8()` — see [`parse_html_attrs`] —
-/// so the char is read only once per iteration.
+/// Returns the next character and advances a valid byte offset by its UTF-8 length.
+/// Leaves the offset unchanged at EOF; callers must preserve the boundary invariant.
 #[inline]
 fn advance_char(source: &str, index: &mut usize) -> Option<char> {
     let ch = source[*index..].chars().next()?;
@@ -614,6 +709,8 @@ fn advance_char(source: &str, index: &mut usize) -> Option<char> {
     Some(ch)
 }
 
+/// Parses an attribute slice, retaining raw spelling and lowercasing names without entity decoding.
+/// Quoted values may contain slashes; unquoted values stop at whitespace or `/`.
 pub(crate) fn parse_html_attrs(source: &str) -> Vec<HtmlAttr> {
     let mut attrs = Vec::new();
     let mut index = 0usize;
@@ -685,6 +782,7 @@ pub(crate) fn parse_html_attrs(source: &str) -> Vec<HtmlAttr> {
     attrs
 }
 
+/// Allows only known tags whose parsed attributes pass the limited danger check.
 fn classify_open_tag(token: &TagToken) -> HtmlSafetyClass {
     if !is_safe_tag(&token.name) || has_dangerous_attrs(&token.attrs) {
         HtmlSafetyClass::RawTextBlock
@@ -693,6 +791,7 @@ fn classify_open_tag(token: &TagToken) -> HtmlSafetyClass {
     }
 }
 
+/// Builds a semantic node covering the opening token; callers extend nonvoid nodes through closers.
 fn semantic_node(raw: &str, token: TagToken, children: Vec<HtmlNode>) -> HtmlNode {
     HtmlNode {
         kind: if is_inline_tag(&token.name) {
@@ -708,6 +807,7 @@ fn semantic_node(raw: &str, token: TagToken, children: Vec<HtmlNode>) -> HtmlNod
     }
 }
 
+/// Appends a nonempty text slice as an inline-semantic node using original byte coordinates.
 fn push_text_node(raw: &str, range: Range<usize>, nodes: &mut Vec<HtmlNode>) {
     if range.is_empty() {
         return;
@@ -722,6 +822,64 @@ fn push_text_node(raw: &str, range: Range<usize>, nodes: &mut Vec<HtmlNode>) {
     });
 }
 
+/// Recognizes complete Markdown image lines only in `div` text, preserving all source spans.
+fn push_scoped_text_nodes(
+    raw: &str,
+    range: Range<usize>,
+    closing_tag: Option<&str>,
+    nodes: &mut Vec<HtmlNode>,
+) {
+    if closing_tag != Some("div") {
+        push_text_node(raw, range, nodes);
+        return;
+    }
+
+    let mut text_start = range.start;
+    let mut line_start = range.start;
+    let mut fence: Option<(char, usize)> = None;
+    for line in raw[range.clone()].split_inclusive('\n') {
+        let trimmed = line.trim();
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        let marker = trimmed.chars().next().filter(|ch| matches!(ch, '`' | '~'));
+        let run_len = marker
+            .map(|ch| trimmed.chars().take_while(|next| *next == ch).count())
+            .unwrap_or(0);
+        if let Some((open, open_len)) = fence {
+            if marker == Some(open) && run_len >= open_len && trimmed[run_len..].trim().is_empty() {
+                fence = None;
+            }
+        } else if indent <= 3 && run_len >= 3 {
+            fence = marker.map(|ch| (ch, run_len));
+        } else if indent <= 3 && line.as_bytes().get(indent) != Some(&b'\t') {
+            let kind = if let Some(image) = parse_html_container_image_line(trimmed) {
+                Some(HtmlNodeKind::MarkdownImage(image))
+            } else if !trimmed.is_empty() {
+                let tree = InlineTextTree::from_markdown(trimmed);
+                (tree.visible_text() != trimmed).then_some(HtmlNodeKind::MarkdownInline(tree))
+            } else {
+                None
+            };
+            if let Some(kind) = kind {
+                let start = line_start + indent;
+                let end = start + trimmed.len();
+                push_text_node(raw, text_start..start, nodes);
+                nodes.push(HtmlNode {
+                    kind,
+                    tag_name: "#markdown-inline".into(),
+                    attrs: Vec::new(),
+                    children: Vec::new(),
+                    raw_source: raw[start..end].to_string(),
+                    source_range: start..end,
+                });
+                text_start = end;
+            }
+        }
+        line_start += line.len();
+    }
+    push_text_node(raw, text_start..range.end, nodes);
+}
+
+/// Copies an original-source range into an opaque node with no attributes or children.
 fn raw_node(raw: &str, range: Range<usize>) -> HtmlNode {
     HtmlNode {
         kind: HtmlNodeKind::RawTextBlock,
@@ -733,6 +891,8 @@ fn raw_node(raw: &str, range: Range<usize>) -> HtmlNode {
     }
 }
 
+/// Ends an opaque tag region at its first exact-spelled closer ignoring ASCII case, or EOF.
+/// Void/self-closing tokens end immediately; nested tags are not balanced here.
 fn raw_region_end(raw: &str, token: &TagToken) -> Option<usize> {
     if token.self_closing || is_void_tag(&token.name) {
         return Some(token.source_range.end);
@@ -750,6 +910,8 @@ fn raw_region_end(raw: &str, token: &TagToken) -> Option<usize> {
         .or(Some(raw.len()))
 }
 
+/// Rejects `on*` attributes and literal JavaScript prefixes in selected URL attributes.
+/// Whitespace/NUL are ignored for prefix checks, but HTML entities are not decoded.
 pub(crate) fn has_dangerous_attrs(attrs: &[HtmlAttr]) -> bool {
     attrs.iter().any(|attr| {
         attr.name.starts_with("on")
@@ -767,6 +929,7 @@ pub(crate) fn has_dangerous_attrs(attrs: &[HtmlAttr]) -> bool {
     })
 }
 
+/// Borrows the first matching attribute's value; callers supply a lowercase name.
 pub(crate) fn attr_value<'a>(node: &'a HtmlNode, name: &str) -> Option<&'a str> {
     node.attrs
         .iter()
@@ -774,6 +937,8 @@ pub(crate) fn attr_value<'a>(node: &'a HtmlNode, name: &str) -> Option<&'a str> 
         .and_then(|attr| attr.value.as_deref())
 }
 
+/// Extracts one complete trimmed `<img>` tag with a nonempty source and no flagged attributes.
+/// Retains only source, alt, and zoom; this path does not require `html-native` parsing.
 pub(crate) fn parse_html_image_block(raw_source: &str) -> Option<HtmlImageBlock> {
     let trimmed = raw_source.trim();
     if trimmed.is_empty() {
@@ -806,6 +971,7 @@ pub(crate) fn parse_html_image_block(raw_source: &str) -> Option<HtmlImageBlock>
     Some(HtmlImageBlock { src, alt, zoom })
 }
 
+/// Returns the first exact-name attribute's value; a valueless first match yields `None`.
 fn attr_value_in_attrs<'a>(attrs: &'a [HtmlAttr], name: &str) -> Option<&'a str> {
     attrs
         .iter()
@@ -813,6 +979,8 @@ fn attr_value_in_attrs<'a>(attrs: &'a [HtmlAttr], name: &str) -> Option<&'a str>
         .and_then(|attr| attr.value.as_deref())
 }
 
+/// Parses the first `zoom` declaration as a finite factor or percentage, clamped to 0.1..=3.0.
+/// An invalid first declaration returns `None` rather than checking later zoom declarations.
 pub(crate) fn parse_html_zoom(style: &str) -> Option<f32> {
     for declaration in style.split(';') {
         let Some((property, value)) = declaration.split_once(':') else {
@@ -833,6 +1001,8 @@ pub(crate) fn parse_html_zoom(style: &str) -> Option<f32> {
     None
 }
 
+/// Extracts color, background-color, and font-size, with the last valid declaration winning.
+/// Unsupported properties and invalid values are ignored rather than retained for export.
 pub(crate) fn parse_inline_style(style: &str) -> HtmlInlineStyle {
     let mut parsed = HtmlInlineStyle::default();
     for declaration in style.split(';') {
@@ -863,6 +1033,7 @@ pub(crate) fn parse_inline_style(style: &str) -> HtmlInlineStyle {
     parsed
 }
 
+/// Parses supported named, hash, RGB/HSL, transparent, or current-color values.
 fn parse_css_color(value: &str) -> Option<HtmlCssColor> {
     let value = value.trim();
     if value.eq_ignore_ascii_case("currentcolor") {
@@ -901,6 +1072,8 @@ fn parse_css_color(value: &str) -> Option<HtmlCssColor> {
     parse_rgb_color(value).or_else(|| parse_hsl_color(value))
 }
 
+/// Parses RGB channels and an optional alpha; absent or invalid alpha defaults to opaque.
+/// Additional arguments after alpha are ignored.
 fn parse_rgb_color(value: &str) -> Option<HtmlCssColor> {
     let args = css_function_args(value, &["rgb", "rgba"])?;
     let parts = css_function_parts(args);
@@ -923,6 +1096,8 @@ fn parse_rgb_color(value: &str) -> Option<HtmlCssColor> {
     }))
 }
 
+/// Parses hue and percentage saturation/lightness, defaulting absent or invalid alpha to opaque.
+/// Additional arguments after alpha are ignored.
 fn parse_hsl_color(value: &str) -> Option<HtmlCssColor> {
     let args = css_function_args(value, &["hsl", "hsla"])?;
     let parts = css_function_parts(args);
@@ -946,6 +1121,7 @@ fn parse_hsl_color(value: &str) -> Option<HtmlCssColor> {
     }))
 }
 
+/// Borrows arguments from a named CSS function with no nonwhitespace trailing content.
 fn css_function_args<'a>(value: &'a str, names: &[&str]) -> Option<&'a str> {
     let open = value.find('(')?;
     let close = value.rfind(')')?;
@@ -959,6 +1135,7 @@ fn css_function_args<'a>(value: &'a str, names: &[&str]) -> Option<&'a str> {
         .then_some(&value[open + 1..close])
 }
 
+/// Splits comma-form arguments or whitespace-form arguments, dropping slash separators.
 fn css_function_parts(args: &str) -> Vec<String> {
     if args.contains(',') {
         return args
@@ -977,6 +1154,7 @@ fn css_function_parts(args: &str) -> Vec<String> {
         .collect()
 }
 
+/// Parses a finite numeric or percentage channel, clamping and rounding it to eight bits.
 fn parse_rgb_component(value: &str) -> Option<u8> {
     if let Some(percent) = value.trim().strip_suffix('%') {
         let value = parse_css_number(percent)?;
@@ -987,11 +1165,13 @@ fn parse_rgb_component(value: &str) -> Option<u8> {
     Some(value.clamp(0.0, 255.0).round() as u8)
 }
 
+/// Parses a required percentage and clamps its fractional value to zero through one.
 fn parse_percent_component(value: &str) -> Option<f32> {
     let value = value.trim().strip_suffix('%')?;
     Some((parse_css_number(value)? / 100.0).clamp(0.0, 1.0))
 }
 
+/// Parses finite numeric or percentage alpha, clamped to zero through one.
 fn parse_alpha_component(value: &str) -> Option<f32> {
     if let Some(percent) = value.trim().strip_suffix('%') {
         return Some((parse_css_number(percent)? / 100.0).clamp(0.0, 1.0));
@@ -999,6 +1179,7 @@ fn parse_alpha_component(value: &str) -> Option<f32> {
     Some(parse_css_number(value)?.clamp(0.0, 1.0))
 }
 
+/// Converts a finite unitless/degree, turn, or radian hue to degrees without wrapping it.
 fn parse_hue(value: &str) -> Option<f32> {
     let trimmed = value.trim().to_ascii_lowercase();
     if let Some(value) = trimmed.strip_suffix("deg") {
@@ -1013,6 +1194,7 @@ fn parse_hue(value: &str) -> Option<f32> {
     parse_css_number(&trimmed)
 }
 
+/// Wraps hue in degrees and converts fractional HSL channels to rounded eight-bit RGB.
 fn hsl_to_rgb(hue_degrees: f32, saturation: f32, lightness: f32) -> (u8, u8, u8) {
     let hue = hue_degrees.rem_euclid(360.0) / 60.0;
     let chroma = (1.0 - (2.0 * lightness - 1.0).abs()) * saturation;
@@ -1033,6 +1215,8 @@ fn hsl_to_rgb(hue_degrees: f32, saturation: f32, lightness: f32) -> (u8, u8, u8)
     )
 }
 
+/// Parses supported keywords or finite nonnegative px/em/rem/percentage sizes.
+/// Unitless sizes and unsupported CSS expressions are rejected.
 fn parse_css_font_size(value: &str) -> Option<HtmlCssFontSize> {
     let trimmed = value.trim().to_ascii_lowercase();
     match trimmed.as_str() {
@@ -1065,16 +1249,19 @@ fn parse_css_font_size(value: &str) -> Option<HtmlCssFontSize> {
     None
 }
 
+/// Parses a finite floating-point CSS value and rejects negative results.
 fn parse_non_negative_css_number(value: &str) -> Option<f32> {
     let value = parse_css_number(value)?;
     (value >= 0.0).then_some(value)
 }
 
+/// Parses a trimmed floating-point value, rejecting NaN and infinities.
 fn parse_css_number(value: &str) -> Option<f32> {
     let value = value.trim().parse::<f32>().ok()?;
     value.is_finite().then_some(value)
 }
 
+/// Formats to at most three decimal places, removing trailing fractional zeros and the dot.
 fn css_number(value: f32) -> String {
     let mut formatted = format!("{:.3}", value);
     while formatted.contains('.') && formatted.ends_with('0') {
@@ -1086,10 +1273,13 @@ fn css_number(value: f32) -> String {
     formatted
 }
 
+/// Checks the combined inline/block allowlist using an already lowercase tag name.
 fn is_safe_tag(name: &str) -> bool {
     is_inline_tag(name) || is_block_tag(name)
 }
 
+/// Checks the lowercase tag allowlist for native inline semantics.
+/// This checks the name only; attributes and nesting require separate classification.
 pub(crate) fn is_inline_tag(name: &str) -> bool {
     matches!(
         name,
@@ -1114,6 +1304,7 @@ pub(crate) fn is_inline_tag(name: &str) -> bool {
     )
 }
 
+/// Checks the lowercase tag allowlist for native block-like elements, including images and breaks.
 fn is_block_tag(name: &str) -> bool {
     matches!(
         name,
@@ -1138,10 +1329,12 @@ fn is_block_tag(name: &str) -> bool {
     )
 }
 
+/// Identifies the supported lowercase tags that do not require closing tags.
 fn is_void_tag(name: &str) -> bool {
     matches!(name, "br" | "hr" | "img")
 }
 
+/// Rejects grammar initialization failure, missing parse output, or any tree-sitter syntax error.
 #[cfg(feature = "html-native")]
 fn tree_sitter_reports_error(raw_source: &str) -> bool {
     let mut parser = Parser::new();
@@ -1156,6 +1349,7 @@ fn tree_sitter_reports_error(raw_source: &str) -> bool {
         .is_none_or(|tree| tree.root_node().has_error())
 }
 
+/// Forces opaque fallback when the native HTML grammar feature is disabled.
 #[cfg(not(feature = "html-native"))]
 fn tree_sitter_reports_error(_: &str) -> bool {
     true
@@ -1228,6 +1422,90 @@ mod tests {
             div.children
                 .iter()
                 .any(|child| child.kind == HtmlNodeKind::RawTextBlock)
+        );
+    }
+
+    #[test]
+    fn centered_div_keeps_source_but_classifies_markdown_image_lines() {
+        let source = "<div align=\"center\">\n\n![banner](./banner.png)\n\n**A bold title.**\n\n[Editor Showcase](./showcase.md)\n\n[English](README.md) | [中文](docs/README.zh-CN.md)\n\n[![badge](https://example.com/badge.svg)](https://example.com)\n\n</div>";
+        let document = parse_html_document(source);
+        assert!(document.is_semantic());
+        assert_eq!(document.raw_source, source);
+        let images = document.nodes[0]
+            .children
+            .iter()
+            .filter(|node| matches!(node.kind, HtmlNodeKind::MarkdownImage(_)))
+            .count();
+        assert_eq!(images, 2);
+        let inline = document.nodes[0]
+            .children
+            .iter()
+            .filter_map(|node| match &node.kind {
+                HtmlNodeKind::MarkdownInline(tree) => Some(tree),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(inline.len(), 3);
+        assert!(
+            inline[0]
+                .fragments
+                .iter()
+                .any(|fragment| fragment.style.bold)
+        );
+        assert_eq!(inline[0].visible_text(), "A bold title.");
+        assert_eq!(inline[1].visible_text(), "Editor Showcase");
+        assert_eq!(
+            inline[1].fragments[0]
+                .link
+                .as_ref()
+                .map(|link| link.hit().open_target),
+            Some("./showcase.md".to_string())
+        );
+        assert_eq!(inline[2].visible_text(), "English | 中文");
+        assert_eq!(
+            inline[2]
+                .fragments
+                .iter()
+                .filter(|fragment| fragment.link.is_some())
+                .count(),
+            2
+        );
+
+        let exported = sanitize_html_for_export_with_image_src(source, &str::to_owned);
+        assert!(exported.contains("<div align=\"center\">"));
+        assert!(exported.contains("<img src=\"./banner.png\" alt=\"banner\">"));
+        assert!(exported.contains("<strong>A bold title.</strong>"));
+        assert!(exported.contains("<a href=\"./showcase.md\">Editor Showcase</a>"));
+        assert!(exported.contains("<img src=\"https://example.com/badge.svg\" alt=\"badge\">"));
+        assert!(exported.contains("<a href=\"https://example.com\">"));
+        assert!(!exported.contains("![banner]"));
+    }
+
+    #[test]
+    fn html_container_image_classification_avoids_code_and_other_tags() {
+        let fenced = parse_html_document(
+            "<div>\n```\n![code](x.png)\n**bold** [link](https://example.com)\n```\n</div>",
+        );
+        assert!(fenced.is_semantic());
+        assert!(
+            !fenced.nodes[0]
+                .children
+                .iter()
+                .any(|node| matches!(node.kind, HtmlNodeKind::MarkdownImage(_)))
+        );
+        assert!(
+            !fenced.nodes[0]
+                .children
+                .iter()
+                .any(|node| matches!(node.kind, HtmlNodeKind::MarkdownInline(_)))
+        );
+
+        let paragraph = parse_html_document("<p>![plain](x.png)</p>");
+        assert!(
+            !paragraph.nodes[0]
+                .children
+                .iter()
+                .any(|node| matches!(node.kind, HtmlNodeKind::MarkdownImage(_)))
         );
     }
 
@@ -1326,8 +1604,9 @@ mod tests {
 
     #[test]
     fn export_sanitizes_style_to_whitelisted_declarations() {
-        let html = sanitize_html_for_export(
+        let html = sanitize_html_for_export_with_image_src(
             "<span style=\"color:blue; background-image:url(javascript:bad); background-color:rgb(255 255 0); font-size:120%\">x</span>",
+            &str::to_owned,
         );
 
         assert!(html.contains(
@@ -1338,7 +1617,10 @@ mod tests {
 
     #[test]
     fn export_escapes_risky_html_even_when_style_is_present() {
-        let html = sanitize_html_for_export("<script style=\"color:blue\">alert(1)</script>");
+        let html = sanitize_html_for_export_with_image_src(
+            "<script style=\"color:blue\">alert(1)</script>",
+            &str::to_owned,
+        );
 
         assert!(
             html.contains("&lt;script style=&quot;color:blue&quot;&gt;alert(1)&lt;/script&gt;")

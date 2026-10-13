@@ -5,6 +5,7 @@ use std::ops::Range;
 use super::*;
 
 impl Editor {
+    /// Returns canonical rendered Markdown or the source editor's raw text.
     pub(super) fn current_document_source(&self, cx: &App) -> String {
         match self.view_mode {
             ViewMode::Rendered => self.document.markdown_text(cx),
@@ -12,16 +13,21 @@ impl Editor {
         }
     }
 
+    /// Identifies a childless, empty paragraph used as a source separator.
     pub(super) fn is_empty_paragraph_separator(block: &Block) -> bool {
         block.kind() == BlockKind::Paragraph
             && block.record.title.visible_text().is_empty()
             && block.children.is_empty()
     }
 
+    /// Identifies an empty root paragraph, including leading/trailing blank lines.
     pub(super) fn is_empty_root_paragraph(block: &Block) -> bool {
         Self::is_empty_paragraph_separator(block)
     }
 
+    /// Applies line prefixes and builds byte-offset maps in both directions.
+    ///
+    /// The returned vectors index content and source byte boundaries respectively.
     pub(super) fn build_prefixed_content_mapping(
         content: &str,
         first_prefix: &str,
@@ -63,6 +69,7 @@ impl Editor {
         (full, content_to_source, source_to_content)
     }
 
+    /// Maps code content through its safe fence, optional info string, and indentation.
     pub(super) fn build_code_block_content_mapping(
         content: &str,
         indentation: &str,
@@ -125,6 +132,7 @@ impl Editor {
         (full, content_to_source, source_to_content)
     }
 
+    /// Adds a rendered text block's source mapping and returns its source length.
     pub(super) fn push_inline_block_mapping(
         &self,
         block: &Entity<Block>,
@@ -157,6 +165,7 @@ impl Editor {
         full_text.len()
     }
 
+    /// Maps the editable footnote ID within its definition marker.
     pub(super) fn push_footnote_definition_head_mapping(
         block: &Entity<Block>,
         footnote_id: &str,
@@ -202,6 +211,7 @@ impl Editor {
         full_text.len()
     }
 
+    /// Maps raw block text after list indentation and quote prefixes.
     pub(super) fn push_raw_block_mapping(
         &self,
         block: &Entity<Block>,
@@ -239,6 +249,7 @@ impl Editor {
         full_text.len()
     }
 
+    /// Maps a fenced code block's content after its structural prefixes.
     pub(super) fn push_code_block_mapping(
         &self,
         block: &Entity<Block>,
@@ -277,6 +288,7 @@ impl Editor {
         full_text.len()
     }
 
+    /// Wraps existing text and offset maps in one prefix per quote depth.
     pub(super) fn wrap_source_mapping_with_quotes(
         mut full_text: String,
         mut content_to_source: Vec<usize>,
@@ -306,6 +318,7 @@ impl Editor {
         (full_text, content_to_source, source_to_content)
     }
 
+    /// Adds individual table-cell mappings and returns the table's source length.
     pub(super) fn push_table_mappings(
         &self,
         block: &Entity<Block>,
@@ -386,6 +399,7 @@ impl Editor {
             + lines.len().saturating_sub(1)
     }
 
+    /// Maps a block and descendants, recording each block's full source span.
     pub(super) fn collect_single_block_source_mappings(
         &self,
         block: &Entity<Block>,
@@ -665,6 +679,7 @@ impl Editor {
         total_len
     }
 
+    /// Builds source-to-edit-target mappings for the current rendered document.
     pub(super) fn build_source_target_mappings(&self, cx: &App) -> Vec<SourceTargetMapping> {
         self.build_source_target_mappings_with_block_ranges(cx).0
     }

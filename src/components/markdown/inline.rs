@@ -1,9 +1,8 @@
 //! Attribute-based inline Markdown tree for block titles and table cells.
 //!
-//! The runtime model stores only text fragments and formatting attributes.
-//! Markdown markers are parsed at the I/O boundary and regenerated on save,
-//! which keeps editing operations focused on text ranges instead of raw
-//! delimiter strings.
+//! The runtime model stores visible text fragments with formatting and inline
+//! metadata. Most Markdown markers are parsed at the I/O boundary and
+//! regenerated on save; source-preserving constructs retain their source.
 
 use std::ops::Range;
 
@@ -17,31 +16,42 @@ use super::html::{
 };
 use super::link::{LinkReferenceDefinition, LinkReferenceDefinitions, parse_link_target};
 
-/// Bitfield of active inline formatting flags for a span of text.
+/// Active inline formatting for a span of text.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InlineStyle {
+    /// Whether the text is bold.
     pub bold: bool,
+    /// Whether the text is italic.
     pub italic: bool,
+    /// Whether the text is underlined.
     pub underline: bool,
+    /// Whether the text is struck through.
     pub strikethrough: bool,
+    /// Whether the text is inline code.
     pub code: bool,
+    /// Baseline, superscript, or subscript placement.
     pub script: InlineScript,
 }
 
 /// Vertical script style for simple Markdown extension syntax.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum InlineScript {
+    /// Text on the normal baseline.
     #[default]
     Normal,
+    /// Text raised above the baseline.
     Superscript,
+    /// Text lowered below the baseline.
     Subscript,
 }
 
 impl InlineStyle {
+    /// Return this style with bold enabled.
     pub fn with_bold(self) -> Self {
         Self { bold: true, ..self }
     }
 
+    /// Return this style with italic enabled.
     pub fn with_italic(self) -> Self {
         Self {
             italic: true,
@@ -49,6 +59,7 @@ impl InlineStyle {
         }
     }
 
+    /// Return this style with underline enabled.
     pub fn with_underline(self) -> Self {
         Self {
             underline: true,
@@ -56,6 +67,7 @@ impl InlineStyle {
         }
     }
 
+    /// Return this style with strikethrough enabled.
     pub fn with_strikethrough(self) -> Self {
         Self {
             strikethrough: true,
@@ -63,10 +75,12 @@ impl InlineStyle {
         }
     }
 
+    /// Return this style with inline code enabled.
     pub fn with_code(self) -> Self {
         Self { code: true, ..self }
     }
 
+    /// Return this style with superscript placement.
     pub fn with_superscript(self) -> Self {
         Self {
             script: InlineScript::Superscript,
@@ -74,6 +88,7 @@ impl InlineStyle {
         }
     }
 
+    /// Return this style with subscript placement.
     pub fn with_subscript(self) -> Self {
         Self {
             script: InlineScript::Subscript,
@@ -81,10 +96,12 @@ impl InlineStyle {
         }
     }
 
+    /// Whether this style uses superscript or subscript placement.
     pub fn has_script(self) -> bool {
         self.script != InlineScript::Normal
     }
 
+    /// Apply the style represented by a parsed delimiter.
     fn apply(self, delimiter: Delimiter) -> Self {
         match delimiter {
             Delimiter::BoldMarkdown { .. } | Delimiter::BoldHtml => self.with_bold(),
@@ -100,15 +117,21 @@ impl InlineStyle {
 
 /// A contiguous run of text with a uniform [`InlineStyle`].
 ///
-/// The [`InlineTextTree`] is simply a `Vec<InlineFragment>` with
-/// adjacent fragments of equal style merged during normalization.
+/// Adjacent fragments with matching attributes are merged during normalization,
+/// except fragments carrying inline math metadata.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InlineFragment {
+    /// Visible text, including retained source for math or unresolved footnotes.
     pub text: String,
+    /// Markdown and semantic HTML formatting.
     pub style: InlineStyle,
+    /// CSS-derived formatting from inline HTML.
     pub html_style: Option<HtmlInlineStyle>,
+    /// Link metadata shared by fragments of one link label.
     pub link: Option<InlineLink>,
+    /// Footnote reference metadata, when this fragment is a reference.
     pub footnote: Option<InlineFootnoteReference>,
+    /// Source-preserving math metadata, when this fragment is inline math.
     pub math: Option<InlineMath>,
 }
 
@@ -137,23 +160,36 @@ pub enum InlineMathDelimiter {
 pub enum InlineLink {
     /// Inline destination and optional title from `[label](destination "title")`.
     Inline {
+        /// Destination used to open the link.
         destination: String,
+        /// Optional link title from the source.
         title: Option<String>,
     },
     /// Reference-style link resolved from `[label][ref]`-style syntax.
-    Reference { label: String, destination: String },
-    /// Autolink target from `<scheme:target>` or email-like syntax.
-    Autolink { target: String },
+    Reference {
+        /// Reference label retained for serialization and prompts.
+        label: String,
+        /// Resolved destination used to open the link.
+        destination: String,
+    },
+    /// Non-HTML angle-bracket target, such as `<scheme:target>` or `<ref>`.
+    Autolink {
+        /// Text between angle brackets, also used as the open target.
+        target: String,
+    },
 }
 
 /// Link target pair used by hit-testing and open-link prompts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InlineLinkHit {
+    /// Target shown to the user when opening the link.
     pub prompt_target: String,
+    /// Resolved target passed to the opener.
     pub open_target: String,
 }
 
 impl InlineLink {
+    /// Return the resolved destination, or the autolink target.
     pub fn open_target(&self) -> &str {
         match self {
             Self::Inline { destination, .. } | Self::Reference { destination, .. } => destination,
@@ -161,6 +197,7 @@ impl InlineLink {
         }
     }
 
+    /// Return the source-facing destination, reference label, or autolink text.
     pub fn raw_target(&self) -> &str {
         match self {
             Self::Inline { destination, .. } => destination,
@@ -169,6 +206,7 @@ impl InlineLink {
         }
     }
 
+    /// Build the prompt and open targets used by link hit testing.
     pub(crate) fn hit(&self) -> InlineLinkHit {
         InlineLinkHit {
             prompt_target: self.raw_target().to_string(),
@@ -176,10 +214,12 @@ impl InlineLink {
         }
     }
 
+    /// Whether serialization retains reference or autolink syntax.
     pub(crate) fn is_source_preserving(&self) -> bool {
         matches!(self, Self::Reference { .. } | Self::Autolink { .. })
     }
 
+    /// Return the opening marker for this link form.
     pub(crate) fn open_marker(&self) -> &'static str {
         match self {
             Self::Autolink { .. } => "<",
@@ -187,6 +227,7 @@ impl InlineLink {
         }
     }
 
+    /// Return the separator before editable target text, if any.
     pub(crate) fn middle_marker(&self) -> Option<&'static str> {
         match self {
             Self::Inline { .. } => Some("]("),
@@ -195,6 +236,7 @@ impl InlineLink {
         }
     }
 
+    /// Return editable destination text or a reference label, if present.
     pub(crate) fn editable_text(&self) -> Option<String> {
         match self {
             Self::Inline { destination, title } => {
@@ -205,6 +247,7 @@ impl InlineLink {
         }
     }
 
+    /// Return the closing marker for this link form.
     pub(crate) fn close_marker(&self) -> &'static str {
         match self {
             Self::Inline { .. } => ")",
@@ -214,6 +257,7 @@ impl InlineLink {
     }
 }
 
+/// Format an inline link destination and optional escaped title.
 fn format_inline_link_target(destination: &str, title: Option<&str>) -> String {
     match title {
         Some(title) => format!("{destination} \"{}\"", escape_link_title(title)),
@@ -221,6 +265,7 @@ fn format_inline_link_target(destination: &str, title: Option<&str>) -> String {
     }
 }
 
+/// Escape backslashes and quotes inside a serialized link title.
 fn escape_link_title(title: &str) -> String {
     let mut escaped = String::with_capacity(title.len());
     for ch in title.chars() {
@@ -238,7 +283,9 @@ fn escape_link_title(title: &str) -> String {
 /// boundary inside that fragment's text.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TextCursor {
+    /// Index of the containing fragment.
     pub fragment_index: usize,
+    /// UTF-8 byte offset within the fragment text.
     pub byte_offset: usize,
 }
 
@@ -246,35 +293,50 @@ pub struct TextCursor {
 /// the render cache to build styled text runs for the text system.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InlineSpan {
+    /// UTF-8 byte range in the flattened visible text.
     pub range: Range<usize>,
+    /// Markdown and semantic HTML formatting.
     pub style: InlineStyle,
+    /// CSS-derived inline formatting.
     pub html_style: Option<HtmlInlineStyle>,
+    /// Link targets available for hit testing.
     pub link: Option<InlineLinkHit>,
+    /// Footnote target available for hit testing.
     pub footnote: Option<InlineFootnoteHit>,
+    /// Inline math metadata for rendering.
     pub math: Option<InlineMath>,
 }
 
 /// Fragment attributes inherited by inserted text at a caret position.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct InlineInsertionAttributes {
+    /// Formatting inherited by inserted text.
     pub style: InlineStyle,
+    /// CSS-derived formatting inherited by inserted text.
     pub html_style: Option<HtmlInlineStyle>,
+    /// Link inherited by inserted text, if any.
     pub link: Option<InlineLink>,
+    /// Footnote reference inherited by inserted text, if any.
     pub footnote: Option<InlineFootnoteReference>,
+    /// Inline math metadata attached to inserted text, if any.
     pub math: Option<InlineMath>,
 }
 
 /// Pre-computed view of an [`InlineTextTree`] optimized for rendering.
 ///
 /// Flattens the fragment tree into a visible text string plus a list of
-/// [`InlineSpan`]s.  Also maintains bidirectional mapping tables between
-/// visible offsets and fragment positions, used by the IME subsystem.
+/// [`InlineSpan`]s. Also maintains byte-offset mappings between visible text
+/// and fragment positions.
 #[derive(Clone, Debug, Default)]
 pub struct InlineRenderCache {
+    /// Concatenated fragment text.
     visible_text: String,
+    /// Styled byte ranges within `visible_text`.
     spans: Vec<InlineSpan>,
+    /// Visible byte offset to fragment position.
     #[allow(dead_code)]
     visible_to_tree: Vec<TextCursor>,
+    /// Starting visible byte offset of each fragment, plus the final end.
     #[allow(dead_code)]
     tree_to_visible: Vec<usize>,
 }
@@ -282,16 +344,21 @@ pub struct InlineRenderCache {
 /// Bidirectional offset map between source Markdown and visible inline text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct InlineMarkdownOffsetMap {
+    /// Serialized Markdown produced with the offset tables.
     markdown: String,
+    /// Visible byte boundary to serialized Markdown byte boundary.
     visible_to_markdown: Vec<usize>,
+    /// Serialized Markdown byte boundary to visible byte boundary.
     markdown_to_visible: Vec<usize>,
 }
 
 impl InlineMarkdownOffsetMap {
+    /// Return the serialized Markdown associated with this map.
     pub(crate) fn markdown(&self) -> &str {
         &self.markdown
     }
 
+    /// Map a visible byte offset to a Markdown byte offset, clamping at the end.
     pub(crate) fn visible_to_markdown_offset(&self, offset: usize) -> usize {
         self.visible_to_markdown
             .get(offset.min(self.visible_to_markdown.len().saturating_sub(1)))
@@ -299,10 +366,12 @@ impl InlineMarkdownOffsetMap {
             .unwrap_or(0)
     }
 
+    /// Map both boundaries of a visible byte range to Markdown.
     pub(crate) fn visible_to_markdown_range(&self, range: Range<usize>) -> Range<usize> {
         self.visible_to_markdown_offset(range.start)..self.visible_to_markdown_offset(range.end)
     }
 
+    /// Map a Markdown byte offset to a visible byte offset, clamping at the end.
     pub(crate) fn markdown_to_visible_offset(&self, offset: usize) -> usize {
         self.markdown_to_visible
             .get(offset.min(self.markdown_to_visible.len().saturating_sub(1)))
@@ -310,12 +379,14 @@ impl InlineMarkdownOffsetMap {
             .unwrap_or(0)
     }
 
+    /// Map both boundaries of a Markdown byte range to visible text.
     pub(crate) fn markdown_to_visible_range(&self, range: Range<usize>) -> Range<usize> {
         self.markdown_to_visible_offset(range.start)..self.markdown_to_visible_offset(range.end)
     }
 }
 
 impl InlineRenderCache {
+    /// Flatten a tree into visible text and styled spans.
     pub fn from_tree(tree: &InlineTextTree) -> Self {
         let mut visible_text = String::new();
         let mut spans = Vec::new();
@@ -365,18 +436,22 @@ impl InlineRenderCache {
         }
     }
 
+    /// Return the flattened visible text.
     pub fn visible_text(&self) -> &str {
         &self.visible_text
     }
 
+    /// Return the styled spans in visible-text byte coordinates.
     pub fn spans(&self) -> &[InlineSpan] {
         &self.spans
     }
 
+    /// Return the visible text length in UTF-8 bytes.
     pub fn visible_len(&self) -> usize {
         self.visible_text.len()
     }
 
+    /// Return the style covering a visible byte offset, or the default style.
     pub fn style_at(&self, offset: usize) -> InlineStyle {
         self.spans
             .iter()
@@ -386,6 +461,7 @@ impl InlineRenderCache {
     }
 
     #[allow(dead_code)]
+    /// Return the HTML style covering a visible byte offset, if any.
     pub fn html_style_at(&self, offset: usize) -> Option<HtmlInlineStyle> {
         self.spans
             .iter()
@@ -394,10 +470,12 @@ impl InlineRenderCache {
     }
 
     #[allow(dead_code)]
+    /// Return the open target of a link at a visible byte offset, if any.
     pub fn link_at(&self, offset: usize) -> Option<&str> {
         self.link_hit_at(offset).map(|hit| hit.open_target.as_str())
     }
 
+    /// Return link hit-test metadata at a visible byte offset, if any.
     pub fn link_hit_at(&self, offset: usize) -> Option<&InlineLinkHit> {
         self.spans
             .iter()
@@ -406,6 +484,7 @@ impl InlineRenderCache {
     }
 
     #[allow(dead_code)]
+    /// Return footnote hit-test metadata at a visible byte offset, if any.
     pub fn footnote_hit_at(&self, offset: usize) -> Option<&InlineFootnoteHit> {
         self.spans
             .iter()
@@ -414,6 +493,7 @@ impl InlineRenderCache {
     }
 
     #[allow(dead_code)]
+    /// Return inline math metadata at a visible byte offset, if any.
     pub fn inline_math_at(&self, offset: usize) -> Option<&InlineMath> {
         self.spans
             .iter()
@@ -424,20 +504,22 @@ impl InlineRenderCache {
 
 /// A sequence of [`InlineFragment`]s representing inline-formatted text.
 ///
-/// This is the core data structure for block titles.  It supports:
+/// This is the core data structure for block titles and table cells. It supports:
 /// - Building from raw Markdown (auto-parsing bold/italic/underline markers)
 /// - Bidirectional Markdown serialization with optimal delimiter choice
-/// - Splitting at arbitrary byte offsets (used for Enter key, paste)
+/// - Splitting at visible byte offsets (rounded down to UTF-8 boundaries)
 /// - Toggling inline styles on arbitrary ranges
 ///
 /// The serialization uses a Viterbi-like DP optimization to choose between
 /// Markdown and HTML delimiter variants, avoiding ambiguous `****` runs.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct InlineTextTree {
+    /// Ordered, normalized fragments of visible inline text.
     pub(crate) fragments: Vec<InlineFragment>,
 }
 
 impl InlineTextTree {
+    /// Build an unformatted tree from literal text.
     pub fn plain(text: impl Into<String>) -> Self {
         Self::from_fragments(vec![InlineFragment {
             text: text.into(),
@@ -451,14 +533,13 @@ impl InlineTextTree {
 
     /// Parse marker-based Markdown into the internal fragment representation.
     ///
-    /// Markers (`**`, `*`, `<u>`, `<strong>`, `<em>`) are consumed and
-    /// converted to [`InlineStyle`] flags on adjacent fragments.  The
-    /// markers themselves are never stored — the tree holds only text
-    /// content and style attributes.
+    /// Formatting markers are consumed into fragment attributes. Link,
+    /// footnote, and math metadata is retained for rendering or serialization.
     pub fn from_markdown(markdown: &str) -> Self {
         Self::from_markdown_with_link_references(markdown, &LinkReferenceDefinitions::default())
     }
 
+    /// Parse Markdown using the supplied reference-link definitions.
     pub fn from_markdown_with_link_references(
         markdown: &str,
         reference_definitions: &LinkReferenceDefinitions,
@@ -490,12 +571,14 @@ impl InlineTextTree {
         self.normalize_fragments();
     }
 
+    /// Build a tree from fragments, merging adjacent compatible runs.
     pub fn from_fragments(fragments: Vec<InlineFragment>) -> Self {
         let mut tree = Self { fragments };
         tree.normalize_fragments();
         tree
     }
 
+    /// Concatenate fragment text into the visible text string.
     pub fn visible_text(&self) -> String {
         let mut text = String::new();
         for fragment in &self.fragments {
@@ -504,6 +587,7 @@ impl InlineTextTree {
         text
     }
 
+    /// Return the visible text length in UTF-8 bytes.
     pub fn visible_len(&self) -> usize {
         self.fragments
             .iter()
@@ -511,6 +595,7 @@ impl InlineTextTree {
             .sum()
     }
 
+    /// Whether any fragment carries a reference link, autolink, footnote, or math.
     pub(crate) fn has_source_preserving_links(&self) -> bool {
         self.fragments.iter().any(|fragment| {
             fragment
@@ -532,18 +617,23 @@ impl InlineTextTree {
             .any(|fragment| matches!(fragment.link, Some(InlineLink::Inline { .. })))
     }
 
+    /// Whether any fragment contains inline math or raised/lowered text.
     pub(crate) fn has_mixed_inline_visuals(&self) -> bool {
         self.fragments
             .iter()
             .any(|fragment| fragment.math.is_some() || fragment.style.has_script())
     }
 
+    /// Whether the tree contains a footnote reference.
     pub(crate) fn has_footnote_references(&self) -> bool {
         self.fragments
             .iter()
             .any(|fragment| fragment.footnote.is_some())
     }
 
+    /// Resolve footnote ordinals and update their displayed text.
+    ///
+    /// Unresolved references revert to their raw Markdown spelling.
     pub(crate) fn apply_footnote_reference_state(
         &mut self,
         mut resolve: impl FnMut(&str) -> Option<(usize, usize)>,
@@ -565,19 +655,20 @@ impl InlineTextTree {
         self.normalize_fragments();
     }
 
+    /// Build a flattened cache for rendering and hit testing.
     pub fn render_cache(&self) -> InlineRenderCache {
         InlineRenderCache::from_tree(self)
     }
 
     /// Serialize fragments back to Markdown text with optimal delimiter choices.
     ///
-    /// Each fragment's style flags determine which markers surround its text.
-    /// This is the export side of the I/O boundary; the internal fragment
-    /// representation never stores raw marker characters.
+    /// Fragment attributes determine surrounding markers, while source-preserving
+    /// inline constructs retain their stored spelling.
     pub fn serialize_markdown(&self) -> String {
         self.markdown_offset_map().markdown
     }
 
+    /// Serialize Markdown together with byte-offset maps in both directions.
     pub(crate) fn markdown_offset_map(&self) -> InlineMarkdownOffsetMap {
         if self.fragments.is_empty() {
             return InlineMarkdownOffsetMap {
@@ -732,6 +823,7 @@ impl InlineTextTree {
     }
 }
 
+/// Serialize one run of fragments and map visible bytes to its Markdown bytes.
 fn serialize_fragment_run_markdown_with_offset_map(
     fragments: &[InlineFragment],
 ) -> InlineMarkdownOffsetMap {
@@ -840,6 +932,7 @@ fn serialize_fragment_run_markdown_with_offset_map(
     }
 }
 
+/// Append a generated marker whose bytes all map to the current visible offset.
 fn push_markdown_marker(
     output: &mut String,
     markdown_to_visible: &mut Vec<usize>,
@@ -857,6 +950,7 @@ fn push_markdown_marker(
     }
 }
 
+/// Build a byte-for-byte identity map for retained source text.
 fn identity_text_with_offset_map(text: &str) -> InlineMarkdownOffsetMap {
     InlineMarkdownOffsetMap {
         markdown: text.to_string(),
@@ -865,12 +959,14 @@ fn identity_text_with_offset_map(text: &str) -> InlineMarkdownOffsetMap {
     }
 }
 
+/// Build the opening CSS span marker when the style has serializable CSS.
 fn html_style_open_marker(style: HtmlInlineStyle) -> Option<String> {
     style
         .to_css()
         .map(|css| format!("<span style=\"{}\">", escape_html_attr(&css)))
 }
 
+/// Escape characters with special meaning inside a quoted HTML attribute.
 fn escape_html_attr(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for ch in value.chars() {
@@ -886,6 +982,10 @@ fn escape_html_attr(value: &str) -> String {
 }
 
 impl InlineTextTree {
+    /// Split at a visible UTF-8 byte offset, rounding down within a character.
+    ///
+    /// Offsets beyond the text are clamped. Splitting inside a math fragment
+    /// discards its math metadata on both pieces.
     pub fn split_at(&self, offset: usize) -> (Self, Self) {
         let clamped = offset.min(self.visible_len());
         let mut left = Vec::new();
@@ -902,7 +1002,10 @@ impl InlineTextTree {
             } else if clamped >= fragment_end {
                 left.push(fragment.clone());
             } else {
-                let split_offset = clamp_to_char_boundary(&fragment.text, clamped - fragment_start);
+                let split_offset = crate::text_offsets::floor_char_boundary(
+                    &fragment.text,
+                    clamped - fragment_start,
+                );
                 if split_offset > 0 {
                     left.push(InlineFragment {
                         text: fragment.text[..split_offset].to_string(),
@@ -931,11 +1034,13 @@ impl InlineTextTree {
         (Self::from_fragments(left), Self::from_fragments(right))
     }
 
+    /// Append another tree and merge adjacent compatible fragments.
     pub fn append_tree(&mut self, other: Self) {
         self.fragments.extend(other.fragments);
         self.normalize_fragments();
     }
 
+    /// Replace a range of fragment indices and normalize the result.
     pub(crate) fn replace_fragment_range(
         &mut self,
         range: Range<usize>,
@@ -945,11 +1050,15 @@ impl InlineTextTree {
         self.normalize_fragments();
     }
 
+    /// Remove the first `prefix_len` visible bytes, using [`Self::split_at`].
     pub fn remove_visible_prefix(&mut self, prefix_len: usize) {
         let (_, tail) = self.split_at(prefix_len);
         *self = tail;
     }
 
+    /// Return attributes inherited by text inserted at a visible byte offset.
+    ///
+    /// At outer code and strikethrough boundaries, insertion uses plain text.
     pub fn attributes_for_insertion_at(&self, offset: usize) -> InlineInsertionAttributes {
         if self.fragments.is_empty() {
             return InlineInsertionAttributes::default();
@@ -1010,27 +1119,33 @@ impl InlineTextTree {
         InlineInsertionAttributes::default()
     }
 
+    /// Toggle bold across a nonempty visible byte range.
     pub fn toggle_bold(&mut self, range: Range<usize>) -> bool {
         self.toggle_style(range, StyleFlag::Bold)
     }
 
+    /// Toggle italic across a nonempty visible byte range.
     pub fn toggle_italic(&mut self, range: Range<usize>) -> bool {
         self.toggle_style(range, StyleFlag::Italic)
     }
 
+    /// Toggle underline across a nonempty visible byte range.
     pub fn toggle_underline(&mut self, range: Range<usize>) -> bool {
         self.toggle_style(range, StyleFlag::Underline)
     }
 
     #[allow(dead_code)]
+    /// Toggle strikethrough across a nonempty visible byte range.
     pub fn toggle_strikethrough(&mut self, range: Range<usize>) -> bool {
         self.toggle_style(range, StyleFlag::Strikethrough)
     }
 
+    /// Toggle inline code across a nonempty visible byte range.
     pub fn toggle_code(&mut self, range: Range<usize>) -> bool {
         self.toggle_style(range, StyleFlag::Code)
     }
 
+    /// Clear the given style flags on indexed fragments, then normalize.
     pub fn unwrap_styles_on_fragments(&mut self, targets: &[(usize, StyleFlag)]) {
         if targets.is_empty() {
             return;
@@ -1045,6 +1160,7 @@ impl InlineTextTree {
     }
 
     #[allow(dead_code)]
+    /// Replace visible text and parse inline syntax without reference definitions.
     pub fn replace_visible_range(
         &self,
         range: Range<usize>,
@@ -1059,6 +1175,7 @@ impl InlineTextTree {
         )
     }
 
+    /// Replace visible text, then normalize markers with reference definitions.
     pub fn replace_visible_range_with_link_references(
         &self,
         range: Range<usize>,
@@ -1087,7 +1204,7 @@ impl InlineTextTree {
         temp.normalize_inline_syntax_with_link_references(reference_definitions)
     }
 
-    /// Like `replace_visible_range` but skips marker normalization so
+    /// Like [`Self::replace_visible_range`] but skips marker normalization so
     /// that backticks, stars, and other delimiters are stored as-is.
     /// Used for source-mode editing where the text must remain raw.
     pub fn replace_visible_range_raw(
@@ -1121,15 +1238,16 @@ impl InlineTextTree {
         }
     }
 
-    /// Core marker-to-style normalizer: scans the fragment text for
-    /// delimiter sequences (`**`, `*`, `<u>`, etc.), removes them, and
-    /// applies the corresponding [`InlineStyle`] to the text between
-    /// matching pairs.  Unmatched delimiters are emitted as literal text.
+    /// Normalize inline markers without reference-link definitions.
     #[allow(dead_code)]
     pub fn normalize_inline_syntax(&self) -> InlineEditResult {
         self.normalize_inline_syntax_with_link_references(&LinkReferenceDefinitions::default())
     }
 
+    /// Parse inline markers and build a byte map from input to normalized text.
+    ///
+    /// Unmatched delimiters remain literal; supplied definitions resolve
+    /// reference links.
     pub fn normalize_inline_syntax_with_link_references(
         &self,
         reference_definitions: &LinkReferenceDefinitions,
@@ -1153,6 +1271,9 @@ impl InlineTextTree {
         }
     }
 
+    /// Toggle one style flag on the selected fragments.
+    ///
+    /// Returns `false` for an empty or out-of-bounds range.
     fn toggle_style(&mut self, range: Range<usize>, flag: StyleFlag) -> bool {
         if range.is_empty() {
             return false;
@@ -1183,6 +1304,7 @@ impl InlineTextTree {
         true
     }
 
+    /// Remove empty fragments and merge adjacent compatible non-math runs.
     fn normalize_fragments(&mut self) {
         let mut normalized: Vec<InlineFragment> = Vec::new();
         for fragment in self.fragments.drain(..) {
@@ -1208,16 +1330,20 @@ impl InlineTextTree {
     }
 }
 
-/// Result of a visible-text replacement operation, containing the
-/// normalized tree and a mapping from pre-edit visible offsets to
-/// post-edit tree offsets.
+/// Normalized inline tree and a byte map from text entering normalization.
+///
+/// After replacement, the map addresses the spliced text, not the original
+/// pre-edit tree.
 #[derive(Clone, Debug)]
 pub struct InlineEditResult {
+    /// Parsed and normalized inline text.
     pub tree: InlineTextTree,
+    /// Input visible byte boundary to normalized visible byte boundary.
     visible_to_normalized: Vec<usize>,
 }
 
 impl InlineEditResult {
+    /// Map an input visible byte offset to a normalized offset, clamping at end.
     pub fn map_offset(&self, offset: usize) -> usize {
         self.visible_to_normalized
             .get(offset.min(self.visible_to_normalized.len().saturating_sub(1)))
@@ -1225,6 +1351,7 @@ impl InlineEditResult {
             .unwrap_or(0)
     }
 
+    /// Map both boundaries of an input visible byte range.
     pub fn map_range(&self, range: &Range<usize>) -> Range<usize> {
         self.map_offset(range.start)..self.map_offset(range.end)
     }
@@ -1236,9 +1363,15 @@ impl InlineEditResult {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Delimiter {
     /// Markdown bold marker using either `*` or `_`.
-    BoldMarkdown { marker: char },
+    BoldMarkdown {
+        /// Marker repeated twice on each side.
+        marker: char,
+    },
     /// Markdown italic marker using either `*` or `_`.
-    ItalicMarkdown { marker: char },
+    ItalicMarkdown {
+        /// Marker used on each side.
+        marker: char,
+    },
     /// Markdown strikethrough marker `~~`.
     StrikethroughMarkdown,
     /// Markdown superscript marker `^`.
@@ -1256,12 +1389,14 @@ enum Delimiter {
     /// HTML italic marker `<em>`.
     ItalicHtml,
     /// Markdown code span marker using a selected backtick run length.
-    CodeMarkdown { run_len: usize },
+    CodeMarkdown {
+        /// Number of backticks in each delimiter.
+        run_len: usize,
+    },
 }
 
 impl Delimiter {
-    /// Returns the opening marker string.  For code spans this is `run_len`
-    /// backticks; for emphasis it's `**`, `*`, `<u>`, etc.
+    /// Return the opening marker for this delimiter.
     fn open(self) -> String {
         match self {
             Self::BoldMarkdown { marker } => marker.to_string().repeat(2),
@@ -1278,6 +1413,7 @@ impl Delimiter {
         }
     }
 
+    /// Return the closing marker for this delimiter.
     fn close(self) -> String {
         match self {
             Self::BoldMarkdown { marker } => marker.to_string().repeat(2),
@@ -1294,6 +1430,7 @@ impl Delimiter {
         }
     }
 
+    /// Return the opening marker length in tokens.
     fn token_len(self) -> usize {
         match self {
             Self::CodeMarkdown { run_len } => run_len,
@@ -1301,6 +1438,7 @@ impl Delimiter {
         }
     }
 
+    /// Rank delimiter variants for deterministic serialization ties.
     fn preference_rank(self) -> u8 {
         match self {
             Self::BoldMarkdown { .. } => 0,
@@ -1315,6 +1453,7 @@ impl Delimiter {
         }
     }
 
+    /// Whether this delimiter emits semantic HTML rather than Markdown.
     fn is_html(self) -> bool {
         matches!(
             self,
@@ -1345,15 +1484,21 @@ pub(crate) enum StyleFlag {
 /// Source character plus style and byte range used by inline parsing.
 #[derive(Clone)]
 struct CharToken {
+    /// Source character represented by this token.
     ch: char,
+    /// Style inherited from the input fragment.
     style: InlineStyle,
+    /// HTML style inherited from the input fragment.
     html_style: Option<HtmlInlineStyle>,
+    /// UTF-8 byte range in the input visible text.
     source_range: Range<usize>,
 }
 
 /// Result of parsing a delimited inline region.
 struct ParseResult {
+    /// Token index after the parsed region.
     next_index: usize,
+    /// Whether the expected closing delimiter was consumed.
     closed: bool,
 }
 
@@ -1361,12 +1506,16 @@ struct ParseResult {
 /// Keeps track of the visible-to-normalized offset mapping so that
 /// selections and cursors can be mapped to the normalized tree.
 struct NormalizeBuilder {
+    /// Normalized fragments emitted so far.
     fragments: Vec<InlineFragment>,
+    /// Input visible byte boundary to normalized visible byte boundary.
     visible_to_normalized: Vec<usize>,
+    /// Current normalized visible length in bytes.
     normalized_len: usize,
 }
 
 impl NormalizeBuilder {
+    /// Allocate a builder and offset table for the input byte length.
     fn new(input_len: usize) -> Self {
         Self {
             fragments: Vec::new(),
@@ -1375,12 +1524,14 @@ impl NormalizeBuilder {
         }
     }
 
+    /// Map every byte boundary of a removed marker to the current output end.
     fn drop_token(&mut self, token: &CharToken) {
         for boundary in token.source_range.start..=token.source_range.end {
             self.visible_to_normalized[boundary] = self.normalized_len;
         }
     }
 
+    /// Emit one character with inherited styles and update byte offsets.
     fn emit_token(
         &mut self,
         token: &CharToken,
@@ -1436,6 +1587,7 @@ impl NormalizeBuilder {
         });
     }
 
+    /// Retain a math span's source as one metadata-bearing fragment.
     fn emit_inline_math(
         &mut self,
         tokens: &[CharToken],
@@ -1471,6 +1623,7 @@ impl NormalizeBuilder {
     }
 }
 
+/// Flatten fragment characters into tokens carrying source byte ranges.
 fn flatten_tokens(fragments: &[InlineFragment]) -> Vec<CharToken> {
     let mut tokens = Vec::new();
     let mut visible_offset = 0;
@@ -1491,10 +1644,10 @@ fn flatten_tokens(fragments: &[InlineFragment]) -> Vec<CharToken> {
     tokens
 }
 
-/// Recursive-descent parser that consumes [`CharToken`]s and reconstructs
-/// the normalized inline tree.  Matching delimiters are consumed (dropped);
-/// unmatched ones are emitted as literal text.  Nested styles are handled by
-/// recursive calls that accumulate `extra_style`.
+/// Parse tokens until the expected delimiter closes or input ends.
+///
+/// Matching markers are dropped, unmatched markers remain literal, and nested
+/// regions accumulate style and HTML attributes in the builder.
 fn parse_until(
     tokens: &[CharToken],
     mut index: usize,
@@ -1661,6 +1814,7 @@ fn parse_until(
     }
 }
 
+/// Parse a conservative inline math span and retain its original source.
 fn parse_inline_math(
     tokens: &[CharToken],
     index: usize,
@@ -1714,6 +1868,7 @@ fn parse_inline_math(
     Some(close_end + 1)
 }
 
+/// Find a matching unescaped single-dollar closer on the same line.
 fn locate_inline_dollar_math_close(tokens: &[CharToken], mut cursor: usize) -> Option<usize> {
     while cursor < tokens.len() {
         let token = &tokens[cursor];
@@ -1731,6 +1886,7 @@ fn locate_inline_dollar_math_close(tokens: &[CharToken], mut cursor: usize) -> O
     None
 }
 
+/// Find a `\)` closer on the same line.
 fn locate_inline_paren_math_close(tokens: &[CharToken], mut cursor: usize) -> Option<usize> {
     while cursor + 1 < tokens.len() {
         if tokens[cursor].ch == '\n' || tokens[cursor].ch == '\r' {
@@ -1744,6 +1900,7 @@ fn locate_inline_paren_math_close(tokens: &[CharToken], mut cursor: usize) -> Op
     None
 }
 
+/// Whether an odd run of preceding backslashes escapes this token.
 fn token_is_backslash_escaped(tokens: &[CharToken], index: usize) -> bool {
     if index == 0 {
         return false;
@@ -1757,6 +1914,7 @@ fn token_is_backslash_escaped(tokens: &[CharToken], index: usize) -> bool {
     slash_count % 2 == 1
 }
 
+/// Reject dollar math that resembles a numeric currency amount.
 fn looks_like_obvious_currency(
     tokens: &[CharToken],
     open_index: usize,
@@ -1780,6 +1938,7 @@ fn looks_like_obvious_currency(
         && body.len() > 1
 }
 
+/// Parse a footnote reference into a source-preserving fragment.
 fn parse_footnote_reference(
     tokens: &[CharToken],
     index: usize,
@@ -1853,6 +2012,7 @@ fn parse_footnote_reference(
     Some(end_index + 1)
 }
 
+/// Parse a link and assign its metadata to normalized label fragments.
 fn parse_inline_link(
     tokens: &[CharToken],
     index: usize,
@@ -1920,6 +2080,7 @@ fn parse_inline_link(
     Some(located.end_index + 1)
 }
 
+/// Parse an angle-bracket autolink and map its target into visible text.
 fn parse_autolink(
     tokens: &[CharToken],
     index: usize,
@@ -1983,14 +2144,20 @@ fn parse_autolink(
     Some(end_index + 1)
 }
 
+/// Opening inline HTML tag found in the token stream.
 #[derive(Clone, Debug)]
 struct InlineHtmlTag {
+    /// Lowercase tag name.
     name: String,
+    /// Parsed tag attributes.
     attrs: Vec<HtmlAttr>,
+    /// Index of the closing `>` token.
     end_index: usize,
+    /// Whether the opening tag ends with `/>`.
     self_closing: bool,
 }
 
+/// Parse a safe paired inline HTML container into fragment styles.
 fn parse_inline_html_container(
     tokens: &[CharToken],
     index: usize,
@@ -2032,6 +2199,7 @@ fn parse_inline_html_container(
     Some(close_end + 1)
 }
 
+/// Apply semantic HTML tag formatting to the inherited style.
 fn inline_html_semantic_style(name: &str, style: InlineStyle) -> InlineStyle {
     match name {
         "strong" | "b" => style.with_bold(),
@@ -2045,6 +2213,7 @@ fn inline_html_semantic_style(name: &str, style: InlineStyle) -> InlineStyle {
     }
 }
 
+/// Extract supported CSS style attributes from an inline HTML tag.
 fn inline_html_style(tag: &InlineHtmlTag) -> Option<HtmlInlineStyle> {
     let node = HtmlNode {
         kind: HtmlNodeKind::InlineSemantic,
@@ -2058,6 +2227,7 @@ fn inline_html_style(tag: &InlineHtmlTag) -> Option<HtmlInlineStyle> {
     (!style.is_empty()).then_some(style)
 }
 
+/// Merge CSS styles, preferring nonempty child properties.
 fn merge_html_styles(
     parent: Option<HtmlInlineStyle>,
     child: Option<HtmlInlineStyle>,
@@ -2081,11 +2251,15 @@ fn merge_html_styles(
 /// Located inline link syntax inside the token stream.
 #[derive(Clone)]
 struct LocatedInlineLink {
+    /// Index of the link label's closing bracket.
     label_end: usize,
+    /// Index of the final syntax token for this link.
     end_index: usize,
+    /// Parsed link target and source form.
     link: InlineLink,
 }
 
+/// Locate an inline, reference, or shortcut link starting at `index`.
 fn locate_inline_link(
     tokens: &[CharToken],
     index: usize,
@@ -2201,6 +2375,7 @@ fn locate_inline_link(
     }
 }
 
+/// Locate a nonempty angle-bracket autolink that is not an HTML tag.
 fn locate_autolink(tokens: &[CharToken], index: usize) -> Option<usize> {
     if tokens.get(index)?.ch != '<' {
         return None;
@@ -2224,10 +2399,12 @@ fn locate_autolink(tokens: &[CharToken], index: usize) -> Option<usize> {
         .then_some(end_index)
 }
 
+/// Collect token characters into a string.
 fn tokens_to_string(tokens: &[CharToken]) -> String {
     tokens.iter().map(|token| token.ch).collect()
 }
 
+/// Parse an opening HTML tag, respecting quoted attribute values.
 fn locate_inline_html_open_tag(tokens: &[CharToken], index: usize) -> Option<InlineHtmlTag> {
     if tokens.get(index)?.ch != '<' {
         return None;
@@ -2283,6 +2460,7 @@ fn locate_inline_html_open_tag(tokens: &[CharToken], index: usize) -> Option<Inl
     None
 }
 
+/// Locate a closing HTML tag with the expected name.
 fn locate_inline_html_close_tag(
     tokens: &[CharToken],
     index: usize,
@@ -2319,6 +2497,7 @@ fn locate_inline_html_close_tag(
     (tokens.get(cursor)?.ch == '>').then_some(cursor)
 }
 
+/// Find the matching closing tag, tracking nested tags with the same name.
 fn locate_matching_inline_html_close(
     tokens: &[CharToken],
     mut cursor: usize,
@@ -2354,6 +2533,7 @@ fn locate_matching_inline_html_close(
     None
 }
 
+/// Distinguish HTML-looking angle brackets from autolinks.
 fn looks_like_non_autolink_html_tag(tokens: &[CharToken], end_index: usize, target: &str) -> bool {
     let target = target.trim();
     if target.starts_with('/') {
@@ -2375,6 +2555,7 @@ fn looks_like_non_autolink_html_tag(tokens: &[CharToken], end_index: usize, targ
     rest.contains(&format!("</{tag_name}>"))
 }
 
+/// Split a tag-like target into its name and attribute-or-slash flag.
 fn html_tag_name_with_attrs(target: &str) -> Option<(&str, bool)> {
     if target.is_empty() {
         return None;
@@ -2408,10 +2589,12 @@ fn html_tag_name_with_attrs(target: &str) -> Option<(&str, bool)> {
     .then_some((&target[..end], true))
 }
 
+/// Whether a character is accepted in the parser's HTML tag names.
 fn is_html_tag_name_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_')
 }
 
+/// Add enclosing styles to already parsed link-label fragments.
 fn apply_extra_style_to_fragments(
     fragments: &mut [InlineFragment],
     extra_style: InlineStyle,
@@ -2440,6 +2623,7 @@ fn apply_extra_style_to_fragments(
     }
 }
 
+/// Match a supported opening formatting delimiter at a token index.
 fn match_open_delimiter(tokens: &[CharToken], index: usize) -> Option<Delimiter> {
     if matches_sequence(tokens, index, "<strong>") {
         Some(Delimiter::BoldHtml)
@@ -2476,7 +2660,7 @@ fn match_open_delimiter(tokens: &[CharToken], index: usize) -> Option<Delimiter>
     }
 }
 
-/// Returns the length of the consecutive backtick run starting at `index`.
+/// Return the backtick run length only when `index` starts the run.
 fn backtick_run_len(tokens: &[CharToken], index: usize) -> usize {
     let mut len = 0;
     while index + len < tokens.len() && tokens[index + len].ch == '`' {
@@ -2490,6 +2674,7 @@ fn backtick_run_len(tokens: &[CharToken], index: usize) -> usize {
     len
 }
 
+/// Check that a compatible closing delimiter exists after an opener.
 fn has_closing_delimiter(tokens: &[CharToken], index: usize, delimiter: Delimiter) -> bool {
     let skip = delimiter.token_len();
     let close_str = delimiter.close();
@@ -2570,6 +2755,7 @@ fn emphasis_requires_body(delimiter: Delimiter) -> bool {
     )
 }
 
+/// Find a script closer around a nonempty ASCII alphanumeric body.
 fn locate_script_close(tokens: &[CharToken], mut cursor: usize, marker: char) -> Option<usize> {
     let body_start = cursor;
     while cursor < tokens.len() {
@@ -2595,6 +2781,7 @@ fn locate_script_close(tokens: &[CharToken], mut cursor: usize, marker: char) ->
     None
 }
 
+/// Whether a script body is nonempty and ASCII alphanumeric.
 fn valid_script_body(tokens: &[CharToken], start: usize, end: usize) -> bool {
     start < end
         && tokens[start..end]
@@ -2602,6 +2789,7 @@ fn valid_script_body(tokens: &[CharToken], start: usize, end: usize) -> bool {
             .all(|token| token.ch.is_ascii_alphanumeric())
 }
 
+/// Whether this tilde is isolated from adjacent tildes.
 fn is_single_tilde_delimiter(tokens: &[CharToken], index: usize) -> bool {
     tokens.get(index).is_some_and(|token| token.ch == '~')
         && index
@@ -2611,6 +2799,7 @@ fn is_single_tilde_delimiter(tokens: &[CharToken], index: usize) -> bool {
         && tokens.get(index + 1).is_none_or(|token| token.ch != '~')
 }
 
+/// Match a string against consecutive token characters.
 fn matches_sequence(tokens: &[CharToken], index: usize, sequence: &str) -> bool {
     sequence
         .chars()
@@ -2618,6 +2807,7 @@ fn matches_sequence(tokens: &[CharToken], index: usize, sequence: &str) -> bool 
         .all(|(offset, ch)| tokens.get(index + offset).is_some_and(|t| t.ch == ch))
 }
 
+/// Return the length of syntax escaped by a backslash at `index`.
 fn escaped_sequence_token_len(tokens: &[CharToken], index: usize) -> Option<usize> {
     let next_index = index + 1;
     if next_index >= tokens.len() {
@@ -2651,6 +2841,7 @@ fn escaped_sequence_token_len(tokens: &[CharToken], index: usize) -> Option<usiz
     }
 }
 
+/// Escape literal text markers and map input bytes to serialized bytes.
 fn escape_literal_text_with_offset_map(text: &str) -> InlineMarkdownOffsetMap {
     let mut escaped = String::new();
     let mut visible_to_markdown = vec![0; text.len() + 1];
@@ -2816,6 +3007,7 @@ fn escape_literal_text_with_offset_map(text: &str) -> InlineMarkdownOffsetMap {
     }
 }
 
+/// Pad code-span content when needed and map its visible byte offsets.
 fn escape_code_span_text_with_offset_map(text: &str) -> InlineMarkdownOffsetMap {
     let needs_padding = !text.is_empty()
         && !text.chars().all(|ch| ch == ' ')
@@ -2941,6 +3133,7 @@ fn choose_fragment_stacks(fragments: &[InlineFragment]) -> Vec<Vec<Delimiter>> {
     chosen
 }
 
+/// Enumerate candidate delimiter stacks for one fragment.
 fn stack_variants(
     fragment: &InlineFragment,
     previous_fragment: Option<&InlineFragment>,
@@ -3011,14 +3204,17 @@ fn stack_variants(
     vec![markdown_stack, html_stack]
 }
 
+/// Whether the previous fragment is a compatible owner for Markdown script markers.
+///
+/// It must end in an ASCII alphanumeric character and match the current
+/// fragment's non-script attributes.
 pub(crate) fn can_use_markdown_script_delimiters(
     previous_fragment: Option<&InlineFragment>,
     fragment: &InlineFragment,
 ) -> bool {
     // This guard is shared by serialization and inline projection. Markdown
-    // script markers need a plain ASCII owner immediately before the script
-    // fragment; otherwise we fall back to <sup>/<sub> so the next parse sees
-    // the same style boundary.
+    // script markers need a compatible ASCII owner immediately before the
+    // script fragment; otherwise both paths use <sup>/<sub>.
     let Some(previous) = previous_fragment else {
         return false;
     };
@@ -3039,6 +3235,7 @@ pub(crate) fn can_use_markdown_script_delimiters(
         && styles_match_ignoring_script(previous.style, fragment.style)
 }
 
+/// Compare styles except for superscript or subscript placement.
 fn styles_match_ignoring_script(left: InlineStyle, right: InlineStyle) -> bool {
     left.bold == right.bold
         && left.italic == right.italic
@@ -3047,6 +3244,7 @@ fn styles_match_ignoring_script(left: InlineStyle, right: InlineStyle) -> bool {
         && left.code == right.code
 }
 
+/// Choose a backtick delimiter longer than any run within the code text.
 fn code_delimiter_run_len(text: &str) -> usize {
     let mut longest = 0usize;
     let mut current = 0usize;
@@ -3061,6 +3259,7 @@ fn code_delimiter_run_len(text: &str) -> usize {
     longest + 1
 }
 
+/// Count the bytes needed to close and open differing stack suffixes.
 fn stack_transition_len(from: &[Delimiter], to: &[Delimiter]) -> usize {
     let common = common_prefix_len(from, to);
     let close_len = from[common..]
@@ -3090,6 +3289,7 @@ fn stack_transition_cost(from: &[Delimiter], to: &[Delimiter]) -> usize {
     marker_len + ambiguity_penalty
 }
 
+/// Penalize HTML delimiter stacks so Markdown wins when safe.
 fn stack_variant_penalty(stack: &[Delimiter]) -> usize {
     if stack.iter().any(|delimiter| delimiter.is_html()) {
         64
@@ -3098,6 +3298,7 @@ fn stack_variant_penalty(stack: &[Delimiter]) -> usize {
     }
 }
 
+/// Write the markers needed to transition between delimiter stacks.
 fn write_stack_transition(output: &mut String, from: &[Delimiter], to: &[Delimiter]) {
     let common = common_prefix_len(from, to);
     for delimiter in from[common..].iter().rev() {
@@ -3108,12 +3309,14 @@ fn write_stack_transition(output: &mut String, from: &[Delimiter], to: &[Delimit
     }
 }
 
+/// Return the marker string for a delimiter-stack transition.
 fn stack_transition_string(from: &[Delimiter], to: &[Delimiter]) -> String {
     let mut output = String::new();
     write_stack_transition(&mut output, from, to);
     output
 }
 
+/// Count equal leading delimiters in two stacks.
 fn common_prefix_len(left: &[Delimiter], right: &[Delimiter]) -> usize {
     let mut index = 0;
     while index < left.len() && index < right.len() && left[index] == right[index] {
@@ -3122,6 +3325,7 @@ fn common_prefix_len(left: &[Delimiter], right: &[Delimiter]) -> usize {
     index
 }
 
+/// Build the tie-breaking preference ranks of a delimiter stack.
 fn stack_preference_key(stack: &[Delimiter]) -> Vec<u8> {
     stack
         .iter()
@@ -3129,6 +3333,7 @@ fn stack_preference_key(stack: &[Delimiter]) -> Vec<u8> {
         .collect()
 }
 
+/// Return the longest consecutive asterisk run in a marker string.
 fn longest_star_run(text: &str) -> usize {
     let mut max_run = 0;
     let mut current_run = 0;
@@ -3143,6 +3348,7 @@ fn longest_star_run(text: &str) -> usize {
     max_run
 }
 
+/// Whether a particular editing flag is active in a style.
 fn style_flag_enabled(style: InlineStyle, flag: StyleFlag) -> bool {
     match flag {
         StyleFlag::Bold => style.bold,
@@ -3155,6 +3361,7 @@ fn style_flag_enabled(style: InlineStyle, flag: StyleFlag) -> bool {
     }
 }
 
+/// Enable or clear one editing flag, preserving unrelated style fields.
 fn set_style_flag(mut style: InlineStyle, flag: StyleFlag, enabled: bool) -> InlineStyle {
     match flag {
         StyleFlag::Bold => style.bold = enabled,
@@ -3184,19 +3391,7 @@ fn set_style_flag(mut style: InlineStyle, flag: StyleFlag, enabled: bool) -> Inl
     style
 }
 
-fn clamp_to_char_boundary(text: &str, offset: usize) -> usize {
-    let clamped = offset.min(text.len());
-    if text.is_char_boundary(clamped) {
-        return clamped;
-    }
-
-    let mut boundary = clamped;
-    while boundary > 0 && !text.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-    boundary
-}
-
+/// Whether emphasis has a non-whitespace token after its opener.
 fn can_open_emphasis(tokens: &[CharToken], index: usize, len: usize) -> bool {
     tokens
         .get(index + len)
@@ -3204,6 +3399,7 @@ fn can_open_emphasis(tokens: &[CharToken], index: usize, len: usize) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether a script marker has an ASCII owner and body start.
 fn can_open_script(tokens: &[CharToken], index: usize, marker: char) -> bool {
     if token_is_backslash_escaped(tokens, index) {
         return false;
@@ -3220,6 +3416,7 @@ fn can_open_script(tokens: &[CharToken], index: usize, marker: char) -> bool {
             .is_some_and(|token| token.ch.is_ascii_alphanumeric())
 }
 
+/// Whether a closing emphasis marker follows non-whitespace text.
 fn can_close_emphasis(tokens: &[CharToken], index: usize) -> bool {
     index > 0 && !tokens[index - 1].ch.is_whitespace()
 }

@@ -1,7 +1,8 @@
 //! Velotype - a block-based Markdown editor built with GPUI.
 //!
 //! Reads file paths from command-line arguments and opens one GPUI window per
-//! file. With no arguments, a single empty window is created.
+//! file. With no arguments, startup preferences select a recent file or an
+//! empty document; macOS open-file events can replace that startup choice.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -25,8 +26,11 @@ mod editor;
 mod export;
 #[cfg(any(target_os = "macos", test))]
 mod file_url;
+mod fonts;
 mod i18n;
+mod ime;
 mod net;
+mod text_offsets;
 mod theme;
 mod window_chrome;
 
@@ -37,8 +41,10 @@ use file_url::parse_file_url;
 use i18n::I18nManager;
 use theme::ThemeManager;
 
+/// Serves the workspace and titlebar SVGs embedded in the executable.
 struct VelotypeAssets;
 
+/// Opens the preferred recent Markdown file, falling back to an empty document.
 fn open_startup_window(cx: &mut App, startup_open: config::StartupOpenPreference) {
     if startup_open == config::StartupOpenPreference::LastOpenedFile
         && let Some(path) = config::first_existing_recent_markdown_file()
@@ -61,6 +67,7 @@ fn open_startup_window(cx: &mut App, startup_open: config::StartupOpenPreference
 }
 
 impl AssetSource for VelotypeAssets {
+    /// Returns embedded bytes for known icon paths, or `None` for other assets.
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
         match path {
             "icon/workspace/folder.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
@@ -85,11 +92,13 @@ impl AssetSource for VelotypeAssets {
         }
     }
 
+    /// Returns no directory entries; embedded assets are loaded by exact path.
     fn list(&self, _path: &str) -> gpui::Result<Vec<SharedString>> {
         Ok(Vec::new())
     }
 }
 
+/// Parses CLI options, initializes app services, and opens startup documents.
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -190,6 +199,7 @@ fn main() {
         });
         I18nManager::init_with_language_id(cx, &preferences.default_language_id);
         ThemeManager::init_with_theme_id(cx, &preferences.default_theme_id);
+        fonts::FontSettings::init(cx, preferences.fonts.clone());
         config::EditorSettings::init(cx, preferences.show_table_headers);
         net::install_http_client(cx);
         init_editor(cx, &preferences.keybindings);

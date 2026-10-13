@@ -3,6 +3,7 @@
 use super::*;
 
 impl Editor {
+    /// Chooses a live active target, then pending focus, then the first focusable block.
     pub(super) fn current_edit_target_entity_id_from_state(&self, cx: &App) -> Option<EntityId> {
         self.active_entity_id
             .filter(|entity_id| self.focusable_entity_by_id(*entity_id).is_some())
@@ -13,11 +14,14 @@ impl Editor {
             .or_else(|| self.first_focusable_entity_id(cx))
     }
 
+    /// Resolves the state-based edit target without consulting window focus.
     pub(super) fn current_edit_target_from_state(&self, cx: &App) -> Option<Entity<Block>> {
         self.current_edit_target_entity_id_from_state(cx)
             .and_then(|entity_id| self.focusable_entity_by_id(entity_id))
     }
 
+    /// Ends pointer selection in the current target, tree blocks, and table cells.
+    /// Returns whether any session changed, optionally notifying the editor.
     fn end_block_pointer_selection_sessions_inner(
         &mut self,
         cx: &mut Context<Self>,
@@ -60,6 +64,7 @@ impl Editor {
         changed
     }
 
+    /// Ends all block pointer-selection sessions and notifies only if one changed.
     pub(super) fn end_block_pointer_selection_sessions(&mut self, cx: &mut Context<Self>) -> bool {
         self.end_block_pointer_selection_sessions_inner(cx, true)
     }
@@ -72,6 +77,7 @@ impl Editor {
         block
     }
 
+    /// Creates a subscribed paragraph editor configured for a table cell's position/alignment.
     pub(super) fn new_table_cell_block(
         cx: &mut Context<Self>,
         title: InlineTextTree,
@@ -85,6 +91,7 @@ impl Editor {
         block
     }
 
+    /// Uses the document's parent directory, falling back to the working directory if available.
     pub(super) fn image_base_dir(&self) -> Option<PathBuf> {
         self.file_path
             .as_ref()
@@ -92,6 +99,7 @@ impl Editor {
             .or_else(|| std::env::current_dir().ok())
     }
 
+    /// Installs shared references and a base directory on a block, then notifies it.
     pub(super) fn sync_runtime_context_for_block(
         &self,
         block: &Entity<Block>,
@@ -113,6 +121,8 @@ impl Editor {
         });
     }
 
+    /// Resolves eligible footnote definitions and numbers references in visible order.
+    /// First definitions win; unresolved references retain no ordinal.
     pub(super) fn rebuild_footnote_registry(&mut self, cx: &App) {
         let mut definitions = HashMap::new();
         let visible = self.document.visible_blocks().to_vec();
@@ -200,6 +210,7 @@ impl Editor {
         });
     }
 
+    /// Reparses document references and distributes their context to blocks and table cells.
     pub(super) fn rebuild_image_runtimes(&mut self, cx: &mut Context<Self>) {
         let base_dir = self.image_base_dir();
         let markdown = self.document.markdown_text(cx);
@@ -226,6 +237,7 @@ impl Editor {
         }
     }
 
+    /// Finds a tree block or separately registered table-cell editor by entity id.
     pub(super) fn focusable_entity_by_id(&self, entity_id: EntityId) -> Option<Entity<Block>> {
         self.document.block_entity_by_id(entity_id).or_else(|| {
             self.table_cells
@@ -234,6 +246,7 @@ impl Editor {
         })
     }
 
+    /// Chooses the first root, preferring its first header cell when it is a table.
     pub(super) fn first_focusable_entity_id(&self, cx: &App) -> Option<EntityId> {
         let first_root = self.document.first_root()?.clone();
         if first_root.read(cx).kind() == BlockKind::Table {
@@ -248,6 +261,7 @@ impl Editor {
         Some(first_root.entity_id())
     }
 
+    /// Finds actual window focus in the tree first, then in registered table cells.
     pub(super) fn focused_edit_target_entity_id(
         &self,
         window: &Window,
@@ -263,15 +277,18 @@ impl Editor {
             })
     }
 
+    /// Resolves the block or table cell that currently holds window focus.
     pub(super) fn focused_edit_target(&self, window: &Window, cx: &App) -> Option<Entity<Block>> {
         self.focused_edit_target_entity_id(window, cx)
             .and_then(|entity_id| self.focusable_entity_by_id(entity_id))
     }
 
+    /// Clones a registered cell's table owner and coordinate binding, if present.
     pub(super) fn table_cell_binding(&self, entity_id: EntityId) -> Option<TableCellBinding> {
         self.table_cells.get(&entity_id).cloned()
     }
 
+    /// Resolves a tree entity only if its current semantic kind is a table.
     pub(super) fn table_block_by_id(&self, entity_id: EntityId, cx: &App) -> Option<Entity<Block>> {
         self.document
             .block_entity_by_id(entity_id)

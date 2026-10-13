@@ -10,7 +10,9 @@ use super::image::normalize_reference_label;
 /// Active fenced code block while scanning for link reference definitions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FenceInfo {
+    /// Backtick or tilde used by the opening fence.
     ch: char,
+    /// Opening run length; this scanner requires an equally long closing run.
     len: usize,
 }
 
@@ -20,8 +22,11 @@ enum HtmlBlockStart {
     Comment,
     /// HTML tag block whose closing behavior depends on the tag.
     Tag {
+        /// Tag name with source casing, also used for matching the closer.
         name: String,
+        /// Whether the trimmed opening line ends with a self-closing marker.
         self_closing: bool,
+        /// Whether the opening line contains an exact closing-tag spelling.
         closes_same_line: bool,
     },
 }
@@ -29,13 +34,19 @@ enum HtmlBlockStart {
 /// Global reference definition for reference-style links.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LinkReferenceDefinition {
+    /// Destination after punctuation unescaping and supported angle-wrapper removal.
     pub(crate) destination: String,
+    /// Optional double-quoted title, retained even though inline resolution ignores it.
     #[allow(dead_code)]
     pub(crate) title: Option<String>,
 }
 
+/// First-seen link definitions keyed by normalized reference labels.
 pub(crate) type LinkReferenceDefinitions = HashMap<String, LinkReferenceDefinition>;
 
+/// Scans container-prefixed lines for definitions, keeping the first normalized label.
+/// HTML regions and fences with nonblank info tails suppress scanning via line heuristics.
+/// Bare fences do not activate suppression, and closing runs must match the opener exactly.
 pub(crate) fn parse_link_reference_definitions(markdown: &str) -> LinkReferenceDefinitions {
     let lines = markdown.split('\n').collect::<Vec<_>>();
     let normalized_lines = lines
@@ -124,6 +135,8 @@ pub(crate) fn parse_link_reference_definitions(markdown: &str) -> LinkReferenceD
     definitions
 }
 
+/// Accepts parsed HTTP(S) URIs or a nonempty lowercase `mailto:` target containing `@`.
+/// This is an autolink syntax check, not validation of an address or remote resource.
 pub(crate) fn is_supported_autolink_target(target: &str) -> bool {
     if target
         .strip_prefix("mailto:")
@@ -138,6 +151,8 @@ pub(crate) fn is_supported_autolink_target(target: &str) -> bool {
         .is_some_and(|scheme| matches!(scheme.as_str(), "http" | "https"))
 }
 
+/// Parses a normalized definition line and optional indented title continuation.
+/// Returns the normalized label, target metadata, and number of consumed lines.
 fn parse_link_reference_definition(
     lines: &[&str],
     start: usize,
@@ -181,6 +196,7 @@ fn parse_link_reference_definition(
     ))
 }
 
+/// Repeatedly removes quote and list prefixes for document-wide reference scanning.
 fn strip_reference_scan_container_prefixes(mut line: &str) -> &str {
     loop {
         let original = line;
@@ -198,6 +214,7 @@ fn strip_reference_scan_container_prefixes(mut line: &str) -> &str {
     }
 }
 
+/// Removes a quote marker after at most three spaces, plus one optional space.
 fn strip_reference_scan_quote_prefix(line: &str) -> Option<&str> {
     let leading_spaces = line.bytes().take_while(|b| *b == b' ').count();
     if leading_spaces > 3 {
@@ -212,6 +229,7 @@ fn strip_reference_scan_quote_prefix(line: &str) -> Option<&str> {
     Some(rest[1..].strip_prefix(' ').unwrap_or(&rest[1..]))
 }
 
+/// Removes an indented bullet or one-to-nine-digit ordered marker and one separator.
 fn strip_reference_scan_list_marker(line: &str) -> Option<&str> {
     let indent_bytes = line
         .chars()
@@ -247,6 +265,8 @@ fn strip_reference_scan_list_marker(line: &str) -> Option<&str> {
     Some(&rest[digit_len + 2..])
 }
 
+/// Recognizes a column-zero fence of at least three markers after container stripping.
+/// Backtick info strings containing another backtick are rejected.
 fn parse_reference_scan_opening_fence(line: &str) -> Option<FenceInfo> {
     let trimmed = line.trim_end();
     let ch = trimmed.chars().next()?;
@@ -261,6 +281,7 @@ fn parse_reference_scan_opening_fence(line: &str) -> Option<FenceInfo> {
     (len >= 3).then_some(FenceInfo { ch, len })
 }
 
+/// Requires the opening marker and exact run length, followed only by whitespace.
 fn is_reference_scan_closing_fence(line: &str, opener: FenceInfo) -> bool {
     let trimmed = line.trim_end();
     if !trimmed.starts_with(opener.ch) {
@@ -274,6 +295,7 @@ fn is_reference_scan_closing_fence(line: &str, opener: FenceInfo) -> bool {
     run_len == opener.len && trimmed[opener.ch.len_utf8() * run_len..].trim().is_empty()
 }
 
+/// Detects a comment or opening tag at the trimmed line start without validating HTML.
 fn parse_reference_scan_html_block_start(line: &str) -> Option<HtmlBlockStart> {
     let rest = line.trim_start().trim_end();
     if rest.starts_with("<!--") {
@@ -307,6 +329,7 @@ fn parse_reference_scan_html_block_start(line: &str) -> Option<HtmlBlockStart> {
     })
 }
 
+/// Reads a line-leading closing tag name, preserving casing for the scan-state match.
 fn parse_reference_scan_html_close_tag_name(line: &str) -> Option<String> {
     let rest = line.trim_start().trim_end();
     let tagged = rest.strip_prefix("</")?;
@@ -328,6 +351,8 @@ fn parse_reference_scan_html_close_tag_name(line: &str) -> Option<String> {
     Some(name.to_string())
 }
 
+/// Splits a nonempty target from an optional whitespace-separated double-quoted title.
+/// Other title delimiters remain part of the destination; this does not validate link safety.
 pub(crate) fn parse_link_target(inner: &str) -> Option<(String, Option<String>)> {
     if inner.is_empty() {
         return None;
@@ -350,6 +375,7 @@ pub(crate) fn parse_link_target(inner: &str) -> Option<(String, Option<String>)>
     Some((normalize_link_destination(inner), None))
 }
 
+/// Unescapes punctuation and removes angle brackets only around supported autolinks.
 fn normalize_link_destination(destination: &str) -> String {
     let destination = unescape_ascii_punctuation(destination);
     if destination.starts_with('<')
@@ -362,6 +388,7 @@ fn normalize_link_destination(destination: &str) -> String {
     }
 }
 
+/// Removes a backslash only when it precedes ASCII punctuation.
 fn unescape_ascii_punctuation(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
@@ -375,6 +402,7 @@ fn unescape_ascii_punctuation(input: &str) -> String {
     output
 }
 
+/// Detects an indented quoted or parenthesized continuation candidate, not a parsed title.
 fn is_reference_definition_title_continuation(line: &str) -> bool {
     let indent_bytes = line
         .chars()
@@ -391,6 +419,7 @@ fn is_reference_definition_title_continuation(line: &str) -> bool {
         || (trimmed.starts_with('(') && trimmed.ends_with(')'))
 }
 
+/// Finds the last unescaped double quote before a closing byte offset, after whitespace.
 fn find_open_title_quote(input: &str, close_quote: usize) -> Option<usize> {
     let bytes = input.as_bytes();
     (0..close_quote).rev().find(|&index| {
@@ -401,11 +430,13 @@ fn find_open_title_quote(input: &str, close_quote: usize) -> Option<usize> {
     })
 }
 
+/// Finds an unescaped ASCII delimiter at or after the supplied byte offset.
 fn find_unescaped_char(input: &str, start: usize, target: u8) -> Option<usize> {
     let bytes = input.as_bytes();
     (start..bytes.len()).find(|&index| bytes[index] == target && !is_escaped(input, index))
 }
 
+/// Tests whether an odd-length backslash run immediately precedes a valid byte offset.
 fn is_escaped(input: &str, index: usize) -> bool {
     if index == 0 {
         return false;

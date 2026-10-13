@@ -9,10 +9,12 @@ use gpui::*;
 
 use super::Editor;
 use crate::export::{self as document_export, ExportFormat};
+use crate::fonts::FontSettings;
 use crate::i18n::I18nManager;
 use crate::theme::{Theme, ThemeManager};
 
 impl Editor {
+    /// Suggests an export directory and filename using the document stem and format extension.
     fn export_dialog_defaults(&self, format: ExportFormat) -> (PathBuf, String) {
         let extension = format.extension();
         if let Some(path) = self.file_path.as_ref() {
@@ -34,6 +36,7 @@ impl Editor {
         )
     }
 
+    /// Uses the nonempty document stem as the export title, or `Untitled`.
     fn export_title(&self) -> String {
         self.file_path
             .as_ref()
@@ -43,27 +46,35 @@ impl Editor {
             .unwrap_or_else(|| "Untitled".to_string())
     }
 
+    /// Renders HTML as UTF-8 bytes or PDF through Chromium with the supplied font snapshot.
     fn render_export_bytes(
         format: ExportFormat,
         markdown: &str,
         theme: &Theme,
         title: &str,
         source_base_dir: Option<&Path>,
+        fonts: &FontSettings,
     ) -> anyhow::Result<Vec<u8>> {
         match format {
-            ExportFormat::Html => Ok(document_export::render_html_with_base_dir(
+            ExportFormat::Html => Ok(document_export::render_html_with_base_dir_and_fonts(
                 markdown,
                 theme,
                 title,
                 source_base_dir,
+                fonts,
             )
             .into_bytes()),
-            ExportFormat::Pdf => {
-                document_export::render_pdf(markdown, theme, title, source_base_dir)
-            }
+            ExportFormat::Pdf => document_export::render_pdf_with_fonts(
+                markdown,
+                theme,
+                title,
+                source_base_dir,
+                fonts,
+            ),
         }
     }
 
+    /// Renders first, then writes bytes with destination context on filesystem errors.
     fn write_export_bytes(
         format: ExportFormat,
         markdown: &str,
@@ -71,11 +82,14 @@ impl Editor {
         title: &str,
         path: &Path,
         source_base_dir: Option<&Path>,
+        fonts: &FontSettings,
     ) -> anyhow::Result<()> {
-        let bytes = Self::render_export_bytes(format, markdown, theme, title, source_base_dir)?;
+        let bytes =
+            Self::render_export_bytes(format, markdown, theme, title, source_base_dir, fonts)?;
         std::fs::write(path, bytes).with_context(|| format!("failed to write '{}'", path.display()))
     }
 
+    /// Synchronously exports the current text, theme, fonts, and resource base directory.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn export_document_to_path(
         &self,
@@ -87,9 +101,20 @@ impl Editor {
         let theme = cx.global::<ThemeManager>().current().clone();
         let title = self.export_title();
         let source_base_dir = self.file_path.as_ref().and_then(|path| path.parent());
-        Self::write_export_bytes(format, &markdown, &theme, &title, path, source_base_dir)
+        let fonts = FontSettings::current(cx);
+        Self::write_export_bytes(
+            format,
+            &markdown,
+            &theme,
+            &title,
+            path,
+            source_base_dir,
+            &fonts,
+        )
     }
 
+    /// Captures export inputs before prompting and renders/writes on a worker thread.
+    /// Cancellation is silent; worker, rendering, and write errors are shown in the window.
     pub(crate) fn export_document_via_prompt(
         &mut self,
         format: ExportFormat,
@@ -99,6 +124,7 @@ impl Editor {
         let markdown = self.serialized_document_text(cx);
         let theme = cx.global::<ThemeManager>().current().clone();
         let title = self.export_title();
+        let fonts = FontSettings::current(cx);
         let source_base_dir = self
             .file_path
             .as_ref()
@@ -139,6 +165,7 @@ impl Editor {
                         &title,
                         &path,
                         source_base_dir.as_deref(),
+                        &fonts,
                     )
                     .map_err(|err| err.to_string());
                     let _ = sender.send(result);
@@ -171,6 +198,7 @@ impl Editor {
     }
 }
 
+/// Presents a localized critical export error with the supplied diagnostic detail.
 fn show_export_error(window: &mut Window, cx: &mut App, detail: &str) {
     let strings = cx.global::<I18nManager>().strings().clone();
     let buttons = [strings.info_dialog_ok.as_str()];

@@ -62,6 +62,7 @@ pub(crate) enum EditMode {
 }
 
 impl EditMode {
+    /// Chooses the default editing mode for a block kind.
     fn for_kind(kind: &BlockKind) -> Self {
         if kind.is_code_block() {
             Self::CodeBlockRaw
@@ -79,10 +80,12 @@ impl EditMode {
         }
     }
 
+    /// Whether edits bypass rich inline parsing.
     fn uses_raw_text_editing(self) -> bool {
         matches!(self, Self::SourceRaw | Self::CodeBlockRaw)
     }
 
+    /// Whether touched inline Markdown syntax may be shown for editing.
     fn supports_inline_projection(self) -> bool {
         matches!(self, Self::RenderedRich)
     }
@@ -99,92 +102,154 @@ impl EventEmitter<BlockEvent> for Block {}
 /// Blocks delegate structural operations (split, merge, indent, delete) to
 /// the parent editor via `BlockEvent` emissions.
 pub struct Block {
+    /// Persistent block kind, title, and identity.
     pub record: BlockRecord,
+    /// Clean visible-text cache derived from `record.title`.
     pub(crate) render_cache: InlineRenderCache,
+    /// Highlight spans for code-block contents, when available.
     code_highlight: Option<CodeHighlightResult>,
+    /// Child block entities in document order.
     pub children: Vec<Entity<Block>>,
+    /// Focus target for the block body.
     pub focus_handle: FocusHandle,
+    /// Independent focus target for a code block's language field.
     pub(crate) code_language_focus_handle: FocusHandle,
+    /// Ordered UTF-8 selection in the code-language label.
     pub(crate) code_language_selected_range: Range<usize>,
+    /// Whether the active language selection endpoint is its start.
     pub(crate) code_language_selection_reversed: bool,
+    /// UTF-8 IME composition range in the code-language label.
     pub(crate) code_language_marked_range: Option<Range<usize>>,
+    /// Last shaped line used to hit-test the language label.
     pub(crate) code_language_last_layout: Option<ShapedLine>,
+    /// Last painted bounds of the language label.
     pub(crate) code_language_last_bounds: Option<Bounds<Pixels>>,
+    /// Whether a pointer drag is selecting language text.
     pub(crate) code_language_is_selecting: bool,
+    /// Ordered UTF-8 selection in the current display text.
     pub selected_range: Range<usize>,
+    /// Whether the active body selection endpoint is its start.
     pub selection_reversed: bool,
+    /// Editor-owned selection spanning multiple blocks, when present.
     pub(crate) editor_selection_range: Option<Range<usize>>,
+    /// UTF-8 IME composition range in the current display text.
     pub marked_range: Option<Range<usize>>,
+    /// Last wrapped body layout, used for hit testing and caret geometry.
     pub last_layout: Option<Vec<WrappedLine>>,
+    /// Last painted body text bounds.
     pub last_bounds: Option<Bounds<Pixels>>,
+    /// Line height used with `last_layout`.
     pub last_line_height: Pixels,
+    /// Structural indentation used when rendering this block.
     pub render_depth: usize,
+    /// Nesting depth of the surrounding quote group.
     pub quote_depth: usize,
+    /// Identity of the quote group used for runtime grouping.
     pub(crate) quote_group_anchor: Option<uuid::Uuid>,
+    /// Quote depth currently visible in the rendered hierarchy.
     pub(crate) visible_quote_depth: usize,
+    /// Anchor of the visible quote group.
     pub(crate) visible_quote_group_anchor: Option<uuid::Uuid>,
+    /// Nesting depth of the surrounding callout.
     pub(crate) callout_depth: usize,
+    /// Identity of the surrounding callout group.
     pub(crate) callout_anchor: Option<uuid::Uuid>,
+    /// Presentation variant of the surrounding callout.
     pub(crate) callout_variant: Option<CalloutVariant>,
+    /// Identity of the containing footnote definition.
     pub(crate) footnote_anchor: Option<uuid::Uuid>,
+    /// Whether this block is directly inside a list item.
     pub(crate) parent_is_list_item: bool,
+    /// Number displayed for a numbered list item.
     pub list_ordinal: Option<usize>,
+    /// Whether a pointer drag is selecting body text.
     pub is_selecting: bool,
+    /// Last action that reset the cursor blink phase.
     pub cursor_blink_epoch: Instant,
+    /// Preferred horizontal position for vertical cursor movement.
     pub vertical_motion_x: Option<Pixels>,
+    /// Running cursor repaint loop, cancelled when dropped.
     pub(super) cursor_blink_task: Option<Task<()>>,
     /// Cached projection used to show editable inline delimiters for the
     /// currently touched inline span(s).
     pub(crate) projection: Option<ExpandedInlineProjection>,
-    /// Inputs that produced the current `projection`. When the next
-    /// `sync_inline_projection_for_focus` computes the same inputs, the
-    /// rebuild is skipped — saves a full O(fragments + text) walk per
-    /// render frame (cursor blink + every arrow keypress).
+    /// Focus and clean ranges that produced the projection, used to skip
+    /// unchanged rebuilds.
     projection_cache_key: Option<(bool, Range<usize>, Option<Range<usize>>)>,
-    /// Display text held as a SharedString so renders can clone an Arc
-    /// instead of re-allocating per frame. Refreshed in `sync_render_cache`,
-    /// `rebuild_inline_projection`, and `clear_inline_projection`.
+    /// Shared copy of the current display text refreshed with the caches.
     cached_display_text: SharedString,
+    /// Which side of a projected delimiter owns a collapsed caret.
     collapsed_caret_affinity: CollapsedCaretAffinity,
-    /// When true, block-level shortcuts and inline formatting are
-    /// suppressed; the block stores raw text for source-mode editing.
+    /// Active rich, source-raw, or code-raw editing semantics.
     pub(crate) edit_mode: EditMode,
+    /// Whether source editing displays line numbers.
     show_source_line_numbers: bool,
+    /// Parsed table model for table blocks.
     pub(crate) table_runtime: Option<TableRuntime>,
+    /// Cell coordinates when this block edits a table cell.
     pub(crate) table_cell_position: Option<TableCellPosition>,
+    /// Alignment of the current table cell.
     pub(crate) table_cell_alignment: Option<TableColumnAlignment>,
+    /// Hovered table axis insertion marker.
     pub(crate) table_axis_preview: Option<TableAxisMarker>,
+    /// Selected table axis marker.
     pub(crate) table_axis_selection: Option<TableAxisMarker>,
+    /// Highlight state for table row or column controls.
     pub(crate) table_axis_highlight: TableAxisHighlight,
+    /// Whether the pointer is over the append-column edge.
     pub(crate) table_append_column_edge_hovered: bool,
+    /// Whether the pointer is over the append-column control.
     pub(crate) table_append_column_hovered: bool,
+    /// Whether the pointer is inside the append-column activation zone.
     pub(crate) table_append_column_zone_hovered: bool,
+    /// Whether the append-column button itself is hovered.
     pub(crate) table_append_column_button_hovered: bool,
+    /// Deferred task that closes the append-column control.
     pub(crate) table_append_column_close_task: Option<Task<()>>,
+    /// Whether the pointer is over the append-row edge.
     pub(crate) table_append_row_edge_hovered: bool,
+    /// Whether the pointer is over the append-row control.
     pub(crate) table_append_row_hovered: bool,
+    /// Whether the pointer is inside the append-row activation zone.
     pub(crate) table_append_row_zone_hovered: bool,
+    /// Whether the append-row button itself is hovered.
     pub(crate) table_append_row_button_hovered: bool,
+    /// Deferred task that closes the append-row control.
     pub(crate) table_append_row_close_task: Option<Task<()>>,
+    /// Resolved standalone image presentation, when applicable.
     image_runtime: Option<ImageRuntime>,
+    /// Whether the image editor is currently expanded.
     image_edit_expanded: bool,
+    /// Pending request to expand the image editor.
     image_expand_requested: bool,
+    /// Whether an HTML details block is open.
     pub(crate) html_details_open: bool,
+    /// Base directory used to resolve relative image sources.
     image_base_dir: Option<PathBuf>,
+    /// Image reference definitions available to this block.
     image_reference_definitions: Arc<ImageReferenceDefinitions>,
+    /// Link reference definitions available during inline parsing.
     link_reference_definitions: Arc<LinkReferenceDefinitions>,
+    /// Resolved footnote occurrences and numbering.
     footnote_registry: Arc<FootnoteRegistry>,
+    /// Whether an empty paragraph separates numbered-list groups.
     pub(crate) list_group_separator_candidate: bool,
+    /// Pending editor request to restart numbered-list numbering.
     numbered_list_restart_requested: bool,
+    /// Pending editor request to reparse quote structure.
     quote_reparse_requested: bool,
 }
 
 /// Cached standalone image presentation state for a block.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ImageRuntime {
+    /// Image alt text.
     pub(crate) alt: String,
+    /// Source spelling before resolution.
     pub(crate) src: String,
+    /// Optional image title.
     pub(crate) title: Option<String>,
+    /// Resolved local or remote image source.
     pub(crate) resolved_source: ImageResolvedSource,
 }
 
@@ -201,6 +266,7 @@ pub(crate) enum CollapsedCaretAffinity {
 }
 
 impl Block {
+    /// Creates runtime state and caches for a persistent block record.
     pub fn with_record(cx: &mut Context<Self>, record: BlockRecord) -> Self {
         let edit_mode = EditMode::for_kind(&record.kind);
         let render_cache = record.title.render_cache();
@@ -278,30 +344,36 @@ impl Block {
         block
     }
 
+    /// Returns the block's persistent kind.
     pub fn kind(&self) -> BlockKind {
         self.record.kind.clone()
     }
 
+    /// Whether this block is editing source Markdown without rich parsing.
     pub(crate) fn is_source_raw_mode(&self) -> bool {
         self.edit_mode == EditMode::SourceRaw
     }
 
+    /// Whether line numbers are enabled for source editing.
     pub(crate) fn show_source_line_numbers(&self) -> bool {
         self.show_source_line_numbers
     }
 
+    /// Takes and clears the pending quote-structure reparse request.
     pub(crate) fn take_quote_reparse_requested(&mut self) -> bool {
         let requested = self.quote_reparse_requested;
         self.quote_reparse_requested = false;
         requested
     }
 
+    /// Takes and clears the pending numbered-list restart request.
     pub(crate) fn take_numbered_list_restart_requested(&mut self) -> bool {
         let requested = self.numbered_list_restart_requested;
         self.numbered_list_restart_requested = false;
         requested
     }
 
+    /// Updates image, link, and footnote context, refreshing affected caches.
     pub(crate) fn set_runtime_context(
         &mut self,
         base_dir: Option<PathBuf>,
@@ -320,21 +392,25 @@ impl Block {
         self.sync_image_runtime();
     }
 
+    /// Whether text edits bypass rich inline parsing in the current mode.
     pub(crate) fn uses_raw_text_editing(&self) -> bool {
         self.edit_mode.uses_raw_text_editing()
     }
 
+    /// Switches to raw source editing without line numbers.
     pub(crate) fn set_source_raw_mode(&mut self) {
         self.clear_inline_projection();
         self.edit_mode = EditMode::SourceRaw;
         self.show_source_line_numbers = false;
     }
 
+    /// Switches to raw source editing with line numbers.
     pub(crate) fn set_source_document_mode(&mut self) {
         self.set_source_raw_mode();
         self.show_source_line_numbers = true;
     }
 
+    /// Reconciles editing mode with block kind unless source mode is explicit.
     pub(crate) fn sync_edit_mode_from_kind(&mut self) {
         if self.table_cell_position.is_some() {
             self.edit_mode = EditMode::RenderedRich;
@@ -350,6 +426,7 @@ impl Block {
         }
     }
 
+    /// Returns current visible text, including temporary projected delimiters.
     pub fn display_text(&self) -> &str {
         self.current_cache().visible_text()
     }
@@ -362,6 +439,7 @@ impl Block {
         self.cached_display_text.clone()
     }
 
+    /// Refreshes the shared display copy only when visible text changed.
     fn refresh_cached_display_text(&mut self) {
         let current = self.current_cache().visible_text();
         if self.cached_display_text.as_ref() != current {
@@ -369,6 +447,7 @@ impl Block {
         }
     }
 
+    /// Parses Markdown using the block's current link references.
     pub(crate) fn inline_tree_from_markdown_with_context(&self, markdown: &str) -> InlineTextTree {
         InlineTextTree::from_markdown_with_link_references(
             markdown,
@@ -376,16 +455,19 @@ impl Block {
         )
     }
 
+    /// Returns styled spans in the current display cache.
     pub fn inline_spans(&self) -> &[InlineSpan] {
         self.current_cache().spans()
     }
 
     #[allow(dead_code)]
+    /// Returns the inline style at a current-display byte offset.
     pub fn inline_style_at(&self, offset: usize) -> InlineStyle {
         self.current_cache().style_at(offset)
     }
 
     #[allow(dead_code)]
+    /// Returns HTML styling at a current-display byte offset, if present.
     pub(crate) fn inline_html_style_at(
         &self,
         offset: usize,
@@ -394,41 +476,49 @@ impl Block {
     }
 
     #[allow(dead_code)]
+    /// Returns a link target at a current-display byte offset, if present.
     pub(crate) fn inline_link_at(&self, offset: usize) -> Option<&str> {
         self.current_cache().link_at(offset)
     }
 
     #[allow(dead_code)]
+    /// Returns the link hit at a current-display byte offset, if present.
     pub(crate) fn inline_link_hit_at(&self, offset: usize) -> Option<&InlineLinkHit> {
         self.current_cache().link_hit_at(offset)
     }
 
     #[allow(dead_code)]
+    /// Returns the footnote hit at a current-display byte offset, if present.
     pub(crate) fn inline_footnote_hit_at(&self, offset: usize) -> Option<&InlineFootnoteHit> {
         self.current_cache().footnote_hit_at(offset)
     }
 
     #[allow(dead_code)]
+    /// Returns inline math at a current-display byte offset, if present.
     pub(crate) fn inline_math_at(&self, offset: usize) -> Option<&crate::components::InlineMath> {
         self.current_cache().inline_math_at(offset)
     }
 
+    /// Whether the clean title mixes text with separately rendered inline content.
     pub(crate) fn has_mixed_inline_visuals(&self) -> bool {
         self.record.title.has_mixed_inline_visuals()
     }
 
+    /// Returns a footnote definition's visible identifier, if applicable.
     pub(crate) fn footnote_definition_id(&self) -> Option<String> {
         self.kind()
             .is_footnote_definition()
             .then(|| self.record.title.visible_text())
     }
 
+    /// Returns the registry ordinal for this footnote definition.
     pub(crate) fn footnote_definition_ordinal(&self) -> Option<usize> {
         self.footnote_definition_id()
             .as_deref()
             .and_then(|id| self.footnote_registry.ordinal(id))
     }
 
+    /// Whether this footnote definition has a resolved first reference.
     pub(crate) fn footnote_definition_has_backref(&self) -> bool {
         self.footnote_definition_id().as_deref().is_some_and(|id| {
             self.footnote_registry
@@ -438,6 +528,7 @@ impl Block {
         })
     }
 
+    /// Finds a footnote occurrence in current-display UTF-8 coordinates.
     pub(crate) fn current_range_for_footnote_occurrence(
         &self,
         occurrence_index: usize,
@@ -457,40 +548,49 @@ impl Block {
         None
     }
 
+    /// Whether the currently displayed text is empty.
     pub fn is_empty(&self) -> bool {
         self.display_text().is_empty()
     }
 
+    /// Whether this non-list block sits directly inside a list item.
     pub fn is_direct_list_child(&self) -> bool {
         self.parent_is_list_item && !self.kind().is_list_item()
     }
 
+    /// Whether this list item is nested beneath another list item.
     pub fn is_nested_list_item(&self) -> bool {
         self.parent_is_list_item && self.kind().is_list_item()
     }
 
+    /// Whether list nesting commands apply to this block.
     pub fn can_adjust_list_nesting(&self) -> bool {
         (self.kind().is_list_item() || self.parent_is_list_item) && !self.kind().is_code_block()
     }
 
+    /// Whether this block can be outdented from its list context.
     pub fn can_outdent_list_nesting(&self) -> bool {
         self.kind().is_list_item() || self.parent_is_list_item
     }
 
+    /// Returns the current display text length in UTF-8 bytes.
     pub(crate) fn visible_len(&self) -> usize {
         self.current_cache().visible_len()
     }
 
+    /// Splits the clean title at a current-display UTF-8 offset.
     pub(crate) fn split_title(&self, offset: usize) -> (InlineTextTree, InlineTextTree) {
         self.record
             .title
             .split_at(self.current_to_clean_offset(offset))
     }
 
+    /// Forgets the preferred x position after nonvertical movement.
     fn clear_vertical_motion(&mut self) {
         self.vertical_motion_x = None;
     }
 
+    /// Rebuilds clean caches while preserving selection, IME mark, and projection.
     pub(crate) fn sync_render_cache(&mut self) {
         let clean_selected = self.current_to_clean_range(self.selected_range.clone());
         let clean_marked = self
@@ -533,6 +633,7 @@ impl Block {
         self.refresh_cached_display_text();
     }
 
+    /// Rebinds link references and restores selection through Markdown offsets.
     fn sync_link_reference_definitions(
         &mut self,
         link_reference_definitions: Arc<LinkReferenceDefinitions>,
@@ -595,6 +696,7 @@ impl Block {
         }
     }
 
+    /// Rebinds footnote occurrences and restores selection through Markdown offsets.
     fn sync_footnote_registry(&mut self, footnote_registry: Arc<FootnoteRegistry>) {
         if self.footnote_registry == footnote_registry {
             return;
@@ -662,10 +764,12 @@ impl Block {
         }
     }
 
+    /// Whether source-preserving links require edits in serialized Markdown.
     fn should_use_markdown_space_link_edit(&self) -> bool {
         !self.uses_raw_text_editing() && self.record.title.has_source_preserving_links()
     }
 
+    /// Applies a visible edit through serialized Markdown to preserve link syntax.
     fn apply_markdown_space_title_edit(
         &mut self,
         visible_range: Range<usize>,
@@ -735,6 +839,7 @@ impl Block {
         );
     }
 
+    /// Returns the projected display cache, or the clean render cache.
     pub(crate) fn current_cache(&self) -> &InlineRenderCache {
         self.projection
             .as_ref()
@@ -742,6 +847,11 @@ impl Block {
             .unwrap_or(&self.render_cache)
     }
 
+    /// Rebuilds touched inline syntax while focused, preserving link selections.
+    ///
+    /// Reuses the projection when clean selection and mark are unchanged. A
+    /// projected link selection keeps its display-relative byte offsets and is
+    /// normalized against the rebuilt display text.
     pub(crate) fn sync_inline_projection_for_focus(&mut self, focused: bool) {
         let supports_projection = self.edit_mode.supports_inline_projection();
         if !focused || !supports_projection {
@@ -799,7 +909,8 @@ impl Block {
                     .display_relative_range
                     .end
                     .min(run.display_range.len());
-            self.selected_range = start..end;
+            self.selected_range =
+                crate::text_offsets::normalize_utf8_range(self.display_text(), start..end);
             self.selection_reversed = snapshot.selection_reversed;
             self.collapsed_caret_affinity = CollapsedCaretAffinity::Default;
         } else if clean_selected.is_empty() {
@@ -820,6 +931,7 @@ impl Block {
         self.marked_range = clean_marked.map(|range| self.clean_to_current_range(range));
     }
 
+    /// Returns to clean text while retaining the selection and IME mark.
     pub(crate) fn clear_inline_projection(&mut self) {
         if self.projection.is_none() {
             self.projection_cache_key = None;
@@ -839,6 +951,7 @@ impl Block {
         self.refresh_cached_display_text();
     }
 
+    /// Recomputes the temporary display and cache key from clean UTF-8 ranges.
     fn rebuild_inline_projection(
         &mut self,
         clean_selected: Range<usize>,
@@ -857,6 +970,7 @@ impl Block {
         self.refresh_cached_display_text();
     }
 
+    /// Returns projected display segments, or an empty slice when collapsed.
     fn projection_segments(&self) -> &[ExpandedInlineSegment] {
         self.projection
             .as_ref()
@@ -864,6 +978,7 @@ impl Block {
             .unwrap_or(&[])
     }
 
+    /// Finds a projected link enclosing a current-display byte range.
     fn projected_link_run_fully_covering_range(
         &self,
         range: &Range<usize>,
@@ -873,6 +988,7 @@ impl Block {
             .and_then(|projection| projection.link_run_fully_covering_range(range))
     }
 
+    /// Determines which side of a projected delimiter owns this display caret.
     fn collapsed_caret_affinity_for_display_offset(&self, offset: usize) -> CollapsedCaretAffinity {
         self.projection
             .as_ref()
@@ -890,6 +1006,7 @@ impl Block {
         )
     }
 
+    /// Reads caret affinity from projection geometry or the stored fallback.
     fn current_collapsed_caret_affinity(&self) -> CollapsedCaretAffinity {
         if !self.selected_range.is_empty() {
             return CollapsedCaretAffinity::Default;
@@ -903,6 +1020,7 @@ impl Block {
             .unwrap_or(self.collapsed_caret_affinity)
     }
 
+    /// Refreshes stored affinity after a selection change.
     fn sync_collapsed_caret_affinity(&mut self) {
         self.collapsed_caret_affinity = if self.selected_range.is_empty() {
             self.projection
@@ -916,13 +1034,14 @@ impl Block {
         };
     }
 
+    /// Sets a scalar-aligned display caret and its boundary affinity.
     pub(crate) fn assign_collapsed_selection_offset(
         &mut self,
         offset: usize,
         affinity: CollapsedCaretAffinity,
         preferred_x: Option<Pixels>,
     ) {
-        let clamped_offset = offset.min(self.visible_len());
+        let clamped_offset = crate::text_offsets::floor_char_boundary(self.display_text(), offset);
         self.selected_range = clamped_offset..clamped_offset;
         self.selection_reversed = false;
         self.vertical_motion_x = preferred_x;
@@ -930,6 +1049,7 @@ impl Block {
         self.sync_collapsed_caret_affinity();
     }
 
+    /// Maps a clean UTF-8 caret to the default current-display position.
     fn clean_to_current_cursor_offset(&self, clean: usize) -> usize {
         let Some(projection) = &self.projection else {
             return clean;
@@ -941,6 +1061,7 @@ impl Block {
             .unwrap_or(clean)
     }
 
+    /// Maps a clean caret to display space, honoring delimiter-side affinity.
     fn clean_to_current_cursor_offset_with_affinity(
         &self,
         clean: usize,
@@ -954,33 +1075,53 @@ impl Block {
             .unwrap_or_else(|| self.clean_to_current_cursor_offset(clean))
     }
 
+    /// Maps a clean range start to current-display byte coordinates.
     fn clean_to_current_range_start(&self, clean: usize) -> usize {
         self.clean_to_current_cursor_offset(clean)
     }
 
+    /// Maps a clean range end to current-display byte coordinates.
     fn clean_to_current_range_end(&self, clean: usize) -> usize {
         self.clean_to_current_cursor_offset(clean)
     }
 
+    /// Maps and scalar-normalizes a clean visible-text range into display space.
     pub(crate) fn clean_to_current_range(&self, range: Range<usize>) -> Range<usize> {
+        let range =
+            crate::text_offsets::normalize_utf8_range(self.render_cache.visible_text(), range);
         if range.is_empty() {
             let offset = self.clean_to_current_cursor_offset(range.start);
+            let offset = crate::text_offsets::floor_char_boundary(self.display_text(), offset);
             offset..offset
         } else {
-            self.clean_to_current_range_start(range.start)
-                ..self.clean_to_current_range_end(range.end)
+            crate::text_offsets::normalize_utf8_range(
+                self.display_text(),
+                self.clean_to_current_range_start(range.start)
+                    ..self.clean_to_current_range_end(range.end),
+            )
         }
     }
 
+    /// Maps a display range to scalar-aligned clean visible-text bytes.
     pub(crate) fn current_to_clean_range(&self, range: Range<usize>) -> Range<usize> {
-        self.current_to_clean_offset(range.start)..self.current_to_clean_offset(range.end)
+        let range = crate::text_offsets::normalize_utf8_range(self.display_text(), range);
+        crate::text_offsets::normalize_utf8_range(
+            self.render_cache.visible_text(),
+            self.current_to_clean_offset(range.start)..self.current_to_clean_offset(range.end),
+        )
     }
 
+    /// Maps a display byte offset to a scalar-aligned clean byte offset.
     pub(crate) fn current_to_clean_offset(&self, offset: usize) -> usize {
-        self.unexpand_offset(offset)
+        let offset = crate::text_offsets::floor_char_boundary(self.display_text(), offset);
+        crate::text_offsets::floor_char_boundary(
+            self.render_cache.visible_text(),
+            self.unexpand_offset(offset),
+        )
     }
 
     #[allow(dead_code)]
+    /// Snaps projected delimiter pointer hits to editable boundaries.
     pub(crate) fn pointer_target_offset(&self, offset: usize) -> usize {
         self.projection
             .as_ref()
@@ -988,6 +1129,7 @@ impl Block {
             .unwrap_or(offset)
     }
 
+    /// Returns the left-arrow jump across a projected delimiter, if any.
     pub(crate) fn projected_move_left_target(
         &self,
         offset: usize,
@@ -997,6 +1139,7 @@ impl Block {
             .and_then(|projection| projection.move_left_target(offset))
     }
 
+    /// Returns the right-arrow jump across a projected delimiter, if any.
     pub(crate) fn projected_move_right_target(
         &self,
         offset: usize,
@@ -1006,13 +1149,18 @@ impl Block {
             .and_then(|projection| projection.move_right_target(offset))
     }
 
+    /// Returns the body selection in clean visible-text byte coordinates.
     pub(crate) fn selection_clean_range(&self) -> Range<usize> {
         self.current_to_clean_range(self.selected_range.clone())
     }
 
+    /// Maps a display byte range into serialized Markdown byte coordinates.
+    ///
+    /// Expanded links and footnotes use their projected source runs; raw edit
+    /// modes already share the Markdown and display coordinate space.
     pub(crate) fn current_range_to_markdown_range(&self, range: Range<usize>) -> Range<usize> {
         if self.uses_raw_text_editing() || self.kind().is_code_block() {
-            return range.start.min(self.visible_len())..range.end.min(self.visible_len());
+            return crate::text_offsets::normalize_utf8_range(self.display_text(), range);
         }
 
         if let Some(link_run) = self.projected_link_run_fully_covering_range(&range) {
@@ -1052,7 +1200,8 @@ impl Block {
             let mapped_end = (raw_len * local_end) / footnote_run.display_range.len().max(1);
             let map = self.record.title.markdown_offset_map();
             let run_markdown_start = map.visible_to_markdown_offset(footnote_run.clean_range.start);
-            return run_markdown_start + mapped_start..run_markdown_start + mapped_end;
+            let mapped = crate::text_offsets::normalize_utf8_range(&raw, mapped_start..mapped_end);
+            return run_markdown_start + mapped.start..run_markdown_start + mapped.end;
         }
 
         let clean_range = self.current_to_clean_range(range);
@@ -1062,10 +1211,10 @@ impl Block {
             .visible_to_markdown_range(clean_range)
     }
 
+    /// Maps a Markdown byte range into current display coordinates.
     pub(crate) fn markdown_range_to_current_range(&self, range: Range<usize>) -> Range<usize> {
         if self.uses_raw_text_editing() || self.kind().is_code_block() {
-            let len = self.visible_len();
-            return range.start.min(len)..range.end.min(len);
+            return crate::text_offsets::normalize_utf8_range(self.display_text(), range);
         }
 
         let clean_range = self
@@ -1076,59 +1225,37 @@ impl Block {
         self.clean_to_current_range(clean_range)
     }
 
+    /// Maps a Markdown byte offset to a current-display caret position.
     pub(crate) fn markdown_offset_to_current_offset(&self, offset: usize) -> usize {
         self.markdown_range_to_current_range(offset..offset).start
     }
 
+    /// Asks the editor to capture undo state before a block edit.
     pub(crate) fn prepare_undo_capture(&self, kind: UndoCaptureKind, cx: &mut Context<Self>) {
         cx.emit(BlockEvent::PrepareUndo { kind });
     }
 
-    pub(super) fn utf16_to_utf8_in(text: &str, offset: usize) -> usize {
-        let mut utf8_offset = 0;
-        let mut utf16_count = 0;
-
-        for ch in text.chars() {
-            if utf16_count >= offset {
-                break;
-            }
-            utf16_count += ch.len_utf16();
-            utf8_offset += ch.len_utf8();
-        }
-
-        utf8_offset
-    }
-
+    /// Converts a UTF-8 byte position to UTF-16 after flooring to a scalar boundary.
     pub(super) fn utf8_to_utf16_in(text: &str, offset: usize) -> usize {
-        let mut utf16_offset = 0;
-        let mut utf8_count = 0;
-
-        for ch in text.chars() {
-            if utf8_count >= offset {
-                break;
-            }
-            utf8_count += ch.len_utf8();
-            utf16_offset += ch.len_utf16();
-        }
-
-        utf16_offset
+        crate::text_offsets::utf8_to_utf16(text, offset)
     }
 
+    /// Converts an IME range to UTF-8 bytes without splitting Unicode scalars.
     pub(super) fn utf16_range_to_utf8_in(text: &str, range_utf16: &Range<usize>) -> Range<usize> {
-        Self::utf16_to_utf8_in(text, range_utf16.start)
-            ..Self::utf16_to_utf8_in(text, range_utf16.end)
+        crate::text_offsets::utf16_range_to_utf8(text, range_utf16)
     }
 
+    /// Converts an internal byte range to an ordered UTF-16 range.
     pub(super) fn utf8_range_to_utf16_in(text: &str, range: &Range<usize>) -> Range<usize> {
-        Self::utf8_to_utf16_in(text, range.start)..Self::utf8_to_utf16_in(text, range.end)
+        crate::text_offsets::utf8_range_to_utf16(text, range)
     }
 
     /// Detect Markdown shortcut prefixes in the edited title and convert the
     /// block's kind accordingly (e.g. `"- " -> BulletedListItem`).
     ///
-    /// Only triggers when the current kind is [`BlockKind::Paragraph`].
-    /// Returns the potentially updated kind, the title with prefix stripped,
-    /// the new cursor offset, and the number of prefix characters removed.
+    /// Applies general shortcuts to paragraphs and task-list prefixes to
+    /// bulleted items, but never to table cells or raw text. Returns the kind,
+    /// title, cursor, and removed prefix length in UTF-8 bytes.
     fn normalize_after_title_edit(
         &self,
         mut next_title: InlineTextTree,
@@ -1169,6 +1296,7 @@ impl Block {
         (self.kind(), next_title, cursor, 0)
     }
 
+    /// Whether a quote line begins syntax requiring a structural reparse.
     fn quote_line_starts_block_syntax(line: &str) -> bool {
         let trimmed_end = line.trim_end();
         if trimmed_end.is_empty() {
@@ -1187,16 +1315,19 @@ impl Block {
             || BlockKind::parse_atx_heading_line(trimmed_end).is_some()
     }
 
+    /// Checks lines after the first for block syntax introduced inside a quote.
     fn multiline_quote_edit_requires_reparse(text: &str) -> bool {
         text.split('\n')
             .skip(1)
             .any(Self::quote_line_starts_block_syntax)
     }
 
+    /// Shifts a UTF-8 range left by a consumed shortcut prefix.
     fn adjust_range_for_shortcut(range: &Range<usize>, removed_prefix_len: usize) -> Range<usize> {
         range.start.saturating_sub(removed_prefix_len)..range.end.saturating_sub(removed_prefix_len)
     }
 
+    /// Collects styles whose visible delimiters intersect a replacement range.
     fn projected_styles_touching_display_range(
         &self,
         display_range: &Range<usize>,
@@ -1228,6 +1359,7 @@ impl Block {
         targets
     }
 
+    /// Counts clean visible-text bytes before a source fragment.
     fn clean_offset_before_fragment_index(fragments: &[InlineFragment], index: usize) -> usize {
         fragments
             .iter()
@@ -1236,6 +1368,7 @@ impl Block {
             .sum()
     }
 
+    /// Whether every replacement fragment belongs to the same link.
     fn replacement_is_pure_link_run(fragments: &[InlineFragment]) -> bool {
         let Some(first_link) = fragments
             .first()
@@ -1249,6 +1382,10 @@ impl Block {
             .all(|fragment| fragment.link.as_ref() == Some(first_link))
     }
 
+    /// Edits an expanded inline link while preserving its source syntax.
+    ///
+    /// A replacement that remains one link keeps the projected selection;
+    /// other replacements fall back to the clean title-edit path.
     fn apply_link_projection_edit(
         &mut self,
         link_run: &ExpandedLinkRun,
@@ -1314,10 +1451,11 @@ impl Block {
                     + local_selected
                         .end
                         .min(projected_link_run.display_range.len());
-                self.selected_range = start..end;
+                self.selected_range =
+                    crate::text_offsets::normalize_utf8_range(self.display_text(), start..end);
                 self.selection_reversed = false;
                 self.marked_range = if mark_inserted_text && !new_text.is_empty() {
-                    Some(start..end)
+                    Some(self.selected_range.clone())
                 } else {
                     None
                 };
@@ -1364,6 +1502,10 @@ impl Block {
         );
     }
 
+    /// Chooses rich-text attributes for insertion at a display byte offset.
+    ///
+    /// Delimiters use their adjacent span inside the style and plain attributes
+    /// just outside it; link targets also use plain attributes.
     fn insertion_attributes_for_current_offset(
         &self,
         current_offset: usize,
@@ -1452,6 +1594,7 @@ impl Block {
             .attributes_for_insertion_at(self.current_to_clean_offset(current_offset))
     }
 
+    /// Copies insertion style, link, and footnote metadata from a fragment.
     fn attributes_for_fragment(fragment: &InlineFragment) -> InlineInsertionAttributes {
         InlineInsertionAttributes {
             style: fragment.style,
@@ -1462,6 +1605,7 @@ impl Block {
         }
     }
 
+    /// Chooses insertion attributes for a display-space replacement.
     fn replacement_attributes_for_visible_range(
         &self,
         visible_range: &Range<usize>,
@@ -1484,6 +1628,7 @@ impl Block {
             .unwrap_or_default()
     }
 
+    /// Inherits attributes only from a single containing styled display span.
     fn projected_replacement_attributes_for_visible_range(
         &self,
         visible_range: &Range<usize>,
@@ -1503,6 +1648,7 @@ impl Block {
         })
     }
 
+    /// Inherits attributes only from one fragment containing a clean range.
     fn fragment_attributes_for_clean_range(
         &self,
         clean_range: Range<usize>,
@@ -1524,6 +1670,7 @@ impl Block {
         None
     }
 
+    /// Whether the collapsed caret would insert inline-code text.
     pub(super) fn collapsed_caret_inherits_inline_code_style(&self) -> bool {
         self.selected_range.is_empty()
             && !self.uses_raw_text_editing()
@@ -1615,14 +1762,12 @@ impl Block {
         cx.notify();
     }
 
-    /// Replace text in visible coordinates: splice `new_text` into the title
-    /// at `visible_range`, re-parse inline markers, and update cursor state.
-    /// When `mark_inserted_text` is true the inserted text becomes the IME
-    /// marked range.
+    /// Replaces a current-display UTF-8 range and updates selection and IME state.
     ///
-    /// When the block is in editing-expansion mode (code spans show `` ` ``
-    /// delimiters), the `visible_range` is first mapped back to the original
-    /// tree's offset space.
+    /// `selected_range_relative` is in UTF-8 bytes of `new_text`; a nonempty
+    /// insertion is marked when `mark_inserted_text` is true. Rich edits map
+    /// projected delimiters to clean text or serialized Markdown as needed to
+    /// preserve inline links and styles; raw modes edit literal text.
     pub(crate) fn replace_text_in_visible_range(
         &mut self,
         visible_range: Range<usize>,
@@ -1634,6 +1779,11 @@ impl Block {
         if self.kind().is_separator() && !self.uses_raw_text_editing() {
             return;
         }
+
+        let visible_range =
+            crate::text_offsets::normalize_utf8_range(self.display_text(), visible_range);
+        let selected_range_relative = selected_range_relative
+            .map(|range| crate::text_offsets::normalize_utf8_range(new_text, range));
 
         let inserted_attributes = self.replacement_attributes_for_visible_range(&visible_range);
 
@@ -1758,6 +1908,7 @@ impl Block {
         );
     }
 
+    /// Refreshes runtime caches and emits a block change event.
     pub(super) fn mark_changed(&mut self, cx: &mut Context<Self>) {
         self.sync_edit_mode_from_kind();
         self.sync_render_cache();
@@ -1767,6 +1918,7 @@ impl Block {
         cx.notify();
     }
 
+    /// Converts this block to a paragraph with an undo boundary.
     pub(crate) fn convert_to_paragraph(&mut self, cx: &mut Context<Self>) {
         self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
         self.record.kind = BlockKind::Paragraph;
@@ -1775,6 +1927,7 @@ impl Block {
         self.mark_changed(cx);
     }
 
+    /// Converts this block to a separator with undo and change events.
     pub(crate) fn convert_to_separator(&mut self, cx: &mut Context<Self>) {
         self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
         self.make_separator();
@@ -1799,6 +1952,7 @@ impl Block {
         self.clear_vertical_motion();
     }
 
+    /// Replaces this block with an empty code block using the given language.
     pub(crate) fn enter_code_block(
         &mut self,
         language: Option<SharedString>,
@@ -1876,6 +2030,7 @@ impl Block {
         );
     }
 
+    /// Returns the laid-out hard line containing the display caret.
     fn current_line_layout_and_offset(&self) -> Option<(&WrappedLine, usize)> {
         let lines = self.last_layout.as_ref()?;
         let text = self.display_text();
@@ -1885,6 +2040,7 @@ impl Block {
         Some((lines.get(line_idx)?, offset_in_line))
     }
 
+    /// Returns the stored or measured x position for vertical caret movement.
     pub(super) fn vertical_anchor_x(&self) -> Pixels {
         self.vertical_motion_x
             .or_else(|| {
@@ -1968,9 +2124,8 @@ impl Block {
     }
 
     /// Compute the character offset where the cursor should land when focus
-    /// enters this block from above or below.  Uses the stored vertical
-    /// motion anchor so cursor horizontal position is preserved across
-    /// different-height blocks.
+    /// enters this block from above or below. Uses `preferred_x` when supplied
+    /// so the horizontal position carries across different-height blocks.
     pub fn entry_offset_for_vertical_focus(
         &self,
         prefer_last_line: bool,
@@ -2004,6 +2159,7 @@ impl Block {
         ranges[target_line_idx].start + offset_in_line
     }
 
+    /// Collapses the display selection and retains an optional vertical x anchor.
     pub fn move_to_with_preferred_x(
         &mut self,
         offset: usize,
@@ -2019,12 +2175,9 @@ impl Block {
         cx.notify();
     }
 
-    /// Starts the cursor blink loop: a repeating background timer every 33ms
-    /// that calls `cx.notify()` to repaint the cursor — but only while the
-    /// cursor opacity is actually animating. During the first 0.5 s after
-    /// each `cursor_blink_epoch` reset (which arrow keys / typing trigger),
-    /// opacity is pinned to 1.0, so a repaint would just re-do the full
-    /// projection rebuild for no visible change.
+    /// Starts a 33 ms cursor repaint loop while blink opacity is animating.
+    /// During the first 0.5 s after an epoch reset, opacity stays at 1.0 and
+    /// the timer skips unnecessary repaints.
     ///
     /// The blink task is automatically cancelled when the block loses focus
     /// (the task handle is dropped in [`Block::render`]).
@@ -2049,8 +2202,7 @@ impl Block {
         ));
     }
 
-    /// Cosine-based smooth blink: fully opaque for 0.5s, then oscillates
-    /// with a period of ~1s (33ms x 30 ticks ~= 1s).
+    /// Cosine blink opacity: fully opaque for 0.5 s, then a 1 s period.
     pub fn cursor_opacity(&self) -> f32 {
         let elapsed = self.cursor_blink_epoch.elapsed().as_secs_f32();
         if elapsed < 0.5 {
@@ -2060,6 +2212,7 @@ impl Block {
         (f32::cos(t * std::f32::consts::TAU) + 1.0) / 2.0
     }
 
+    /// Returns the active selection endpoint as a display UTF-8 byte offset.
     pub fn cursor_offset(&self) -> usize {
         if self.selection_reversed {
             self.selected_range.start
@@ -2068,6 +2221,7 @@ impl Block {
         }
     }
 
+    /// Ends body and language pointer drags, returning whether either was active.
     pub(crate) fn end_pointer_selection_session(&mut self) -> bool {
         let changed = self.is_selecting || self.code_language_is_selecting;
         self.is_selecting = false;
@@ -2075,6 +2229,7 @@ impl Block {
         changed
     }
 
+    /// Returns body selection endpoints in anchor/focus order.
     fn selection_anchor_focus(&self) -> (usize, usize) {
         if self.selection_reversed {
             (self.selected_range.end, self.selected_range.start)
@@ -2083,6 +2238,7 @@ impl Block {
         }
     }
 
+    /// Returns anchor/focus positions in clean visible-text byte coordinates.
     fn clean_selection_anchor_focus(&self) -> (usize, usize) {
         let (anchor, focus) = self.selection_anchor_focus();
         (
@@ -2091,13 +2247,16 @@ impl Block {
         )
     }
 
+    /// Stores scalar-aligned display endpoints and their direction.
     fn set_selection_from_anchor_focus(&mut self, anchor: usize, focus: usize) {
-        let clamped_anchor = anchor.min(self.visible_len());
-        let clamped_focus = focus.min(self.visible_len());
+        let text = self.display_text();
+        let clamped_anchor = crate::text_offsets::floor_char_boundary(text, anchor);
+        let clamped_focus = crate::text_offsets::floor_char_boundary(text, focus);
         self.selected_range = clamped_anchor.min(clamped_focus)..clamped_anchor.max(clamped_focus);
         self.selection_reversed = !self.selected_range.is_empty() && clamped_focus < clamped_anchor;
     }
 
+    /// Restores clean endpoints through the projection with separate affinities.
     fn set_selection_from_clean_anchor_focus(
         &mut self,
         anchor: usize,
@@ -2117,12 +2276,14 @@ impl Block {
         );
     }
 
+    /// Collapses the body selection at a display UTF-8 byte offset.
     pub fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.move_to_with_preferred_x(offset, None, cx);
     }
 
+    /// Extends the body selection to a scalar-aligned display byte offset.
     pub fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
-        let clamped_offset = offset.min(self.visible_len());
+        let clamped_offset = crate::text_offsets::floor_char_boundary(self.display_text(), offset);
         if self.selection_reversed {
             self.selected_range.start = clamped_offset;
         } else {
@@ -2138,23 +2299,35 @@ impl Block {
         cx.notify();
     }
 
+    /// Converts a current-display byte range to GPUI's UTF-16 code units.
     pub(super) fn range_to_utf16(&self, range: &Range<usize>) -> Range<usize> {
         Self::utf8_range_to_utf16_in(self.display_text(), range)
     }
 
+    /// Converts an IME range to scalar-aligned display UTF-8 bytes.
     pub(super) fn range_from_utf16(&self, range_utf16: &Range<usize>) -> Range<usize> {
         Self::utf16_range_to_utf8_in(self.display_text(), range_utf16)
     }
 
+    /// Finds the preceding grapheme boundary in current display text.
     pub fn previous_boundary(&self, offset: usize) -> usize {
         let text = self.display_text();
-        let mut cursor = GraphemeCursor::new(offset.min(text.len()), text.len(), true);
+        let mut cursor = GraphemeCursor::new(
+            crate::text_offsets::floor_char_boundary(text, offset),
+            text.len(),
+            true,
+        );
         cursor.prev_boundary(text, 0).ok().flatten().unwrap_or(0)
     }
 
+    /// Finds the following grapheme boundary in current display text.
     pub fn next_boundary(&self, offset: usize) -> usize {
         let text = self.display_text();
-        let mut cursor = GraphemeCursor::new(offset.min(text.len()), text.len(), true);
+        let mut cursor = GraphemeCursor::new(
+            crate::text_offsets::floor_char_boundary(text, offset),
+            text.len(),
+            true,
+        );
         cursor
             .next_boundary(text, 0)
             .ok()
@@ -2162,7 +2335,7 @@ impl Block {
             .unwrap_or(text.len())
     }
 
-    /// Offset of the start of the word before `offset`, or 0 if there is none.
+    /// UTF-8 offset of the preceding Unicode word start, or zero.
     pub fn previous_word_start(&self, offset: usize) -> usize {
         let text = self.display_text();
         let offset = offset.min(text.len());
@@ -2173,8 +2346,7 @@ impl Block {
             .unwrap_or(0)
     }
 
-    /// Offset of the start of the word after `offset`, or the text length if
-    /// there is none.
+    /// UTF-8 offset of the next Unicode word start, or the display text length.
     pub fn next_word_start(&self, offset: usize) -> usize {
         let text = self.display_text();
         let offset = offset.min(text.len());
@@ -2184,8 +2356,7 @@ impl Block {
             .unwrap_or(text.len())
     }
 
-    /// Reverse of `display_offset`: maps an expanded display offset
-    /// back to the clean tree offset.
+    /// Maps a projected display byte offset back to clean visible text.
     fn unexpand_offset(&self, expanded: usize) -> usize {
         let Some(projection) = &self.projection else {
             return expanded;
@@ -2197,6 +2368,7 @@ impl Block {
             .unwrap_or(expanded)
     }
 
+    /// Hit-tests the last body layout to a scalar-aligned display byte offset.
     pub fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
         if self.display_text().is_empty() {
             return 0;
@@ -2222,7 +2394,9 @@ impl Block {
         else {
             return 0;
         };
-        let layout = &lines[line_idx];
+        let (Some(layout), Some(range)) = (lines.get(line_idx), ranges.get(line_idx)) else {
+            return 0;
+        };
         let origin_x = super::element::aligned_line_left(layout, *bounds, self.text_align());
 
         let offset_in_line = match layout.closest_index_for_position(
@@ -2231,9 +2405,13 @@ impl Block {
         ) {
             Ok(idx) | Err(idx) => idx,
         };
-        ranges[line_idx].start + offset_in_line
+        crate::text_offsets::floor_char_boundary(
+            text,
+            range.start + offset_in_line.min(range.len()),
+        )
     }
 
+    /// Returns painted bounds of the IME mark, selection, or collapsed caret.
     pub(crate) fn active_range_or_cursor_bounds(&self) -> Option<Bounds<Pixels>> {
         let bounds = self.last_bounds?;
         let lines = self.last_layout.as_ref()?;

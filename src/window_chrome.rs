@@ -12,41 +12,58 @@ use gpui::{
 use crate::app_identity::VELOTYPE_APP_ID;
 use crate::theme::{Theme, ThemeDimensions};
 
+/// Minimum custom titlebar height in logical pixels.
 const TITLEBAR_MIN_HEIGHT: f32 = 32.0;
+/// Width of each application-rendered window control in logical pixels.
 const TITLEBAR_BUTTON_WIDTH: f32 = 46.0;
+/// Side length of titlebar control icons in logical pixels.
 const TITLEBAR_ICON_SIZE: f32 = 12.0;
+/// Space reserved on each side of the title around macOS traffic lights.
 const MAC_TRAFFIC_LIGHT_RESERVED_WIDTH: f32 = 84.0;
+/// Embedded asset path for the close control.
 const TITLEBAR_CLOSE_ICON: &str = "icon/titlebar/chrome-close.svg";
+/// Embedded asset path for the maximize control.
 const TITLEBAR_MAXIMIZE_ICON: &str = "icon/titlebar/chrome-maximize.svg";
+/// Embedded asset path for the minimize control.
 const TITLEBAR_MINIMIZE_ICON: &str = "icon/titlebar/chrome-minimize.svg";
+/// Embedded asset path shown when a maximized or fullscreen window can restore.
 const TITLEBAR_RESTORE_ICON: &str = "icon/titlebar/chrome-restore.svg";
 
 /// Selects whether Velotype or the platform should render window controls.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TitlebarControlMode {
+    /// Leaves macOS window controls to the platform.
     NativeTrafficLights,
+    /// Draws and handles minimize, maximize, and close controls in the app.
     AppControls,
 }
 
 /// Layout metadata shared by editor and preferences windows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct CustomTitlebarLayout {
+    /// Height in logical pixels, including the titlebar's bottom border.
     pub(crate) height: f32,
+    /// Owner of the visible window controls.
     pub(crate) controls: TitlebarControlMode,
 }
 
 /// Chooses the drag mechanism for the platform titlebar implementation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TitlebarDragStrategy {
+    /// Marks a drag region for GPUI's platform hit testing.
     PlatformHitTest,
+    /// Starts a native move on mouse-down and zooms on double-click.
     ExplicitMoveRequest,
 }
 
 /// A window control button kind recognised in desktop button-layout settings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TitlebarButtonKind {
+    /// Requests closing through the owning view's callback.
     Close,
+    /// Minimizes the window.
     Minimize,
+    /// Toggles the window's zoom state.
     Maximize,
 }
 
@@ -58,12 +75,14 @@ pub(crate) enum TitlebarButtonKind {
 /// left and maximize on the right.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TitlebarButtonLayout {
+    /// Controls before the title, ordered from left to right.
     pub(crate) left: Vec<TitlebarButtonKind>,
+    /// Controls after the title, ordered from left to right.
     pub(crate) right: Vec<TitlebarButtonKind>,
 }
 
 impl TitlebarButtonLayout {
-    /// Parse a GNOME `button-layout` GSettings value.
+    /// Parses a GNOME layout, ignoring unknown names and defaulting if empty.
     fn parse(s: &str) -> Self {
         let (left_part, right_part) = match s.split_once(':') {
             Some((l, r)) => (l, r),
@@ -93,6 +112,7 @@ impl TitlebarButtonLayout {
 }
 
 impl Default for TitlebarButtonLayout {
+    /// Places minimize, maximize, and close on the right, in that order.
     fn default() -> Self {
         TitlebarButtonLayout {
             left: Vec::new(),
@@ -148,6 +168,7 @@ fn button_layout_for_target_os(target_os: &str) -> TitlebarButtonLayout {
     }
 }
 
+/// Sets the native title, transparency, and macOS traffic-light position.
 pub(crate) fn titlebar_options_for_target_os(
     target_os: &str,
     title: SharedString,
@@ -163,6 +184,7 @@ pub(crate) fn titlebar_options_for_target_os(
     }
 }
 
+/// Requests client decorations on Linux/FreeBSD, otherwise leaving GPUI defaults.
 pub(crate) fn window_decorations_for_target_os(target_os: &str) -> Option<WindowDecorations> {
     match target_os {
         "linux" | "freebsd" => Some(WindowDecorations::Client),
@@ -170,6 +192,7 @@ pub(crate) fn window_decorations_for_target_os(target_os: &str) -> Option<Window
     }
 }
 
+/// Builds opaque, windowed options with shared app identity and platform chrome.
 pub(crate) fn velotype_window_options_for_target_os(
     target_os: &str,
     title: SharedString,
@@ -185,6 +208,7 @@ pub(crate) fn velotype_window_options_for_target_os(
     }
 }
 
+/// Builds the shared window options for the host operating system.
 pub(crate) fn velotype_window_options(
     title: SharedString,
     bounds: Bounds<Pixels>,
@@ -192,6 +216,7 @@ pub(crate) fn velotype_window_options(
     velotype_window_options_for_target_os(std::env::consts::OS, title, bounds)
 }
 
+/// Selects custom titlebar geometry, or `None` when native decorations suffice.
 pub(crate) fn custom_titlebar_layout_for_target_os(
     target_os: &str,
     decorations: Decorations,
@@ -230,6 +255,7 @@ pub(crate) fn titlebar_drag_strategy_for_target_os(
     }
 }
 
+/// Returns the custom titlebar height, or zero when no custom layout is needed.
 pub(crate) fn custom_titlebar_height_for_target_os(
     target_os: &str,
     decorations: Decorations,
@@ -240,6 +266,7 @@ pub(crate) fn custom_titlebar_height_for_target_os(
         .unwrap_or(0.0)
 }
 
+/// Returns the host titlebar height, hiding custom chrome in macOS fullscreen.
 pub(crate) fn custom_titlebar_height(window: &Window, dimensions: &ThemeDimensions) -> f32 {
     if cfg!(target_os = "macos") && window.is_fullscreen() {
         return 0.0;
@@ -252,10 +279,12 @@ pub(crate) fn custom_titlebar_height(window: &Window, dimensions: &ThemeDimensio
     )
 }
 
+/// Uses the theme's dialog surface as the custom titlebar background.
 pub(crate) fn custom_titlebar_background(theme: &Theme) -> Hsla {
     theme.colors.dialog_surface
 }
 
+/// Chooses light or dark control icons from the titlebar background's lightness.
 pub(crate) fn custom_titlebar_icon_color(theme: &Theme) -> Hsla {
     if custom_titlebar_background(theme).l < 0.5 {
         Hsla::from(rgba(0xf4f4f5ff))
@@ -264,6 +293,7 @@ pub(crate) fn custom_titlebar_icon_color(theme: &Theme) -> Hsla {
     }
 }
 
+/// Selects restore for maximized/fullscreen windows and maximize otherwise.
 pub(crate) fn titlebar_maximize_icon(is_maximized: bool, is_fullscreen: bool) -> &'static str {
     if is_maximized || is_fullscreen {
         TITLEBAR_RESTORE_ICON
@@ -272,6 +302,9 @@ pub(crate) fn titlebar_maximize_icon(is_maximized: bool, is_fullscreen: bool) ->
     }
 }
 
+/// Renders platform chrome with drag handling and the owner's close callback.
+///
+/// Returns `None` for unsupported decorations and macOS fullscreen windows.
 pub(crate) fn render_custom_titlebar<T: 'static>(
     id: &'static str,
     title: SharedString,

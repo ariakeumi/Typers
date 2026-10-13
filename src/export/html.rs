@@ -10,8 +10,9 @@ use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, html};
 use crate::components::{
     inline_math_font_size, is_mermaid_closing_fence, parse_display_math_source,
     parse_html_image_block, parse_mermaid_fence_source, parse_mermaid_fence_start,
-    render_latex_to_svg, render_mermaid_to_svg, sanitize_html_for_export,
+    render_latex_to_svg, render_mermaid_to_svg, sanitize_html_for_export_with_image_src,
 };
+use crate::fonts::{FontCatalog, FontPreferences, FontSettings};
 use crate::net;
 use crate::theme::{FontWeightDef, Theme};
 
@@ -28,25 +29,38 @@ pub(crate) fn render_html_with_base_dir(
     title: &str,
     base_dir: Option<&Path>,
 ) -> String {
-    render_html_document(markdown, theme, title, base_dir, &theme_css(theme))
+    render_html_with_base_dir_and_fonts(markdown, theme, title, base_dir, &default_font_settings())
 }
 
-/// Builds HTML tailored for Chromium's print-to-PDF pipeline.
-pub(crate) fn render_chromium_pdf_html_with_base_dir(
+/// Builds standalone HTML with caller-selected fonts and embedded local images.
+pub(crate) fn render_html_with_base_dir_and_fonts(
     markdown: &str,
     theme: &Theme,
     title: &str,
     base_dir: Option<&Path>,
+    fonts: &FontSettings,
+) -> String {
+    render_html_document(markdown, theme, title, base_dir, &theme_css(theme, fonts))
+}
+
+/// Builds print-layout HTML for Chromium using the supplied fonts and image base.
+pub(crate) fn render_chromium_pdf_html_with_base_dir_and_fonts(
+    markdown: &str,
+    theme: &Theme,
+    title: &str,
+    base_dir: Option<&Path>,
+    fonts: &FontSettings,
 ) -> String {
     render_html_document(
         markdown,
         theme,
         title,
         base_dir,
-        &chromium_pdf_theme_css(theme),
+        &chromium_pdf_theme_css(theme, fonts),
     )
 }
 
+/// Wraps rendered Markdown in a complete document with escaped title and CSS.
 fn render_html_document(
     markdown: &str,
     theme: &Theme,
@@ -70,6 +84,7 @@ fn render_html_document(
     )
 }
 
+/// Enables the extended Markdown syntax supported by export.
 fn markdown_options() -> Options {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
@@ -80,6 +95,7 @@ fn markdown_options() -> Options {
     options
 }
 
+/// Rewrites editor-specific content before pulldown-cmark emits HTML.
 fn render_browser_html_body(markdown: &str, theme: &Theme, base_dir: Option<&Path>) -> String {
     let rewritten = rewrite_visible_comment_blocks(markdown);
     let rewritten = rewrite_unsafe_html_blocks(&rewritten, base_dir);
@@ -93,6 +109,7 @@ fn render_browser_html_body(markdown: &str, theme: &Theme, base_dir: Option<&Pat
     body
 }
 
+/// Converts root HTML comments to visible, escaped preformatted text.
 fn rewrite_visible_comment_blocks(markdown: &str) -> String {
     let lines = markdown.split('\n').collect::<Vec<_>>();
     let mut rewritten = Vec::with_capacity(lines.len());
@@ -146,6 +163,7 @@ fn rewrite_visible_comment_blocks(markdown: &str) -> String {
     rewritten.join("\n")
 }
 
+/// Rewrites inline math and scripts outside fenced code blocks.
 fn rewrite_inline_math(markdown: &str, theme: &Theme) -> String {
     let mut rewritten = Vec::new();
     let mut active_fence: Option<(char, usize)> = None;
@@ -170,6 +188,7 @@ fn rewrite_inline_math(markdown: &str, theme: &Theme) -> String {
     rewritten.join("\n")
 }
 
+/// Renders one line's inline formulas and scripts, preserving code spans.
 fn rewrite_inline_math_line(line: &str, theme: &Theme) -> String {
     let mut output = String::with_capacity(line.len());
     let mut index = 0usize;
@@ -218,6 +237,7 @@ fn rewrite_inline_math_line(line: &str, theme: &Theme) -> String {
     output
 }
 
+/// Finds a matching code-span delimiter run at or after a byte offset.
 fn find_backtick_run(line: &str, mut index: usize, run_len: usize) -> Option<usize> {
     while index < line.len() {
         if line[index..].starts_with(&"`".repeat(run_len)) {
@@ -228,6 +248,7 @@ fn find_backtick_run(line: &str, mut index: usize, run_len: usize) -> Option<usi
     None
 }
 
+/// Finds valid single-dollar math at a byte offset, excluding currency-like text.
 fn locate_inline_dollar_math_source(line: &str, index: usize) -> Option<(usize, String)> {
     if !line[index..].starts_with('$')
         || line[index..].starts_with("$$")
@@ -254,6 +275,7 @@ fn locate_inline_dollar_math_source(line: &str, index: usize) -> Option<(usize, 
     None
 }
 
+/// Finds a superscript or subscript span and its HTML tag at a byte offset.
 fn locate_inline_script_source(line: &str, index: usize) -> Option<(usize, String, &'static str)> {
     if is_escaped_ascii(line, index) {
         return None;
@@ -268,6 +290,7 @@ fn locate_inline_script_source(line: &str, index: usize) -> Option<(usize, Strin
     }
 }
 
+/// Finds a matching script delimiter around ASCII alphanumeric content.
 fn locate_script_close(line: &str, index: usize, marker: char) -> Option<(usize, String)> {
     let prev = previous_char(line, index)?;
     if !prev.is_ascii_alphanumeric() {
@@ -298,16 +321,19 @@ fn locate_script_close(line: &str, index: usize, marker: char) -> Option<(usize,
     None
 }
 
+/// Returns the character immediately before a UTF-8 byte offset.
 fn previous_char(line: &str, index: usize) -> Option<char> {
     line.get(..index)?.chars().next_back()
 }
 
+/// Distinguishes one subscript tilde from strikethrough delimiters.
 fn is_single_tilde_marker(line: &str, index: usize) -> bool {
     line[index..].starts_with('~')
         && previous_char(line, index).is_none_or(|ch| ch != '~')
         && line[index + 1..].chars().next().is_none_or(|ch| ch != '~')
 }
 
+/// Finds a nonempty `\(...\)` formula beginning at a byte offset.
 fn locate_inline_paren_math_source(line: &str, index: usize) -> Option<(usize, String)> {
     if !line[index..].starts_with("\\(") {
         return None;
@@ -326,10 +352,12 @@ fn locate_inline_paren_math_source(line: &str, index: usize) -> Option<(usize, S
     None
 }
 
+/// Rejects empty, multiline, or whitespace-padded inline formulas.
 fn valid_inline_math_body(body: &str) -> bool {
     !body.is_empty() && !body.contains(['\n', '\r']) && body.trim() == body && !body.is_empty()
 }
 
+/// Reports whether an ASCII marker has an odd run of preceding backslashes.
 fn is_escaped_ascii(line: &str, index: usize) -> bool {
     let mut slash_count = 0usize;
     let mut cursor = index;
@@ -340,6 +368,7 @@ fn is_escaped_ascii(line: &str, index: usize) -> bool {
     slash_count % 2 == 1
 }
 
+/// Screens dollar-delimited text that resembles a numeric currency amount.
 fn looks_like_export_currency(line: &str, open: usize, close: usize, body: &str) -> bool {
     let prev_is_digit = open > 0 && line.as_bytes()[open - 1].is_ascii_digit();
     let next_is_digit = close + 1 < line.len() && line.as_bytes()[close + 1].is_ascii_digit();
@@ -351,6 +380,7 @@ fn looks_like_export_currency(line: &str, open: usize, close: usize, body: &str)
             && body.len() > 1)
 }
 
+/// Sanitizes root HTML regions and embeds local sources in image elements.
 fn rewrite_unsafe_html_blocks(markdown: &str, base_dir: Option<&Path>) -> String {
     let lines = markdown.split('\n').collect::<Vec<_>>();
     let mut rewritten = Vec::with_capacity(lines.len());
@@ -388,7 +418,16 @@ fn rewrite_unsafe_html_blocks(markdown: &str, base_dir: Option<&Path>) -> String
                 local_image_data_uri(&image.src, base_dir).unwrap_or_else(|| image.src.clone());
             rewritten.push(image.to_sanitized_html_with_src(&src));
         } else {
-            rewritten.push(sanitize_html_for_export(&raw));
+            let sanitized = sanitize_html_for_export_with_image_src(&raw, &|src| {
+                local_image_data_uri(src, base_dir).unwrap_or_else(|| src.to_string())
+            });
+            // A blank line terminates pulldown-cmark's raw HTML block; keep image-bearing
+            // divs on one source line while preserving their newlines for the browser.
+            rewritten.push(if html_start.name == "div" && sanitized.contains("<img ") {
+                sanitized.replace('\n', "&#10;")
+            } else {
+                sanitized
+            });
         }
         index = end;
     }
@@ -396,6 +435,7 @@ fn rewrite_unsafe_html_blocks(markdown: &str, base_dir: Option<&Path>) -> String
     rewritten.join("\n")
 }
 
+/// Replaces root display-math blocks with SVG or escaped error text.
 fn rewrite_display_math_blocks(markdown: &str, theme: &Theme) -> String {
     let lines = markdown.split('\n').collect::<Vec<_>>();
     let mut rewritten = Vec::with_capacity(lines.len());
@@ -449,6 +489,7 @@ fn rewrite_display_math_blocks(markdown: &str, theme: &Theme) -> String {
     rewritten.join("\n")
 }
 
+/// Replaces Mermaid fences with embedded SVG images or escaped error text.
 fn rewrite_mermaid_blocks(markdown: &str) -> String {
     let lines = markdown.split('\n').collect::<Vec<_>>();
     let mut rewritten = Vec::with_capacity(lines.len());
@@ -495,6 +536,7 @@ fn rewrite_mermaid_blocks(markdown: &str) -> String {
     rewritten.join("\n")
 }
 
+/// Embeds a Markdown image destination when it resolves to a supported local file.
 fn rewrite_local_image_event<'a>(event: Event<'a>, base_dir: Option<&Path>) -> Event<'a> {
     match event {
         Event::Start(Tag::Image {
@@ -517,6 +559,7 @@ fn rewrite_local_image_event<'a>(event: Event<'a>, base_dir: Option<&Path>) -> E
     }
 }
 
+/// Reads a supported local image as a data URI, leaving remote sources alone.
 fn local_image_data_uri(source: &str, base_dir: Option<&Path>) -> Option<String> {
     if source.is_empty()
         || source.starts_with('#')
@@ -537,6 +580,7 @@ fn local_image_data_uri(source: &str, base_dir: Option<&Path>) -> Option<String>
     Some(data_uri_for_bytes(mime, &bytes))
 }
 
+/// Maps supported image filename extensions to MIME types.
 fn image_mime_from_path(path: &Path) -> Option<&'static str> {
     let extension = path.extension()?.to_string_lossy().to_ascii_lowercase();
     match extension.as_str() {
@@ -550,6 +594,7 @@ fn image_mime_from_path(path: &Path) -> Option<&'static str> {
     }
 }
 
+/// Base64-encodes bytes into an image data URI.
 fn data_uri_for_bytes(mime: &str, bytes: &[u8]) -> String {
     format!(
         "data:{mime};base64,{}",
@@ -557,13 +602,18 @@ fn data_uri_for_bytes(mime: &str, bytes: &[u8]) -> String {
     )
 }
 
+/// Parsed root HTML opening tag used to bound a sanitization region.
 #[derive(Clone, Debug)]
 struct ExportHtmlStart {
+    /// Lowercase tag name used to locate its closing tag.
     name: String,
+    /// Whether the element needs no separate closing tag.
     self_closing: bool,
+    /// Whether its closing tag appears on the opening line.
     closes_same_line: bool,
 }
 
+/// Parses a root HTML start tag with up to three spaces of indentation.
 fn root_html_start(line: &str) -> Option<ExportHtmlStart> {
     let trimmed = line.trim_start();
     if line.len() - trimmed.len() > 3 || trimmed.starts_with("<!--") {
@@ -595,10 +645,12 @@ fn root_html_start(line: &str) -> Option<ExportHtmlStart> {
     })
 }
 
+/// Recognizes standalone HTML tags handled by the export sanitizer.
 fn is_export_void_html_tag(name: &str) -> bool {
     matches!(name, "br" | "hr" | "img")
 }
 
+/// Finds the exclusive end of a root HTML region before a blank line or close.
 fn collect_export_html_region(lines: &[&str], start: usize, html: &ExportHtmlStart) -> usize {
     if html.self_closing || html.closes_same_line {
         return start + 1;
@@ -606,20 +658,25 @@ fn collect_export_html_region(lines: &[&str], start: usize, html: &ExportHtmlSta
 
     let close = format!("</{}>", html.name);
     let mut index = start + 1;
+    let mut first_blank = None;
     while index < lines.len() {
         let line = lines[index];
         if line.to_ascii_lowercase().contains(&close) {
             return index + 1;
         }
         if line.trim().is_empty() {
-            return index;
+            if html.name != "div" {
+                return index;
+            }
+            first_blank.get_or_insert(index);
         }
         index += 1;
     }
 
-    lines.len()
+    first_blank.unwrap_or(lines.len())
 }
 
+/// Parses a Markdown code fence marker and run length at block scope.
 fn opening_fence(line: &str) -> Option<(char, usize)> {
     let trimmed = line.trim_start();
     if line.len() - trimmed.len() > 3 {
@@ -635,6 +692,7 @@ fn opening_fence(line: &str) -> Option<(char, usize)> {
     (run_len >= 3).then_some((marker, run_len))
 }
 
+/// Checks for a matching or longer closing Markdown code fence.
 fn is_closing_fence(line: &str, marker: char, opening_run_len: usize) -> bool {
     let trimmed = line.trim_start();
     if line.len() - trimmed.len() > 3 {
@@ -645,16 +703,19 @@ fn is_closing_fence(line: &str, marker: char, opening_run_len: usize) -> bool {
     run_len >= opening_run_len && trimmed[marker.len_utf8() * run_len..].trim().is_empty()
 }
 
+/// Detects an HTML comment opener at block scope.
 fn is_root_comment_start(line: &str) -> bool {
     let trimmed = line.trim_start();
     trimmed.starts_with("<!--") && line.len() - trimmed.len() <= 3
 }
 
+/// Detects a display-math opener at block scope.
 fn is_root_display_math_start(line: &str) -> bool {
     let trimmed = line.trim_start();
     trimmed.starts_with("$$") && line.len() - trimmed.len() <= 3
 }
 
+/// Finds the exclusive end of a display-math region before a blank line.
 fn collect_display_math_region(lines: &[&str], start: usize) -> usize {
     let opener = lines[start].trim_start().trim_end();
     if opener != "$$" && opener[2..].contains("$$") {
@@ -674,7 +735,8 @@ fn collect_display_math_region(lines: &[&str], start: usize) -> usize {
     lines.len()
 }
 
-fn theme_css(theme: &Theme) -> String {
+/// Generates standalone export CSS from theme colors, dimensions, and fonts.
+fn theme_css(theme: &Theme, fonts: &FontSettings) -> String {
     let c = &theme.colors;
     let d = &theme.dimensions;
     let t = &theme.typography;
@@ -868,7 +930,7 @@ hr {{ border: 0; border-top: 1px solid; border-color: var(--vlt-border); }}
         css_color(c.callout_warning_border),
         css_color(c.callout_caution_bg),
         css_color(c.callout_caution_border),
-        body_font_stack(),
+        fonts.body.css_font_family(),
         t.text_size,
         t.text_line_height,
         document_layout_css(),
@@ -888,7 +950,7 @@ hr {{ border: 0; border-top: 1px solid; border-color: var(--vlt-border); }}
         css_color(c.text_h6),
         t.h6_size,
         d.callout_radius,
-        "\"SFMono-Regular\", Consolas, \"Liberation Mono\", Menlo, monospace",
+        fonts.code.css_font_family(),
         t.code_size,
         pre_overflow,
         d.code_bg_radius,
@@ -897,8 +959,9 @@ hr {{ border: 0; border-top: 1px solid; border-color: var(--vlt-border); }}
     )
 }
 
-fn chromium_pdf_theme_css(theme: &Theme) -> String {
-    let mut css = theme_css(theme);
+/// Replaces screen layout CSS with A4 print rules for Chromium output.
+fn chromium_pdf_theme_css(theme: &Theme, fonts: &FontSettings) -> String {
+    let mut css = theme_css(theme, fonts);
     css = css.replace(
         document_layout_css(),
         ".vlt-document {\n  width: auto;\n  max-width: none;\n  margin: 0;\n  padding: 0;\n}",
@@ -958,19 +1021,28 @@ fn chromium_pdf_theme_css(theme: &Theme) -> String {
     css
 }
 
-fn body_font_stack() -> &'static str {
-    "system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Serif Tibetan\", \"Noto Sans Tibetan\", \"Microsoft Himalaya\", Kailasa, \"BabelStone Tibetan\", sans-serif"
+/// Resolves the fallback font stacks used by basic HTML export.
+fn default_font_settings() -> FontSettings {
+    FontSettings::resolve(
+        FontPreferences::default(),
+        &FontCatalog::from_names(vec![".SystemUIFont".into()]),
+        std::env::consts::OS,
+    )
+    .expect("default export font stacks are valid")
 }
 
+/// Returns the standalone document container rule replaced for PDF export.
 fn document_layout_css() -> &'static str {
     ".vlt-document {\n  width: min(100% - 48px, 920px);\n  margin: 0 auto;\n  padding: 48px 0 72px;\n}"
 }
 
+/// Detects Tibetan code points for the exported document language.
 fn contains_tibetan_text(text: &str) -> bool {
     text.chars()
         .any(|ch| ('\u{0f00}'..='\u{0fff}').contains(&ch))
 }
 
+/// Converts GPUI color values to CSS `rgba(...)` text.
 fn css_color(color: Hsla) -> String {
     let color = Rgba::from(color);
     format!(
@@ -982,10 +1054,12 @@ fn css_color(color: Hsla) -> String {
     )
 }
 
+/// Clamps and rounds a normalized color channel to an 8-bit component.
 fn css_color_channel(channel: f32) -> u8 {
     (channel.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
+/// Converts the theme's font-weight enum to a CSS numeric weight.
 fn css_font_weight(weight: &FontWeightDef) -> u16 {
     match weight {
         FontWeightDef::Thin => 100,
@@ -999,6 +1073,7 @@ fn css_font_weight(weight: &FontWeightDef) -> u16 {
     }
 }
 
+/// Escapes text for HTML content and attribute use.
 fn escape_html(input: &str) -> String {
     let mut escaped = String::with_capacity(input.len());
     for ch in input.chars() {
@@ -1017,9 +1092,10 @@ fn escape_html(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        contains_tibetan_text, render_chromium_pdf_html_with_base_dir, render_html,
+        contains_tibetan_text, render_chromium_pdf_html_with_base_dir_and_fonts, render_html,
         render_html_with_base_dir,
     };
+    use crate::fonts::{FontCatalog, FontPreferences, FontSettings, SYSTEM_UI_FONT};
     use crate::theme::Theme;
     use std::fs;
     use uuid::Uuid;
@@ -1036,6 +1112,30 @@ mod tests {
         assert!(html.contains("<main class=\"vlt-document\">"));
         assert!(html.contains("<h1>Title</h1>"));
         assert!(html.contains("<p>text</p>"));
+    }
+
+    #[test]
+    fn exports_distinct_safely_serialized_body_and_code_font_stacks() {
+        let fonts = FontSettings::resolve(
+            FontPreferences {
+                body_stack: "'Body Family', sans-serif".into(),
+                code_stack: "'Code \\\"Family', monospace".into(),
+                ui_stack: ".SystemUIFont".into(),
+            },
+            &FontCatalog::from_names(Vec::new()),
+            "windows",
+        )
+        .unwrap();
+        let html = super::render_html_with_base_dir_and_fonts(
+            "text `code`",
+            &Theme::default_theme(),
+            "Doc",
+            None,
+            &fonts,
+        );
+        assert!(html.contains("font-family: \"Body Family\", sans-serif"));
+        assert!(html.contains("font-family: \"Code \\\"Family\", monospace"));
+        assert!(!html.contains("Code \"Family"));
     }
     #[test]
     fn detects_tibetan_text_for_document_language() {
@@ -1086,11 +1186,18 @@ mod tests {
 
     #[test]
     fn chromium_pdf_light_theme_clears_print_container_frames() {
-        let html = render_chromium_pdf_html_with_base_dir(
+        let fonts = FontSettings::resolve(
+            FontPreferences::default(),
+            &FontCatalog::from_names(vec![SYSTEM_UI_FONT.into()]),
+            std::env::consts::OS,
+        )
+        .expect("default font stacks are valid");
+        let html = render_chromium_pdf_html_with_base_dir_and_fonts(
             "# Title\n\ntext",
             &Theme::light_theme(),
             "Doc",
             None,
+            &fonts,
         );
 
         assert!(html.contains("color-scheme: light;"));
@@ -1243,6 +1350,30 @@ mod tests {
         assert!(html.contains("style=\"zoom: 80%;\""));
         assert!(!html.contains("color:red"));
         assert!(!html.contains("width:10px"));
+    }
+
+    #[test]
+    fn exports_markdown_image_inside_centered_html_div_with_local_source() {
+        let root = std::env::temp_dir().join(format!("velotype-html-export-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("create temp export dir");
+        fs::write(root.join("banner.png"), [137, 80, 78, 71]).expect("write local image");
+
+        let html = render_html_with_base_dir(
+            "<div align=\"center\">\n\n![banner](banner.png)\n\n**Bold text**\n\n[Editor Showcase](./showcase.md)\n\n[![badge](https://example.com/badge.svg)](https://example.com)\n\n</div>",
+            &Theme::default_theme(),
+            "Doc",
+            Some(&root),
+        );
+        let _ = fs::remove_dir_all(&root);
+
+        assert!(html.contains("<div align=\"center\">"));
+        assert!(html.contains("<img src=\"data:image/png;base64,"));
+        assert!(html.contains("<strong>Bold text</strong>"));
+        assert!(html.contains("<a href=\"./showcase.md\">Editor Showcase</a>"));
+        assert!(html.contains("<a href=\"https://example.com\">"));
+        assert!(html.contains("<img src=\"https://example.com/badge.svg\" alt=\"badge\">"));
+        assert!(!html.contains("![banner](banner.png)"));
+        assert!(!html.contains("class=\"vlt-raw-html\""));
     }
 
     #[test]

@@ -31,8 +31,11 @@ enum HtmlBlockStart {
     Comment,
     /// HTML tag block whose closing behavior depends on the tag shape.
     Tag {
+        /// Opening tag name used to find its matching close.
         name: String,
+        /// Whether the tag needs no later close line.
         self_closing: bool,
+        /// Whether a closing tag already occurs on the opening line.
         closes_same_line: bool,
     },
 }
@@ -40,17 +43,23 @@ enum HtmlBlockStart {
 /// Ordered-list or unordered-list marker parsed from one source line.
 #[derive(Clone)]
 struct ListMarker {
+    /// Native list item kind, including task checked state.
     kind: BlockKind,
+    /// Marker indentation in display columns.
     indent_columns: usize,
+    /// Content start in display columns.
     content_indent_columns: usize,
+    /// Source text after the marker.
     text: String,
 }
 
+/// Removes up to three leading spaces before checking a code fence.
 fn strip_fence_indent(line: &str) -> Option<&str> {
     let indent = line.bytes().take_while(|b| *b == b' ').count();
     (indent <= 3).then_some(&line[indent..])
 }
 
+/// Returns the first blank line after a region starting at `start`.
 fn collect_until_blank_line(lines: &[String], start: usize) -> usize {
     let mut index = start + 1;
     while index < lines.len() && !lines[index].trim().is_empty() {
@@ -59,6 +68,7 @@ fn collect_until_blank_line(lines: &[String], start: usize) -> usize {
     index
 }
 
+/// Bounds unsupported HTML before a blank line or a new root block.
 fn collect_html_fallback_region(lines: &[String], start: usize) -> usize {
     let mut index = start + 1;
     while index < lines.len() {
@@ -73,6 +83,7 @@ fn collect_html_fallback_region(lines: &[String], start: usize) -> usize {
     index
 }
 
+/// Finds the length of an unclosed inline-code backtick run.
 fn pending_inline_code_run_len(markdown: &str) -> Option<usize> {
     let mut open_run_len = None;
     let mut chars = markdown.char_indices().peekable();
@@ -103,6 +114,7 @@ fn pending_inline_code_run_len(markdown: &str) -> Option<usize> {
     open_run_len
 }
 
+/// Tests for a backtick run whose length exactly matches an opener.
 fn line_contains_matching_backtick_run(line: &str, run_len: usize) -> bool {
     let mut chars = line.chars().peekable();
     while let Some(ch) = chars.next() {
@@ -124,6 +136,7 @@ fn line_contains_matching_backtick_run(line: &str, run_len: usize) -> bool {
     false
 }
 
+/// Keeps a paragraph together across a boundary when inline code closes later.
 fn paragraph_can_continue_through_boundary(
     paragraph_lines: &[String],
     lines: &[String],
@@ -138,10 +151,12 @@ fn paragraph_can_continue_through_boundary(
         .any(|line| line_contains_matching_backtick_run(line, run_len))
 }
 
+/// Parses a code fence after permitted leading indentation.
 fn parse_opening_fence(line: &str) -> Option<FenceInfo> {
     BlockKind::parse_code_fence_opening(strip_fence_indent(line)?.trim_end())
 }
 
+/// Accepts only a same-marker closing fence with the exact opener run length.
 fn is_closing_fence(line: &str, opener: &FenceInfo) -> bool {
     let Some(trimmed) = strip_fence_indent(line).map(str::trim_end) else {
         return false;
@@ -156,6 +171,7 @@ fn is_closing_fence(line: &str, opener: &FenceInfo) -> bool {
     trimmed[opener.ch.len_utf8() * run_len..].trim().is_empty()
 }
 
+/// Finds the first matching close, stopping at a new info-tagged opener.
 fn find_matching_closing_fence(
     lines: &[String],
     start_index: usize,
@@ -187,6 +203,7 @@ fn find_matching_closing_fence(
     None
 }
 
+/// Counts initial indentation as display columns and UTF-8 bytes.
 fn leading_indent_columns_and_bytes(line: &str) -> (usize, usize) {
     let mut columns = 0usize;
     let mut bytes = 0usize;
@@ -206,6 +223,7 @@ fn leading_indent_columns_and_bytes(line: &str) -> (usize, usize) {
     (columns, bytes)
 }
 
+/// Removes one four-space or tab prefix from an indented code line.
 fn strip_indented_code_prefix(line: &str) -> Option<&str> {
     if let Some(rest) = line.strip_prefix('\t') {
         Some(rest)
@@ -214,6 +232,7 @@ fn strip_indented_code_prefix(line: &str) -> Option<&str> {
     }
 }
 
+/// Measures text columns with tabs expanded to four-column stops.
 fn display_columns(value: &str) -> usize {
     let mut columns = 0usize;
     for ch in value.chars() {
@@ -225,6 +244,7 @@ fn display_columns(value: &str) -> usize {
     columns
 }
 
+/// Removes at least the requested leading display columns when available.
 fn strip_leading_columns(line: &str, columns: usize) -> Option<&str> {
     if columns == 0 {
         return Some(line);
@@ -254,6 +274,7 @@ fn strip_leading_columns(line: &str, columns: usize) -> Option<&str> {
     None
 }
 
+/// Dedents lines where possible, retaining lines without enough indentation.
 fn dedent_lines(lines: &[String], columns: usize) -> Vec<String> {
     lines
         .iter()
@@ -265,6 +286,7 @@ fn dedent_lines(lines: &[String], columns: usize) -> Vec<String> {
         .collect()
 }
 
+/// Parses bullet, task, or numbered markers and their indentation.
 fn parse_list_marker(line: &str) -> Option<ListMarker> {
     let (indent_columns, indent_bytes) = leading_indent_columns_and_bytes(line);
     let rest = &line[indent_bytes..];
@@ -309,6 +331,7 @@ fn parse_list_marker(line: &str) -> Option<ListMarker> {
     })
 }
 
+/// Parses a one-to-nine-digit ordered marker ending in `.` or `)`.
 fn parse_ordered_list_marker(rest: &str) -> Option<(usize, usize, &str)> {
     let digit_len = rest.bytes().take_while(|b| b.is_ascii_digit()).count();
     if !(1..=9).contains(&digit_len) {
@@ -328,6 +351,7 @@ fn parse_ordered_list_marker(rest: &str) -> Option<(usize, usize, &str)> {
     Some((digit_len, 2, &rest[digit_len + 2..]))
 }
 
+/// Removes one quote marker after at most three leading spaces.
 fn strip_one_quote_level(line: &str) -> Option<String> {
     let leading_spaces = line.bytes().take_while(|b| *b == b' ').count();
     if leading_spaces > 3 {
@@ -347,12 +371,14 @@ fn strip_one_quote_level(line: &str) -> Option<String> {
     )
 }
 
+/// Recognizes a quote marker after at most three leading spaces.
 fn is_quote_start(line: &str) -> bool {
     let trimmed_end = line.trim_end();
     let leading_spaces = trimmed_end.bytes().take_while(|b| *b == b' ').count();
     leading_spaces <= 3 && trimmed_end[leading_spaces..].starts_with('>')
 }
 
+/// Recognizes a bracketed reference definition at block indentation.
 fn is_reference_definition_start(line: &str) -> bool {
     let trimmed_end = line.trim_end();
     let leading_spaces = trimmed_end.bytes().take_while(|b| *b == b' ').count();
@@ -367,6 +393,7 @@ fn is_reference_definition_start(line: &str) -> bool {
     rest.starts_with('[') && label_end > 1
 }
 
+/// Recognizes a footnote definition marker at block indentation.
 fn is_footnote_definition_start(line: &str) -> bool {
     let trimmed_end = line.trim_end();
     let leading_spaces = trimmed_end.bytes().take_while(|b| *b == b' ').count();
@@ -381,6 +408,7 @@ fn is_footnote_definition_start(line: &str) -> bool {
     rest.starts_with("[^") && label_end > 2
 }
 
+/// Recognizes an indented quoted or parenthesized reference title line.
 fn is_reference_definition_title_continuation(line: &str) -> bool {
     let (_, indent_bytes) = leading_indent_columns_and_bytes(line);
     if indent_bytes == 0 {
@@ -393,10 +421,12 @@ fn is_reference_definition_title_continuation(line: &str) -> bool {
         || (trimmed.starts_with('(') && trimmed.ends_with(')'))
 }
 
+/// Tests whether a line begins a recognized HTML block or comment.
 fn is_block_html_start(line: &str) -> bool {
     parse_html_block_start(line).is_some()
 }
 
+/// Returns the end of a closed HTML comment, or `None` if unclosed.
 fn collect_closed_html_comment_region(lines: &[String], start: usize) -> Option<usize> {
     match parse_html_block_start(&lines[start])? {
         HtmlBlockStart::Comment => {}
@@ -418,6 +448,7 @@ fn collect_closed_html_comment_region(lines: &[String], start: usize) -> Option<
     None
 }
 
+/// Collects a tag/comment region, falling back before unrelated root content.
 fn collect_block_html_region(lines: &[String], start: usize) -> usize {
     match parse_html_block_start(&lines[start]) {
         Some(HtmlBlockStart::Comment) => collect_closed_html_comment_region(lines, start)
@@ -463,6 +494,7 @@ fn collect_block_html_region(lines: &[String], start: usize) -> usize {
     }
 }
 
+/// Includes indented title lines following a reference definition.
 fn collect_reference_definition_region(lines: &[String], start: usize) -> usize {
     let mut index = start + 1;
     while index < lines.len() && is_reference_definition_title_continuation(&lines[index]) {
@@ -471,6 +503,7 @@ fn collect_reference_definition_region(lines: &[String], start: usize) -> usize 
     index
 }
 
+/// Includes indented and blank body lines of a footnote definition.
 fn collect_footnote_definition_region(lines: &[String], start: usize) -> usize {
     let mut index = start + 1;
     while index < lines.len() {
@@ -491,12 +524,14 @@ fn collect_footnote_definition_region(lines: &[String], start: usize) -> usize {
     index
 }
 
+/// Recognizes a display-math opener after allowed block indentation.
 fn is_display_math_start(line: &str) -> bool {
     strip_fence_indent(line)
         .map(str::trim_end)
         .is_some_and(|rest| rest.starts_with("$$"))
 }
 
+/// Collects a display-math region through its close or next root block.
 fn collect_display_math_region(lines: &[String], start: usize) -> usize {
     let opener = strip_fence_indent(&lines[start])
         .map(str::trim_end)
@@ -528,6 +563,7 @@ fn collect_display_math_region(lines: &[String], start: usize) -> usize {
     lines.len()
 }
 
+/// Parses an HTML comment or opening tag and its close behavior.
 fn parse_html_block_start(line: &str) -> Option<HtmlBlockStart> {
     let rest = strip_fence_indent(line)?.trim_end();
     if rest.starts_with("<!--") {
@@ -561,10 +597,12 @@ fn parse_html_block_start(line: &str) -> Option<HtmlBlockStart> {
     })
 }
 
+/// Recognizes supported void tags that require no separate close line.
 fn is_html_void_block_tag(name: &str) -> bool {
     matches!(name.to_ascii_lowercase().as_str(), "br" | "hr" | "img")
 }
 
+/// Reads the name of a closing HTML tag at block indentation.
 fn parse_html_close_tag_name(line: &str) -> Option<String> {
     let rest = strip_fence_indent(line)?.trim_end();
     let tagged = rest.strip_prefix("</")?;
@@ -586,6 +624,7 @@ fn parse_html_close_tag_name(line: &str) -> Option<String> {
     Some(name.to_string())
 }
 
+/// Collects contiguous quoted lines for raw fallback.
 fn collect_quote_raw_region(lines: &[String], start: usize) -> usize {
     let mut index = start;
     while index < lines.len() {
@@ -598,6 +637,7 @@ fn collect_quote_raw_region(lines: &[String], start: usize) -> usize {
     index
 }
 
+/// Detects quote content requiring special parsing or raw fallback.
 fn quote_content_starts_unsupported(lines: &[String], index: usize) -> bool {
     let line = &lines[index];
     is_block_html_start(line)
@@ -613,6 +653,7 @@ fn quote_content_starts_unsupported(lines: &[String], index: usize) -> bool {
             .is_some()
 }
 
+/// Finds the extent of a non-native block embedded in a quote.
 fn collect_unsupported_quote_region(lines: &[String], start: usize) -> Option<usize> {
     if start >= lines.len() {
         return None;
@@ -648,6 +689,7 @@ fn collect_unsupported_quote_region(lines: &[String], start: usize) -> Option<us
     None
 }
 
+/// Finds a list item's continuation up to a peer marker or unindented break.
 fn collect_list_item_region(lines: &[String], start: usize, marker_indent_columns: usize) -> usize {
     let mut index = start + 1;
     let mut pending_blank_lines = 0usize;
@@ -683,6 +725,7 @@ fn collect_list_item_region(lines: &[String], start: usize, marker_indent_column
     index
 }
 
+/// Recognizes a boundary at which root-level block parsing should resume.
 fn looks_like_root_block_start(lines: &[String], index: usize) -> bool {
     let line = &lines[index];
     if line.trim().is_empty() {
@@ -706,6 +749,7 @@ fn looks_like_root_block_start(lines: &[String], index: usize) -> bool {
         || is_display_math_start(line)
 }
 
+/// Appends parsed children to a parent block when nonempty.
 fn attach_child_blocks(
     parent: &Entity<super::Block>,
     children: Vec<Entity<super::Block>>,
@@ -720,6 +764,7 @@ fn attach_child_blocks(
     });
 }
 
+/// Creates a native code block with plain-text content.
 fn build_code_block(
     cx: &mut Context<Editor>,
     language: Option<SharedString>,
@@ -734,6 +779,7 @@ fn build_code_block(
     )
 }
 
+/// Parses a closed fence as code or a native Mermaid block.
 fn collect_fenced_code_block(
     cx: &mut Context<Editor>,
     lines: &[String],
@@ -760,6 +806,7 @@ fn collect_fenced_code_block(
     ))
 }
 
+/// Collects contiguous indented code and intervening blank lines.
 fn collect_indented_code_block(
     cx: &mut Context<Editor>,
     lines: &[String],
@@ -786,14 +833,17 @@ fn collect_indented_code_block(
     ))
 }
 
+/// Preserves unsupported Markdown as an editable raw block.
 fn raw_block(cx: &mut Context<Editor>, markdown: String) -> Entity<super::Block> {
     Editor::new_block(cx, BlockRecord::raw_markdown(markdown))
 }
 
+/// Creates a native HTML comment block from source text.
 fn comment_block(cx: &mut Context<Editor>, markdown: String) -> Entity<super::Block> {
     Editor::new_block(cx, BlockRecord::comment(markdown))
 }
 
+/// Creates a semantic HTML block or preserves unsafe HTML as raw Markdown.
 fn html_or_raw_block(cx: &mut Context<Editor>, markdown: String) -> Entity<super::Block> {
     let document = parse_html_document(&markdown);
     if document.safety == HtmlSafetyClass::Semantic {
@@ -805,6 +855,7 @@ fn html_or_raw_block(cx: &mut Context<Editor>, markdown: String) -> Entity<super
     }
 }
 
+/// Creates editable display math only when its source parses successfully.
 fn math_or_raw_block(cx: &mut Context<Editor>, markdown: String) -> Entity<super::Block> {
     if parse_display_math_source(&markdown).is_some() {
         Editor::new_block(cx, BlockRecord::math(markdown))
@@ -813,6 +864,7 @@ fn math_or_raw_block(cx: &mut Context<Editor>, markdown: String) -> Entity<super
     }
 }
 
+/// Collects a closed HTML comment into a native comment block.
 fn collect_comment_block(
     cx: &mut Context<Editor>,
     lines: &[String],
@@ -822,6 +874,7 @@ fn collect_comment_block(
     Some((comment_block(cx, lines[start..end].join("\n")), end))
 }
 
+/// Creates a native block using parsed inline Markdown for its title.
 fn native_block(
     cx: &mut Context<Editor>,
     kind: BlockKind,
@@ -833,14 +886,17 @@ fn native_block(
     )
 }
 
+/// Creates a standalone-image paragraph from trimmed Markdown.
 fn standalone_image_block(cx: &mut Context<Editor>, markdown: String) -> Entity<super::Block> {
     Editor::new_block(cx, BlockRecord::paragraph(markdown.trim().to_string()))
 }
 
+/// Accepts only a single-line paragraph containing one standalone image.
 fn is_standalone_image_paragraph(lines: &[String]) -> bool {
     lines.len() == 1 && parse_standalone_image(&lines[0]).is_some()
 }
 
+/// Tests whether an image begins a distinct child paragraph region.
 fn starts_with_standalone_image_child_paragraph(lines: &[String]) -> bool {
     if lines.is_empty() || !is_standalone_image_paragraph(&lines[..1]) {
         return false;
@@ -860,6 +916,7 @@ fn starts_with_standalone_image_child_paragraph(lines: &[String]) -> bool {
     })
 }
 
+/// Appends a separator and parsed Markdown to a block's title.
 fn append_markdown_to_block(
     block: &Entity<super::Block>,
     separator: &str,
@@ -878,10 +935,12 @@ fn append_markdown_to_block(
     });
 }
 
+/// Creates a plain-text paragraph without interpreting inline Markdown.
 fn plain_text_paragraph_block(cx: &mut Context<Editor>, text: String) -> Entity<super::Block> {
     Editor::new_block(cx, BlockRecord::paragraph(text))
 }
 
+/// Adds empty child paragraphs to retain blank lines inside a quote.
 fn append_quote_separator_children(
     children: &mut Vec<Entity<super::Block>>,
     count: usize,
@@ -892,6 +951,7 @@ fn append_quote_separator_children(
     }
 }
 
+/// Parses a footnote ID and recursively imports its indented body.
 fn build_native_footnote_definition_block(
     cx: &mut Context<Editor>,
     lines: &[String],
@@ -924,6 +984,7 @@ fn build_native_footnote_definition_block(
 }
 
 impl Editor {
+    /// Splits Markdown into lines and imports top-level native or raw blocks.
     pub(super) fn build_root_blocks_from_markdown(
         cx: &mut Context<Self>,
         markdown: &str,
@@ -947,6 +1008,7 @@ impl Editor {
         Self::build_blocks_from_lines_internal(cx, lines, true)
     }
 
+    /// Imports lines with context-dependent footnote handling and raw fallback.
     fn build_blocks_from_lines_internal(
         cx: &mut Context<Self>,
         lines: &[String],
@@ -1134,6 +1196,7 @@ impl Editor {
         roots
     }
 
+    /// Collects paragraph lines until a block boundary, except inside inline code.
     fn collect_paragraph_block(
         cx: &mut Context<Self>,
         lines: &[String],
@@ -1157,6 +1220,7 @@ impl Editor {
         )
     }
 
+    /// Removes quote markers and imports a native quote or raw fallback.
     fn collect_quote_block(
         cx: &mut Context<Self>,
         lines: &[String],
@@ -1184,6 +1248,8 @@ impl Editor {
         (block, end)
     }
 
+    /// Builds a quote with editable title and supported nested child blocks.
+    /// Returns `None` when nested structure requires a raw outer fallback.
     fn build_native_quote_block(
         cx: &mut Context<Self>,
         lines: &[String],
@@ -1423,6 +1489,8 @@ impl Editor {
         Some(block)
     }
 
+    /// Builds a callout body from supported nested blocks.
+    /// Returns `None` when an unsupported nested quote/list requires raw fallback.
     fn build_native_callout_block(
         cx: &mut Context<Self>,
         lines: &[String],
@@ -1580,6 +1648,7 @@ impl Editor {
         Some(block)
     }
 
+    /// Imports a run of list items and supported nested children.
     fn collect_list_blocks(
         cx: &mut Context<Self>,
         lines: &[String],
@@ -3291,6 +3360,38 @@ mod tests {
             let block = visible[0].entity.read(cx);
             assert_eq!(block.kind(), BlockKind::HtmlBlock);
             assert_eq!(block.display_text(), markdown);
+            assert_eq!(editor.document.markdown_text(cx), markdown);
+        });
+    }
+
+    #[gpui::test]
+    async fn imports_centered_html_div_with_markdown_images_without_rewriting_source(
+        cx: &mut TestAppContext,
+    ) {
+        let markdown = "<div align=\"center\">\n\n![banner](./banner.png)\n\n**Bold text**\n\n[Editor Showcase](./showcase.md)\n\n</div>".to_string();
+        let editor = cx.new(|cx| Editor::from_markdown(cx, markdown.clone(), None));
+
+        editor.update(cx, |editor, cx| {
+            let visible = editor.document.visible_blocks();
+            assert_eq!(visible.len(), 1);
+            let block = visible[0].entity.read(cx);
+            assert_eq!(block.kind(), BlockKind::HtmlBlock);
+            let html = block.record.html.as_ref().expect("parsed HTML tree");
+            assert!(html.nodes[0].children.iter().any(|node| matches!(
+                node.kind,
+                crate::components::HtmlNodeKind::MarkdownImage(_)
+            )));
+            assert_eq!(
+                html.nodes[0]
+                    .children
+                    .iter()
+                    .filter(|node| matches!(
+                        node.kind,
+                        crate::components::HtmlNodeKind::MarkdownInline(_)
+                    ))
+                    .count(),
+                2
+            );
             assert_eq!(editor.document.markdown_text(cx), markdown);
         });
     }

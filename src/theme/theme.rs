@@ -56,6 +56,8 @@ impl FontWeightDef {
 }
 
 /// All configurable colors for the editor UI.
+/// Direct deserialization requires legacy core tokens and supplies fixed defaults
+/// for newer optional tokens; imported packs instead inherit a built-in base.
 #[derive(Debug, Clone, Serialize)]
 pub struct ThemeColors {
     /// Background of the editor scroll area (behind all blocks).
@@ -474,7 +476,7 @@ pub struct ThemeDimensions {
 pub struct ThemeTypography {
     /// Default body text font size.
     pub text_size: f32,
-    /// Default body text line height as a ratio of font size.
+    /// Line height in rems for native rendering; a unitless multiplier in HTML export.
     pub text_line_height: f32,
     /// H1 heading font size.
     pub h1_size: f32,
@@ -523,101 +525,191 @@ pub struct Placeholders {
     pub empty_editing: String,
 }
 
-/// Deserialization adapter for `ThemeColors` with backward-compatible defaults.
+/// Legacy-compatible color input; optional tokens use fixed deserializer fallbacks.
 #[derive(Deserialize)]
 struct ThemeColorsDe {
+    /// Required editor canvas background.
     editor_background: Hsla,
+    /// Preferred source-block background, taking precedence over the legacy key.
     source_mode_block_bg: Option<Hsla>,
+    /// Legacy source-block background used when the preferred key is absent.
     block_focused_bg: Option<Hsla>,
+    /// Optional visible-comment background.
     comment_bg: Option<Hsla>,
+    /// Required body text color.
     text_default: Hsla,
+    /// Optional rendered-link color.
     text_link: Option<Hsla>,
+    /// Required empty-block placeholder color.
     text_placeholder: Hsla,
+    /// Required level-one heading color.
     text_h1: Hsla,
+    /// Required level-two heading color.
     text_h2: Hsla,
+    /// Required level-three heading color.
     text_h3: Hsla,
+    /// Required level-four heading color.
     text_h4: Hsla,
+    /// Required level-five heading color.
     text_h5: Hsla,
+    /// Required level-six heading color.
     text_h6: Hsla,
+    /// Required level-one heading rule color.
     border_h1: Hsla,
+    /// Optional level-two heading rule color.
     border_h2: Option<Hsla>,
+    /// Required quotation text color.
     text_quote: Hsla,
+    /// Required quotation guide color.
     border_quote: Hsla,
+    /// Optional note callout background.
     callout_note_bg: Option<Hsla>,
+    /// Optional note callout accent.
     callout_note_border: Option<Hsla>,
+    /// Optional tip callout background.
     callout_tip_bg: Option<Hsla>,
+    /// Optional tip callout accent.
     callout_tip_border: Option<Hsla>,
+    /// Important callout background; omission uses legacy amber, not built-in purple.
     callout_important_bg: Option<Hsla>,
+    /// Important callout accent; omission uses legacy amber, not built-in purple.
     callout_important_border: Option<Hsla>,
+    /// Optional warning callout background.
     callout_warning_bg: Option<Hsla>,
+    /// Optional warning callout accent.
     callout_warning_border: Option<Hsla>,
+    /// Optional caution callout background.
     callout_caution_bg: Option<Hsla>,
+    /// Optional caution callout accent.
     callout_caution_border: Option<Hsla>,
+    /// Optional footnote group background.
     footnote_bg: Option<Hsla>,
+    /// Optional footnote group border.
     footnote_border: Option<Hsla>,
+    /// Optional footnote ordinal badge background.
     footnote_badge_bg: Option<Hsla>,
+    /// Optional footnote ordinal text color.
     footnote_badge_text: Option<Hsla>,
+    /// Optional footnote back-reference color.
     footnote_backref: Option<Hsla>,
+    /// Optional task checkbox border.
     task_checkbox_border: Option<Hsla>,
+    /// Optional unchecked task background.
     task_checkbox_bg: Option<Hsla>,
+    /// Optional checked task background.
     task_checkbox_checked_bg: Option<Hsla>,
+    /// Optional task checkmark color.
     task_checkbox_check: Option<Hsla>,
+    /// Optional horizontal separator color.
     separator_color: Option<Hsla>,
+    /// Optional code background.
     code_bg: Option<Hsla>,
+    /// Required code text color.
     code_text: Hsla,
+    /// Optional code language input background.
     code_language_input_bg: Option<Hsla>,
+    /// Optional code language input border.
     code_language_input_border: Option<Hsla>,
+    /// Optional code language input text color.
     code_language_input_text: Option<Hsla>,
+    /// Optional code language input placeholder color.
     code_language_input_placeholder: Option<Hsla>,
+    /// Optional syntax color for comments.
     code_syntax_comment: Option<Hsla>,
+    /// Optional syntax color for keywords.
     code_syntax_keyword: Option<Hsla>,
+    /// Optional syntax color for strings.
     code_syntax_string: Option<Hsla>,
+    /// Optional syntax color for numeric literals.
     code_syntax_number: Option<Hsla>,
+    /// Optional syntax color for types and modules.
     code_syntax_type: Option<Hsla>,
+    /// Optional syntax color for functions and constructors.
     code_syntax_function: Option<Hsla>,
+    /// Optional syntax color for constants.
     code_syntax_constant: Option<Hsla>,
+    /// Optional syntax color for variables and parameters.
     code_syntax_variable: Option<Hsla>,
+    /// Optional syntax color for properties and attributes.
     code_syntax_property: Option<Hsla>,
+    /// Optional syntax color for operators.
     code_syntax_operator: Option<Hsla>,
+    /// Optional syntax color for punctuation.
     code_syntax_punctuation: Option<Hsla>,
+    /// Optional native table grid color.
     table_border: Option<Hsla>,
+    /// Optional native table header background.
     table_header_bg: Option<Hsla>,
+    /// Optional native table body background.
     table_cell_bg: Option<Hsla>,
+    /// Optional active-cell outline color.
     table_cell_active_outline: Option<Hsla>,
+    /// Optional table-axis hover preview color.
     table_axis_preview_bg: Option<Hsla>,
+    /// Optional table-axis selection color.
     table_axis_selected_bg: Option<Hsla>,
+    /// Optional table append-control background.
     table_append_button_bg: Option<Hsla>,
+    /// Optional hovered table append-control background.
     table_append_button_hover: Option<Hsla>,
+    /// Optional table append-control text color.
     table_append_button_text: Option<Hsla>,
+    /// Optional image placeholder background.
     image_placeholder_bg: Option<Hsla>,
+    /// Optional image placeholder border.
     image_placeholder_border: Option<Hsla>,
+    /// Optional image placeholder text color.
     image_placeholder_text: Option<Hsla>,
+    /// Optional rendered-image caption color.
     image_caption_text: Option<Hsla>,
+    /// Required scrollbar thumb color.
     scrollbar_thumb: Hsla,
+    /// Required caret color.
     cursor: Hsla,
+    /// Required text-selection highlight.
     selection: Hsla,
+    /// Required modal backdrop color.
     dialog_backdrop: Hsla,
+    /// Required dialog surface color.
     dialog_surface: Hsla,
+    /// Required dialog border color.
     dialog_border: Hsla,
+    /// Required dialog title color.
     dialog_title: Hsla,
+    /// Required dialog body text color.
     dialog_body: Hsla,
+    /// Required muted dialog text color.
     dialog_muted: Hsla,
+    /// Required primary action background.
     dialog_primary_button_bg: Hsla,
+    /// Required hovered primary action background.
     dialog_primary_button_hover: Hsla,
+    /// Required primary action text color.
     dialog_primary_button_text: Hsla,
+    /// Required secondary action background.
     dialog_secondary_button_bg: Hsla,
+    /// Required hovered secondary action background.
     dialog_secondary_button_hover: Hsla,
+    /// Required secondary action text color.
     dialog_secondary_button_text: Hsla,
+    /// Required destructive action background.
     dialog_danger_button_bg: Hsla,
+    /// Required hovered destructive action background.
     dialog_danger_button_hover: Hsla,
+    /// Required destructive action text color.
     dialog_danger_button_text: Hsla,
+    /// Optional status bar background.
     status_bar_background: Option<Hsla>,
+    /// Optional primary status bar text color.
     status_bar_text: Option<Hsla>,
+    /// Optional secondary status bar text color.
     status_bar_text_dim: Option<Hsla>,
+    /// Optional status bar item hover background.
     status_bar_button_hover: Option<Hsla>,
 }
 
 impl<'de> Deserialize<'de> for ThemeColors {
+    /// Reads legacy-compatible tokens and fills absent optional colors with fixed values.
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -829,126 +921,241 @@ impl<'de> Deserialize<'de> for ThemeColors {
     }
 }
 
-/// Deserialization adapter for `ThemeDimensions` with backward-compatible defaults.
+/// Legacy-compatible dimension input with fixed defaults for newer optional tokens.
 #[derive(Deserialize)]
 struct ThemeDimensionsDe {
+    /// Required outer editor padding.
     editor_padding: f32,
+    /// Required gap between blocks.
     block_gap: f32,
+    /// Required minimum block height.
     block_min_height: f32,
+    /// Required vertical block padding.
     block_padding_y: f32,
+    /// Required horizontal block padding.
     block_padding_x: f32,
+    /// Required indent per nested list level.
     nested_block_indent: f32,
+    /// Required gap after a list marker.
     list_marker_gap: f32,
+    /// Required bullet marker column width.
     list_marker_width: f32,
+    /// Required ordered marker column width.
     ordered_list_marker_width: f32,
+    /// Optional square task checkbox size.
     task_checkbox_size: Option<f32>,
+    /// Optional task checkbox corner radius.
     task_checkbox_radius: Option<f32>,
+    /// Optional task checkbox border thickness.
     task_checkbox_border_width: Option<f32>,
+    /// Optional task checkmark font size.
     task_checkbox_check_size: Option<f32>,
+    /// Required padding below level-one heading text.
     h1_padding_bottom: f32,
+    /// Required margin below the level-one heading rule.
     h1_margin_bottom: f32,
+    /// Required caret width.
     cursor_width: f32,
+    /// Required underline thickness.
     underline_thickness: f32,
+    /// Required level-one heading rule thickness.
     h1_border_width: f32,
+    /// Required quotation guide thickness.
     quote_border_width: f32,
+    /// Required padding between quote guide and text.
     quote_padding_left: f32,
+    /// Optional horizontal callout padding.
     callout_padding_x: Option<f32>,
+    /// Optional vertical callout padding.
     callout_padding_y: Option<f32>,
+    /// Optional gap between callout body rows.
     callout_body_gap: Option<f32>,
+    /// Optional callout corner radius.
     callout_radius: Option<f32>,
+    /// Optional callout accent border thickness.
     callout_border_width: Option<f32>,
+    /// Optional gap between callout icon and title.
     callout_header_gap: Option<f32>,
+    /// Optional margin between callout header and body.
     callout_header_margin_bottom: Option<f32>,
+    /// Optional horizontal footnote group padding.
     footnote_padding_x: Option<f32>,
+    /// Optional vertical footnote group padding.
     footnote_padding_y: Option<f32>,
+    /// Optional footnote group corner radius.
     footnote_radius: Option<f32>,
+    /// Optional horizontal footnote badge padding.
     footnote_badge_padding_x: Option<f32>,
+    /// Optional vertical footnote badge padding.
     footnote_badge_padding_y: Option<f32>,
+    /// Optional horizontal separator thickness.
     separator_thickness: Option<f32>,
+    /// Optional horizontal separator inset.
     separator_inset_x: Option<f32>,
+    /// Optional vertical separator margin.
     separator_margin_y: Option<f32>,
+    /// Required vertical code-block padding.
     code_block_padding_y: f32,
+    /// Required horizontal code-block padding.
     code_block_padding_x: f32,
+    /// Required horizontal inline-code background padding.
     code_bg_pad_x: f32,
+    /// Required vertical inline-code background padding.
     code_bg_pad_y: f32,
+    /// Required inline-code background radius.
     code_bg_radius: f32,
+    /// Optional code language input width.
     code_language_input_width: Option<f32>,
+    /// Optional code language text layout height.
     code_language_input_height: Option<f32>,
+    /// Optional horizontal code language input padding.
     code_language_input_padding_x: Option<f32>,
+    /// Optional vertical code language input padding.
     code_language_input_padding_y: Option<f32>,
+    /// Optional code language input radius.
     code_language_input_radius: Option<f32>,
+    /// Optional code language input border thickness.
     code_language_input_border_width: Option<f32>,
+    /// Optional gap between code and its language input.
     code_language_input_gap: Option<f32>,
+    /// Optional horizontal native table cell padding.
     table_cell_padding_x: Option<f32>,
+    /// Optional vertical native table cell padding.
     table_cell_padding_y: Option<f32>,
+    /// Optional native table minimum cell height.
     table_cell_min_height: Option<f32>,
+    /// Optional append-column width and append-row height.
     table_append_button_extent: Option<f32>,
+    /// Optional table append-control inset.
     table_append_button_inset: Option<f32>,
+    /// Optional invisible table append-control hover overlap.
     table_append_activation_band: Option<f32>,
+    /// Optional image and image placeholder radius.
     image_radius: Option<f32>,
+    /// Optional root-paragraph image height limit.
     image_root_max_height: Option<f32>,
+    /// Optional table-cell image height limit.
     image_cell_max_height: Option<f32>,
+    /// Optional root-paragraph image placeholder height.
     image_root_placeholder_height: Option<f32>,
+    /// Optional table-cell image placeholder height.
     image_cell_placeholder_height: Option<f32>,
+    /// Optional image-to-caption gap.
     image_caption_gap: Option<f32>,
+    /// Required scrollbar thumb width.
     scrollbar_width: f32,
+    /// Required scrollbar right inset.
     scrollbar_right: f32,
+    /// Required viewport width where content-column shrinking begins.
     centered_shrink_start: f32,
+    /// Required viewport width where content reaches its minimum ratio.
     centered_shrink_end: f32,
+    /// Required minimum content-width fraction.
     centered_min_ratio: f32,
+    /// Required dialog width.
     dialog_width: f32,
+    /// Required dialog padding.
     dialog_padding: f32,
+    /// Required gap between dialog sections.
     dialog_gap: f32,
+    /// Required dialog corner radius.
     dialog_radius: f32,
+    /// Required dialog border thickness.
     dialog_border_width: f32,
+    /// Required dialog action height.
     dialog_button_height: f32,
+    /// Required gap between dialog actions.
     dialog_button_gap: f32,
+    /// Required horizontal dialog action padding.
     dialog_button_padding_x: f32,
+    /// Optional fallback menu bar height.
     menu_bar_height: Option<f32>,
+    /// Optional horizontal menu bar padding.
     menu_bar_padding_x: Option<f32>,
+    /// Optional vertical menu bar padding.
     menu_bar_padding_y: Option<f32>,
+    /// Optional gap between top-level menu buttons.
     menu_bar_gap: Option<f32>,
+    /// Optional top-level menu button minimum width.
     menu_bar_button_width: Option<f32>,
+    /// Optional top-level menu button height.
     menu_bar_button_height: Option<f32>,
+    /// Optional horizontal menu button padding.
     menu_bar_button_padding_x: Option<f32>,
+    /// Optional top-level menu button radius.
     menu_bar_button_radius: Option<f32>,
+    /// Optional menu label font size.
     menu_text_size: Option<f32>,
+    /// Optional fallback menu panel top position.
     menu_panel_top: Option<f32>,
+    /// Optional fallback menu panel width.
     menu_panel_width: Option<f32>,
+    /// Optional floating menu panel padding.
     menu_panel_padding: Option<f32>,
+    /// Optional gap between floating menu items.
     menu_panel_gap: Option<f32>,
+    /// Optional floating menu panel radius.
     menu_panel_radius: Option<f32>,
+    /// Optional floating menu item height.
     menu_item_height: Option<f32>,
+    /// Optional horizontal floating menu item padding.
     menu_item_padding_x: Option<f32>,
+    /// Optional floating menu item radius.
     menu_item_radius: Option<f32>,
+    /// Optional horizontal menu separator margin.
     menu_separator_margin_x: Option<f32>,
+    /// Optional vertical menu separator margin.
     menu_separator_margin_y: Option<f32>,
+    /// Optional menu separator thickness.
     menu_separator_height: Option<f32>,
+    /// Optional root insert menu width.
     context_menu_panel_width: Option<f32>,
+    /// Optional insert submenu width.
     context_menu_submenu_width: Option<f32>,
+    /// Optional context-menu-to-submenu gap.
     context_menu_submenu_gap: Option<f32>,
+    /// Optional table-axis context menu width.
     context_menu_axis_panel_width: Option<f32>,
+    /// Optional table insertion dialog maximum width.
     table_insert_dialog_width: Option<f32>,
+    /// Optional table stepper label-to-control gap.
     table_insert_stepper_gap: Option<f32>,
+    /// Optional square table stepper button size.
     table_insert_stepper_button_size: Option<f32>,
+    /// Optional table stepper value minimum width.
     table_insert_stepper_value_min_width: Option<f32>,
+    /// Optional horizontal table stepper value padding.
     table_insert_stepper_value_padding_x: Option<f32>,
+    /// Optional table stepper control radius.
     table_insert_stepper_radius: Option<f32>,
+    /// Optional view-mode toggle left inset.
     view_mode_toggle_left: Option<f32>,
+    /// Optional view-mode toggle bottom inset.
     view_mode_toggle_bottom: Option<f32>,
+    /// Optional horizontal view-mode toggle padding.
     view_mode_toggle_padding_x: Option<f32>,
+    /// Optional vertical view-mode toggle padding.
     view_mode_toggle_padding_y: Option<f32>,
+    /// Optional view-mode toggle minimum width.
     view_mode_toggle_min_width: Option<f32>,
+    /// Optional view-mode toggle radius.
     view_mode_toggle_radius: Option<f32>,
+    /// Optional view-mode toggle border thickness.
     view_mode_toggle_border_width: Option<f32>,
+    /// Optional view-mode toggle font size.
     view_mode_toggle_text_size: Option<f32>,
+    /// Optional status bar height.
     status_bar_height: Option<f32>,
+    /// Optional horizontal status bar padding.
     status_bar_padding_x: Option<f32>,
+    /// Optional status bar item gap.
     status_bar_item_gap: Option<f32>,
+    /// Optional status bar font size.
     status_bar_text_size: Option<f32>,
 }
 
 impl<'de> Deserialize<'de> for ThemeDimensions {
+    /// Reads core dimensions and fills absent newer tokens with compatibility defaults.
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -1082,16 +1289,22 @@ impl<'de> Deserialize<'de> for ThemeDimensions {
 /// Can be deserialized from JSON, allowing users to ship custom theme files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Theme {
+    /// Display name, also used to identify directly loaded built-in themes.
     pub name: String,
+    /// Semantic palette for document content and application chrome.
     pub colors: ThemeColors,
+    /// Layout, spacing, and control dimensions.
     pub dimensions: ThemeDimensions,
+    /// Text sizes, heading weights, and dialog typography.
     pub typography: ThemeTypography,
+    /// Theme-provided empty-content text.
     pub placeholders: Placeholders,
 }
 
 #[allow(unused)]
 impl Theme {
-    /// Returns the built-in fallback theme used when no custom theme is loaded.
+    /// Returns the built-in dark theme and default manager selection.
+    /// Its tokens are not necessarily the same as legacy deserialization fallbacks.
     pub fn default_theme() -> Self {
         Self {
             name: "Velotype".into(),
@@ -1437,7 +1650,8 @@ impl Theme {
         }
     }
 
-    /// Parses a theme from JSON text.
+    /// Parses a complete theme from strict JSON using legacy token compatibility defaults.
+    /// Partial import packs must be loaded through [`ThemeManager::import_theme_config`].
     pub fn from_json(json: &str) -> anyhow::Result<Self> {
         Ok(serde_json::from_str(json)?)
     }
@@ -1457,16 +1671,24 @@ impl Theme {
 /// Metadata for a selectable theme.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemeCatalogEntry {
+    /// Identifier accepted by [`ThemeManager::set_theme_by_id`].
     pub id: String,
+    /// Display label, including the creator for imported themes.
     pub name: String,
 }
 
+/// Persisted identifier of the built-in dark theme.
 const BUILTIN_THEME_VELOTYPE_ID: &str = "velotype";
+/// Display name used to recognize a directly loaded dark theme.
 const BUILTIN_THEME_VELOTYPE_NAME: &str = "Velotype";
+/// Persisted identifier of the built-in light theme.
 const BUILTIN_THEME_VELOTYPE_LIGHT_ID: &str = "velotype-light";
+/// Display name used to recognize a directly loaded light theme.
 const BUILTIN_THEME_VELOTYPE_LIGHT_NAME: &str = "Velotype Light";
+/// Transient identifier for directly loaded themes with a non-built-in name.
 const CUSTOM_THEME_ID: &str = "custom";
 
+/// Lists built-in themes in menu order, dark before light.
 fn builtin_theme_catalog() -> Vec<ThemeCatalogEntry> {
     vec![
         ThemeCatalogEntry {
@@ -1480,12 +1702,18 @@ fn builtin_theme_catalog() -> Vec<ThemeCatalogEntry> {
     ]
 }
 
+/// Imported theme metadata together with its fully resolved runtime tokens.
 #[derive(Debug, Clone)]
 struct CustomThemeEntry {
+    /// Stable `custom:` identifier derived from sanitized name and creator.
     id: String,
+    /// Pack-provided display name.
     name: String,
+    /// Pack creator included in the selectable label.
     creator: String,
+    /// Built-in theme whose tokens fill omitted pack values.
     base_theme_id: String,
+    /// Complete theme after merging the pack over its base.
     theme: Theme,
 }
 
@@ -1494,15 +1722,20 @@ struct CustomThemeEntry {
 /// Registered via [`Global`] so every component can access it through
 /// `cx.global::<ThemeManager>().current()` without passing props.
 pub struct ThemeManager {
+    /// Shared snapshot of the currently active tokens.
     current: Arc<Theme>,
+    /// Active built-in, imported, or transient theme identifier.
     current_theme_id: String,
+    /// Imported packs available for identifier-based selection.
     custom_themes: Vec<CustomThemeEntry>,
+    /// Built-in entries followed by imported theme labels.
     theme_catalog: Vec<ThemeCatalogEntry>,
 }
 
 impl Global for ThemeManager {}
 
 impl Default for ThemeManager {
+    /// Selects the built-in dark theme with an initially built-in-only catalog.
     fn default() -> Self {
         Self {
             current: Arc::new(Theme::default_theme()),
@@ -1523,7 +1756,8 @@ impl ThemeManager {
         Self::init_with_theme_id(cx, &theme_id);
     }
 
-    /// Installs a specific theme into GPUI's global state.
+    /// Loads persisted packs and installs the requested theme in GPUI global state.
+    /// Unknown IDs leave the dark default selected; pack-loading errors are logged.
     pub fn init_with_theme_id(cx: &mut App, theme_id: &str) {
         let mut manager = Self::default();
         if let Ok(dirs) = VelotypeConfigDirs::from_system()
@@ -1540,9 +1774,7 @@ impl ThemeManager {
         &self.current
     }
 
-    /// Returns an `Arc` clone of the currently active theme — O(1), no
-    /// per-field copy. Use this in hot render paths instead of cloning the
-    /// whole `Theme` struct (which has ~200 fields and a `String` name).
+    /// Returns a shared snapshot of the active theme without copying its fields.
     pub fn current_arc(&self) -> Arc<Theme> {
         self.current.clone()
     }
@@ -1557,7 +1789,7 @@ impl ThemeManager {
         &self.theme_catalog
     }
 
-    /// Loads and activates a theme from a file.
+    /// Loads a complete JSON theme without persisting it or adding a catalog entry.
     pub fn load_file(&mut self, path: impl AsRef<Path>) -> anyhow::Result<()> {
         let theme = Theme::from_file(path)?;
         self.current_theme_id = self.theme_id_for_loaded_theme(&theme);
@@ -1565,7 +1797,7 @@ impl ThemeManager {
         Ok(())
     }
 
-    /// Loads and activates a theme from JSON text.
+    /// Activates a complete JSON theme without persisting it or adding a catalog entry.
     pub fn load_json(&mut self, json: &str) -> anyhow::Result<()> {
         let theme = Theme::from_json(json)?;
         self.current_theme_id = self.theme_id_for_loaded_theme(&theme);
@@ -1585,7 +1817,8 @@ impl ThemeManager {
         self.current_theme_id = BUILTIN_THEME_VELOTYPE_ID.into();
     }
 
-    /// Activates a theme by identifier.
+    /// Activates a recognized theme ID and returns `true`, even if already selected.
+    /// Unknown IDs return `false` and leave the active theme unchanged.
     pub fn set_theme_by_id(&mut self, theme_id: &str) -> bool {
         match theme_id {
             id if id == BUILTIN_THEME_VELOTYPE_ID => {
@@ -1615,6 +1848,7 @@ impl ThemeManager {
         self.import_theme_config_with_dirs(path, &dirs)
     }
 
+    /// Normalizes, persists, registers, and selects a pack, defaulting its base from selection.
     fn import_theme_config_with_dirs(
         &mut self,
         path: impl AsRef<Path>,
@@ -1641,6 +1875,8 @@ impl ThemeManager {
         Ok(imported_id)
     }
 
+    /// Loads packs sorted by name/creator, logging invalid files and skipping them.
+    /// Packs without a valid base use the dark theme during directory loading.
     fn load_custom_themes_from_dirs(&mut self, dirs: &VelotypeConfigDirs) -> anyhow::Result<()> {
         let themes_dir = dirs.themes_dir();
         if !themes_dir.exists() {
@@ -1672,6 +1908,7 @@ impl ThemeManager {
         Ok(())
     }
 
+    /// Replaces a matching pack ID or appends it, then refreshes selectable labels.
     fn upsert_custom_theme(&mut self, entry: CustomThemeEntry) {
         if let Some(existing) = self
             .custom_themes
@@ -1685,6 +1922,7 @@ impl ThemeManager {
         self.rebuild_theme_catalog();
     }
 
+    /// Rebuilds built-in-first menu entries with imported name/creator labels.
     fn rebuild_theme_catalog(&mut self) {
         let mut catalog = builtin_theme_catalog();
         catalog.extend(self.custom_themes.iter().map(|entry| ThemeCatalogEntry {
@@ -1694,6 +1932,7 @@ impl ThemeManager {
         self.theme_catalog = catalog;
     }
 
+    /// Infers a built-in ID solely from the name, otherwise returning the transient ID.
     fn theme_id_for_loaded_theme(&self, theme: &Theme) -> String {
         if theme.name == BUILTIN_THEME_VELOTYPE_NAME {
             BUILTIN_THEME_VELOTYPE_ID.into()
@@ -1704,6 +1943,7 @@ impl ThemeManager {
         }
     }
 
+    /// Uses the current built-in theme or imported pack's base, falling back to dark.
     fn theme_import_base_theme_id(&self) -> String {
         match self.current_theme_id.as_str() {
             BUILTIN_THEME_VELOTYPE_LIGHT_ID => BUILTIN_THEME_VELOTYPE_LIGHT_ID.into(),
@@ -1718,10 +1958,13 @@ impl ThemeManager {
     }
 }
 
+/// Resolves a pack and normalized JSON using dark as the fallback base.
 fn custom_theme_from_value(value: Value) -> anyhow::Result<(CustomThemeEntry, Value)> {
     custom_theme_from_value_with_default_base(value, BUILTIN_THEME_VELOTYPE_ID)
 }
 
+/// Validates pack metadata and merges known nonempty tokens over a built-in base.
+/// Returns resolved runtime data and the filtered patch for persistence.
 fn custom_theme_from_value_with_default_base(
     mut value: Value,
     default_base_theme_id: &str,
@@ -1792,6 +2035,7 @@ fn custom_theme_from_value_with_default_base(
     ))
 }
 
+/// Uses a valid explicit built-in base, then the caller's valid base, then dark.
 fn resolved_custom_theme_base_id<'a>(
     object: &'a Map<String, Value>,
     default_base_theme_id: &'a str,
@@ -1810,10 +2054,12 @@ fn resolved_custom_theme_base_id<'a>(
         })
 }
 
+/// Recognizes the exact dark and light built-in identifiers.
 fn is_builtin_theme_id(theme_id: &str) -> bool {
     theme_id == BUILTIN_THEME_VELOTYPE_ID || theme_id == BUILTIN_THEME_VELOTYPE_LIGHT_ID
 }
 
+/// Constructs the light base only for its exact ID, otherwise the dark base.
 fn custom_theme_base_theme(theme_id: &str) -> Theme {
     if theme_id == BUILTIN_THEME_VELOTYPE_LIGHT_ID {
         Theme::light_theme()
@@ -1822,6 +2068,8 @@ fn custom_theme_base_theme(theme_id: &str) -> Theme {
     }
 }
 
+/// Filters object keys recursively against a serialized base theme's shape.
+/// Nonobject values are retained for subsequent deserialization to validate.
 fn filter_json_by_schema(value: &Value, schema: &Value) -> Value {
     match (value, schema) {
         (Value::Object(value_object), Value::Object(schema_object)) => {
@@ -1837,6 +2085,7 @@ fn filter_json_by_schema(value: &Value, schema: &Value) -> Value {
     }
 }
 
+/// Extracts a required trimmed nonblank string, reporting a field-specific error.
 fn required_string(object: &Map<String, Value>, key: &str) -> anyhow::Result<String> {
     let Some(value) = object.get(key) else {
         bail!("missing required field '{key}'");

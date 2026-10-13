@@ -3,6 +3,7 @@
 use super::*;
 
 impl Editor {
+    /// Returns a collapsed selection at the start of the source document.
     pub(super) fn empty_selection_snapshot() -> UndoSelectionSnapshot {
         UndoSelectionSnapshot {
             range: 0..0,
@@ -10,6 +11,7 @@ impl Editor {
         }
     }
 
+    /// Captures the current selection as source offsets, including its direction.
     pub(super) fn capture_source_selection_snapshot(&self, cx: &App) -> UndoSelectionSnapshot {
         if let Some(snapshot) = self.cross_block_source_selection_snapshot(cx) {
             return snapshot;
@@ -56,6 +58,7 @@ impl Editor {
         }
     }
 
+    /// Captures document source and selection at the current instant.
     pub(super) fn capture_history_entry(&self, kind: UndoCaptureKind, cx: &App) -> HistoryEntry {
         HistoryEntry {
             source_text: self.current_document_source(cx),
@@ -65,6 +68,7 @@ impl Editor {
         }
     }
 
+    /// Captures the last stable source and selection before an edit changes them.
     pub(super) fn capture_stable_history_entry(&self, kind: UndoCaptureKind) -> HistoryEntry {
         HistoryEntry {
             source_text: self.last_stable_source_text.clone(),
@@ -74,6 +78,7 @@ impl Editor {
         }
     }
 
+    /// Stages the current document for undo unless a capture or restore is underway.
     pub(super) fn prepare_undo_capture(&mut self, kind: UndoCaptureKind, cx: &mut Context<Self>) {
         if self.history_restore_in_progress || self.pending_undo_capture.is_some() {
             return;
@@ -83,6 +88,7 @@ impl Editor {
         });
     }
 
+    /// Stages the last stable document for edits already applied to live blocks.
     pub(super) fn prepare_undo_capture_from_stable_snapshot(&mut self, kind: UndoCaptureKind) {
         if self.history_restore_in_progress || self.pending_undo_capture.is_some() {
             return;
@@ -92,11 +98,13 @@ impl Editor {
         });
     }
 
+    /// Refreshes the source and selection used by later stable-snapshot captures.
     pub(super) fn refresh_stable_document_snapshot(&mut self, cx: &App) {
         self.last_selection_snapshot = self.capture_source_selection_snapshot(cx);
         self.last_stable_source_text = self.current_document_source(cx);
     }
 
+    /// Commits a changed capture, coalescing nearby text edits and invalidating redo.
     pub(super) fn finalize_pending_undo_capture(&mut self, cx: &mut Context<Self>) {
         if self.history_restore_in_progress {
             self.pending_undo_capture = None;
@@ -136,6 +144,11 @@ impl Editor {
         self.refresh_stable_document_snapshot(cx);
     }
 
+    /// Restores a source-based selection in the active view mode.
+    ///
+    /// Rendered mode falls back to the nearest representable caret when no exact mapping exists.
+    /// Source mode clips restored offsets to valid UTF-8 boundaries in the
+    /// current source block.
     pub(super) fn apply_selection_snapshot_in_current_mode(
         &mut self,
         snapshot: &UndoSelectionSnapshot,
@@ -146,8 +159,10 @@ impl Editor {
                 let Some(block) = self.document.first_root().cloned() else {
                     return;
                 };
-                let len = block.read(cx).visible_len();
-                let selected_range = snapshot.range.start.min(len)..snapshot.range.end.min(len);
+                let selected_range = crate::text_offsets::normalize_utf8_range(
+                    block.read(cx).display_text(),
+                    snapshot.range.clone(),
+                );
                 block.update(cx, move |block, cx| {
                     block.selected_range = selected_range.clone();
                     block.selection_reversed = snapshot.reversed;
@@ -252,6 +267,7 @@ impl Editor {
         }
     }
 
+    /// Tests membership in a source range, including its end boundary.
     pub(super) fn source_range_contains(range: &std::ops::Range<usize>, offset: usize) -> bool {
         if range.start == range.end {
             offset == range.start
@@ -260,6 +276,7 @@ impl Editor {
         }
     }
 
+    /// Returns an offset's distance from an inclusive source range.
     pub(super) fn source_offset_distance(range: &std::ops::Range<usize>, offset: usize) -> usize {
         if Self::source_range_contains(range, offset) {
             0
@@ -270,6 +287,7 @@ impl Editor {
         }
     }
 
+    /// Rebuilds the active view from an entry and restores its selection and scroll target.
     pub(super) fn restore_history_entry(&mut self, entry: &HistoryEntry, cx: &mut Context<Self>) {
         match self.view_mode {
             ViewMode::Rendered => {
@@ -296,6 +314,7 @@ impl Editor {
         self.refresh_stable_document_snapshot(cx);
     }
 
+    /// Reparses rendered quotes while preserving the source-based selection.
     pub(super) fn normalize_rendered_quote_structure(&mut self, cx: &mut Context<Self>) {
         if self.view_mode != ViewMode::Rendered {
             return;
@@ -316,6 +335,7 @@ impl Editor {
         self.last_scroll_viewport_size = None;
     }
 
+    /// Restores the preceding document state and pushes the current one onto redo.
     pub(super) fn undo_document(&mut self, cx: &mut Context<Self>) {
         let Some(entry) = self.undo_history.pop() else {
             return;
@@ -335,6 +355,7 @@ impl Editor {
         cx.notify();
     }
 
+    /// Restores the next document state and pushes the current one onto undo.
     pub(super) fn redo_document(&mut self, cx: &mut Context<Self>) {
         let Some(entry) = self.redo_history.pop() else {
             return;

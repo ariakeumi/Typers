@@ -8,6 +8,8 @@
 use super::html::is_inline_tag;
 use super::table::collect_pipeless_table_region;
 
+/// Selects per-line paste for at least two nonblank, nonstructural physical lines.
+/// Table headers with matching delimiters always use structural import instead.
 pub(crate) fn should_split_plain_multiline_paste(lines: &[String]) -> bool {
     // A pipeless GFM table reads cell-by-cell as plain lines, so detect the
     // header-plus-delimiter shape explicitly and leave the whole paste to the
@@ -23,6 +25,7 @@ pub(crate) fn should_split_plain_multiline_paste(lines: &[String]) -> bool {
             .all(|line| is_plain_inline_paste_line(line))
 }
 
+/// Applies conservative line-prefix checks, allowing only closed inline HTML at `<`.
 fn is_plain_inline_paste_line(line: &str) -> bool {
     let trimmed = line.trim_start();
     if trimmed.is_empty() {
@@ -47,16 +50,16 @@ fn is_plain_inline_paste_line(line: &str) -> bool {
         || is_simple_reference_definition(trimmed))
 }
 
-/// Matches a setext underline run (`=====` or `-----`). The `-` form is already
-/// covered by `is_simple_separator`, but `=` is not a thematic break, so without
-/// this a `text` + `=====` pair would be split into two plain paragraphs instead
-/// of routed to the structural importer as an H1.
+/// Recognizes runs of at least three `=` or `-` characters for structural paste routing.
+/// This heuristic does not recognize the shorter underlines accepted by CommonMark.
 fn is_setext_underline(trimmed: &str) -> bool {
     let core = trimmed.trim_end();
     core.len() >= 3
         && (core.bytes().all(|byte| byte == b'=') || core.bytes().all(|byte| byte == b'-'))
 }
 
+/// Checks for a leading whitelisted inline tag and a textual same-line closing tag.
+/// Rejects script/style substrings; this routing heuristic is not HTML sanitization.
 fn is_closed_inline_html_line(trimmed: &str) -> bool {
     let Some(name) = leading_html_tag_name(trimmed) else {
         return false;
@@ -71,6 +74,7 @@ fn is_closed_inline_html_line(trimmed: &str) -> bool {
         && lower.contains(&format!("</{name}>"))
 }
 
+/// Reads a leading opening tag name in lowercase, requiring an attribute/tag delimiter.
 fn leading_html_tag_name(trimmed: &str) -> Option<String> {
     let tagged = trimmed.strip_prefix('<')?;
     if tagged.starts_with('/') || tagged.starts_with('!') || tagged.starts_with('?') {
@@ -91,6 +95,7 @@ fn leading_html_tag_name(trimmed: &str) -> Option<String> {
     matches!(next, '>' | ' ' | '\t' | '/').then(|| name.to_ascii_lowercase())
 }
 
+/// Recognizes bullet markers or one-to-nine-digit ordered markers followed by whitespace.
 fn is_simple_list_marker(trimmed: &str) -> bool {
     let bytes = trimmed.as_bytes();
     if bytes.len() >= 2 && matches!(bytes[0], b'-' | b'*' | b'+') && bytes[1].is_ascii_whitespace()
@@ -112,6 +117,7 @@ fn is_simple_list_marker(trimmed: &str) -> bool {
             .is_some_and(|byte| byte.is_ascii_whitespace())
 }
 
+/// Recognizes one to six heading markers followed by ASCII whitespace.
 fn is_simple_atx_heading(trimmed: &str) -> bool {
     let marker_count = trimmed.bytes().take_while(|byte| *byte == b'#').count();
     (1..=6).contains(&marker_count)
@@ -121,6 +127,7 @@ fn is_simple_atx_heading(trimmed: &str) -> bool {
             .is_some_and(|byte| byte.is_ascii_whitespace())
 }
 
+/// Recognizes three or more identical thematic-break markers, ignoring ASCII whitespace.
 fn is_simple_separator(trimmed: &str) -> bool {
     let without_spaces = trimmed
         .bytes()
@@ -131,6 +138,7 @@ fn is_simple_separator(trimmed: &str) -> bool {
         && matches!(without_spaces[0], b'-' | b'*' | b'_')
 }
 
+/// Conservatively flags bracket-prefixed lines containing a definition delimiter.
 fn is_simple_reference_definition(trimmed: &str) -> bool {
     trimmed.starts_with('[') && trimmed.contains("]:")
 }

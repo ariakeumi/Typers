@@ -6,6 +6,7 @@
 use std::time::Duration;
 
 use gpui::*;
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::CollapsedCaretAffinity;
 use super::{
@@ -21,6 +22,7 @@ use crate::components::{
 };
 
 impl Block {
+    /// Extracts the first image payload from clipboard entries.
     fn pasted_image_source_from_clipboard(item: &ClipboardItem) -> Option<PastedImageSource> {
         item.entries().iter().find_map(|entry| match entry {
             ClipboardEntry::Image(image) => Some(PastedImageSource::ClipboardImage(image.clone())),
@@ -28,6 +30,7 @@ impl Block {
         })
     }
 
+    /// Accepts a single-line clipboard string naming an existing local image.
     fn pasted_image_source_from_text(text: &str) -> Option<PastedImageSource> {
         let trimmed = text.trim();
         if trimmed.is_empty() || trimmed.contains('\n') || trimmed.contains('\r') {
@@ -65,6 +68,7 @@ impl Block {
         Some(path)
     }
 
+    /// Checks that a path is an existing file with a supported image extension.
     fn is_supported_local_image_path(path: &std::path::Path) -> bool {
         if !path.is_file() {
             return false;
@@ -78,6 +82,7 @@ impl Block {
         )
     }
 
+    /// Splits the title around the clean selection for image insertion.
     fn paste_image_split(&self) -> (InlineTextTree, InlineTextTree) {
         let clean_selected = self.selection_clean_range();
         let (leading, tail) = self.record.title.split_at(clean_selected.start);
@@ -85,20 +90,24 @@ impl Block {
         (leading, trailing)
     }
 
+    /// Returns whether a quote has no children or embedded newline.
     fn is_leaf_quote(&self) -> bool {
         self.kind() == BlockKind::Quote
             && self.children.is_empty()
             && !self.display_text().contains('\n')
     }
 
+    /// Returns whether a callout has no child blocks.
     fn is_leaf_callout(&self) -> bool {
         matches!(self.kind(), BlockKind::Callout(_)) && self.children.is_empty()
     }
 
+    /// Returns whether an unselected leaf quote has no visible text.
     fn is_empty_leaf_quote(&self) -> bool {
         self.is_leaf_quote() && self.selected_range.is_empty() && self.is_empty()
     }
 
+    /// Converts a leaf callout at its start into a quote containing its header.
     fn downgrade_leaf_callout_to_quote_at_start(&mut self, cx: &mut Context<Self>) -> bool {
         if !self.is_leaf_callout() || !self.selected_range.is_empty() || self.cursor_offset() != 0 {
             return false;
@@ -121,6 +130,7 @@ impl Block {
         true
     }
 
+    /// Converts an empty leaf quote to a paragraph when eligible.
     fn downgrade_empty_leaf_quote_to_paragraph(&mut self, cx: &mut Context<Self>) -> bool {
         if self.is_empty_leaf_quote() {
             self.convert_to_paragraph(cx);
@@ -129,18 +139,21 @@ impl Block {
         false
     }
 
+    /// Keeps the column append control visible across its edge, zone, or button.
     fn table_append_column_should_stay_visible(&self) -> bool {
         self.table_append_column_edge_hovered
             || self.table_append_column_zone_hovered
             || self.table_append_column_button_hovered
     }
 
+    /// Keeps the row append control visible across its edge, zone, or button.
     fn table_append_row_should_stay_visible(&self) -> bool {
         self.table_append_row_edge_hovered
             || self.table_append_row_zone_hovered
             || self.table_append_row_button_hovered
     }
 
+    /// Hides the column append control after a short hover-exit delay.
     fn schedule_table_append_column_close(&mut self, cx: &mut Context<Self>) {
         if !self.table_append_column_hovered {
             return;
@@ -162,6 +175,7 @@ impl Block {
         ));
     }
 
+    /// Hides the row append control after a short hover-exit delay.
     fn schedule_table_append_row_close(&mut self, cx: &mut Context<Self>) {
         if !self.table_append_row_hovered {
             return;
@@ -183,6 +197,7 @@ impl Block {
         ));
     }
 
+    /// Updates one or more column append hover parts and the delayed close.
     fn set_table_append_column_hover_part(
         &mut self,
         edge_hovered: Option<bool>,
@@ -226,6 +241,7 @@ impl Block {
         }
     }
 
+    /// Updates one or more row append hover parts and the delayed close.
     fn set_table_append_row_hover_part(
         &mut self,
         edge_hovered: Option<bool>,
@@ -280,6 +296,7 @@ impl Block {
         is_bare_fence.then(|| line_start.saturating_sub(1))
     }
 
+    /// Handles Enter using table, source, structural, and rich-text semantics.
     pub(crate) fn on_newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
         // Enter is ordered from special editors to rich-text splitting:
         // table/source/code/quote-like blocks keep local newline semantics,
@@ -430,6 +447,7 @@ impl Block {
         });
     }
 
+    /// Deletes backward or requests an editor-level structural change at start.
     pub(crate) fn on_delete_back(
         &mut self,
         _: &DeleteBack,
@@ -525,6 +543,7 @@ impl Block {
         self.replace_text_in_range(None, "", window, cx);
     }
 
+    /// Deletes forward, with kind-specific conversion in rendered mode.
     pub(crate) fn on_delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_table_cell() {
             if self.selected_range.is_empty() {
@@ -563,6 +582,7 @@ impl Block {
         self.replace_text_in_range(None, "", window, cx);
     }
 
+    /// Deletes to the previous word boundary, deferring start-of-block cases.
     pub(crate) fn on_word_delete_back(
         &mut self,
         _: &WordDeleteBack,
@@ -581,6 +601,7 @@ impl Block {
         self.replace_text_in_range(None, "", window, cx);
     }
 
+    /// Deletes to the next word boundary, deferring end-of-block cases.
     pub(crate) fn on_word_delete_forward(
         &mut self,
         _: &WordDeleteForward,
@@ -599,6 +620,7 @@ impl Block {
         self.replace_text_in_range(None, "", window, cx);
     }
 
+    /// Indents a list, inserts spaces, or advances to the next table cell.
     pub(crate) fn on_indent_block(
         &mut self,
         _: &IndentBlock,
@@ -618,6 +640,7 @@ impl Block {
         }
     }
 
+    /// Outdents a list or moves to the previous table cell.
     pub(crate) fn on_outdent_block(
         &mut self,
         _: &OutdentBlock,
@@ -633,6 +656,7 @@ impl Block {
         }
     }
 
+    /// Routes an unmodified Tab or Shift-Tab to indent/outdent handling.
     pub(crate) fn on_block_key_down(
         &mut self,
         event: &KeyDownEvent,
@@ -660,6 +684,7 @@ impl Block {
         cx.stop_propagation();
     }
 
+    /// Moves up a visual row or asks the editor to focus the previous block.
     pub(crate) fn on_focus_prev(
         &mut self,
         _: &FocusPrev,
@@ -678,6 +703,7 @@ impl Block {
         }
     }
 
+    /// Moves down a visual row, code-language field, table cell, or block.
     pub(crate) fn on_focus_next(
         &mut self,
         _: &FocusNext,
@@ -704,6 +730,7 @@ impl Block {
         }
     }
 
+    /// Moves left through projected syntax or grapheme boundaries.
     pub(crate) fn on_move_left(
         &mut self,
         _: &MoveLeft,
@@ -731,6 +758,7 @@ impl Block {
         }
     }
 
+    /// Moves right through projected syntax or grapheme boundaries.
     pub(crate) fn on_move_right(
         &mut self,
         _: &MoveRight,
@@ -759,14 +787,17 @@ impl Block {
         }
     }
 
+    /// Moves the caret to the start of visible block text.
     pub(crate) fn on_home(&mut self, _: &Home, _window: &mut Window, cx: &mut Context<Self>) {
         self.move_to(0, cx);
     }
 
+    /// Moves the caret to the end of visible block text.
     pub(crate) fn on_end(&mut self, _: &End, _window: &mut Window, cx: &mut Context<Self>) {
         self.move_to(self.visible_len(), cx);
     }
 
+    /// Extends selection left through projection or grapheme boundaries.
     pub(crate) fn on_select_left(
         &mut self,
         _: &SelectLeft,
@@ -780,6 +811,7 @@ impl Block {
         }
     }
 
+    /// Extends selection right through projection or grapheme boundaries.
     pub(crate) fn on_select_right(
         &mut self,
         _: &SelectRight,
@@ -793,6 +825,7 @@ impl Block {
         }
     }
 
+    /// Moves the caret to the preceding word start.
     pub(crate) fn on_word_move_left(
         &mut self,
         _: &WordMoveLeft,
@@ -802,6 +835,7 @@ impl Block {
         self.move_to(self.previous_word_start(self.cursor_offset()), cx);
     }
 
+    /// Moves the caret to the next word start.
     pub(crate) fn on_word_move_right(
         &mut self,
         _: &WordMoveRight,
@@ -811,6 +845,7 @@ impl Block {
         self.move_to(self.next_word_start(self.cursor_offset()), cx);
     }
 
+    /// Extends selection to the preceding word start.
     pub(crate) fn on_word_select_left(
         &mut self,
         _: &WordSelectLeft,
@@ -820,6 +855,7 @@ impl Block {
         self.select_to(self.previous_word_start(self.cursor_offset()), cx);
     }
 
+    /// Extends selection to the next word start.
     pub(crate) fn on_word_select_right(
         &mut self,
         _: &WordSelectRight,
@@ -829,6 +865,7 @@ impl Block {
         self.select_to(self.next_word_start(self.cursor_offset()), cx);
     }
 
+    /// Requests focus at the start of the previous visible block.
     pub(crate) fn on_block_up(
         &mut self,
         _: &BlockUp,
@@ -838,6 +875,7 @@ impl Block {
         cx.emit(BlockEvent::RequestBlockUp);
     }
 
+    /// Requests focus at the start of the next visible block.
     pub(crate) fn on_block_down(
         &mut self,
         _: &BlockDown,
@@ -847,11 +885,13 @@ impl Block {
         cx.emit(BlockEvent::RequestBlockDown);
     }
 
+    /// Selects all visible text within this block.
     fn select_all_text(&mut self, cx: &mut Context<Self>) {
         self.move_to(0, cx);
         self.select_to(self.visible_len(), cx);
     }
 
+    /// Selects local source text or delegates rendered select-all to the editor.
     pub(crate) fn on_select_all(
         &mut self,
         _: &SelectAll,
@@ -865,6 +905,7 @@ impl Block {
         }
     }
 
+    /// Extends selection to the start of visible text.
     pub(crate) fn on_select_home(
         &mut self,
         _: &SelectHome,
@@ -874,6 +915,7 @@ impl Block {
         self.select_to(0, cx);
     }
 
+    /// Extends selection to the end of visible text.
     pub(crate) fn on_select_end(
         &mut self,
         _: &SelectEnd,
@@ -883,6 +925,7 @@ impl Block {
         self.select_to(self.visible_len(), cx);
     }
 
+    /// Copies the selected visible text to the clipboard.
     pub(crate) fn on_copy(&mut self, _: &Copy, _window: &mut Window, cx: &mut Context<Self>) {
         if !self.selected_range.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(
@@ -891,6 +934,7 @@ impl Block {
         }
     }
 
+    /// Copies and removes selected visible text as a discrete edit.
     pub(crate) fn on_cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
         if !self.selected_range.is_empty() {
             self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
@@ -901,6 +945,7 @@ impl Block {
         }
     }
 
+    /// Routes clipboard images, multiline text, or local text replacement.
     pub(crate) fn on_paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if self.kind().is_separator() && !self.uses_raw_text_editing() {
             return;
@@ -986,6 +1031,7 @@ impl Block {
         }
     }
 
+    /// Returns focus from the code-language field to code content on Enter.
     pub(crate) fn on_code_language_newline(
         &mut self,
         _: &Newline,
@@ -1000,6 +1046,7 @@ impl Block {
         cx.notify();
     }
 
+    /// Returns focus from the code-language field to code content on dismiss.
     pub(crate) fn on_code_language_dismiss(
         &mut self,
         _: &DismissTransientUi,
@@ -1014,6 +1061,7 @@ impl Block {
         cx.notify();
     }
 
+    /// Deletes a selected range or previous grapheme in the language field.
     pub(crate) fn on_code_language_delete_back(
         &mut self,
         _: &DeleteBack,
@@ -1037,6 +1085,7 @@ impl Block {
         );
     }
 
+    /// Deletes a selected range or next grapheme in the language field.
     pub(crate) fn on_code_language_delete(
         &mut self,
         _: &Delete,
@@ -1060,6 +1109,7 @@ impl Block {
         );
     }
 
+    /// Moves the language-field caret left or collapses its selection.
     pub(crate) fn on_code_language_move_left(
         &mut self,
         _: &MoveLeft,
@@ -1080,6 +1130,7 @@ impl Block {
         }
     }
 
+    /// Moves the language-field caret right or collapses its selection.
     pub(crate) fn on_code_language_move_right(
         &mut self,
         _: &MoveRight,
@@ -1100,6 +1151,7 @@ impl Block {
         }
     }
 
+    /// Moves the language-field caret to its start.
     pub(crate) fn on_code_language_home(
         &mut self,
         _: &Home,
@@ -1113,6 +1165,7 @@ impl Block {
         self.move_code_language_to(0, cx);
     }
 
+    /// Moves the language-field caret to its end.
     pub(crate) fn on_code_language_end(
         &mut self,
         _: &End,
@@ -1126,6 +1179,7 @@ impl Block {
         self.move_code_language_to(self.code_language_text().len(), cx);
     }
 
+    /// Extends language-field selection one grapheme left.
     pub(crate) fn on_code_language_select_left(
         &mut self,
         _: &SelectLeft,
@@ -1142,6 +1196,7 @@ impl Block {
         );
     }
 
+    /// Extends language-field selection one grapheme right.
     pub(crate) fn on_code_language_select_right(
         &mut self,
         _: &SelectRight,
@@ -1158,6 +1213,7 @@ impl Block {
         );
     }
 
+    /// Selects the entire code-language field.
     pub(crate) fn on_code_language_select_all(
         &mut self,
         _: &SelectAll,
@@ -1172,6 +1228,7 @@ impl Block {
         self.select_code_language_to(self.code_language_text().len(), cx);
     }
 
+    /// Copies the selected code-language text.
     pub(crate) fn on_code_language_copy(
         &mut self,
         _: &Copy,
@@ -1189,6 +1246,7 @@ impl Block {
         }
     }
 
+    /// Copies and removes the selected code-language text.
     pub(crate) fn on_code_language_cut(
         &mut self,
         _: &Cut,
@@ -1213,6 +1271,7 @@ impl Block {
         }
     }
 
+    /// Replaces language-field selection with clipboard text.
     pub(crate) fn on_code_language_paste(
         &mut self,
         _: &Paste,
@@ -1234,6 +1293,7 @@ impl Block {
         }
     }
 
+    /// Moves focus upward from the language field to code content.
     pub(crate) fn on_code_language_focus_content(
         &mut self,
         _: &FocusPrev,
@@ -1248,6 +1308,7 @@ impl Block {
         cx.notify();
     }
 
+    /// Requests the next block when moving down from the language field.
     pub(crate) fn on_code_language_focus_next(
         &mut self,
         _: &FocusNext,
@@ -1264,6 +1325,7 @@ impl Block {
         cx.emit(BlockEvent::RequestFocusNext { preferred_x: None });
     }
 
+    /// Consumes indent while the language field is focused.
     pub(crate) fn on_code_language_indent(
         &mut self,
         _: &IndentBlock,
@@ -1275,6 +1337,7 @@ impl Block {
         }
     }
 
+    /// Consumes outdent while the language field is focused.
     pub(crate) fn on_code_language_outdent(
         &mut self,
         _: &OutdentBlock,
@@ -1286,6 +1349,7 @@ impl Block {
         }
     }
 
+    /// Focuses the language field and starts or extends a pointer selection.
     pub(crate) fn on_code_language_mouse_down(
         &mut self,
         event: &MouseDownEvent,
@@ -1303,6 +1367,7 @@ impl Block {
         }
     }
 
+    /// Ends language-field pointer selection and consumes the release.
     pub(crate) fn on_code_language_mouse_up(
         &mut self,
         _: &MouseUpEvent,
@@ -1313,6 +1378,7 @@ impl Block {
         self.code_language_is_selecting = false;
     }
 
+    /// Clears language-field drag state after a release outside its bounds.
     pub(crate) fn on_code_language_mouse_up_out(
         &mut self,
         _: &MouseUpEvent,
@@ -1327,6 +1393,7 @@ impl Block {
         }
     }
 
+    /// Extends language-field selection only during an active drag.
     pub(crate) fn on_code_language_mouse_move(
         &mut self,
         event: &MouseMoveEvent,
@@ -1349,6 +1416,7 @@ impl Block {
         }
     }
 
+    /// Handles block focus, caret placement, word selection, or image expansion.
     pub(crate) fn on_mouse_down(
         &mut self,
         event: &MouseDownEvent,
@@ -1371,6 +1439,27 @@ impl Block {
 
         let offset = self.index_for_mouse_position(event.position);
         let was_focused = self.focus_handle.is_focused(window);
+
+        // Double click to select a word
+        if event.button == MouseButton::Left && event.click_count == 2 {
+            let text = self.display_text();
+
+            let range = text
+                .split_word_bound_indices()
+                .find(|(start, segment)| {
+                    let end = start + segment.len();
+                    *start <= offset && offset < end
+                })
+                .map(|(start, segment)| start..start + segment.len());
+
+            if let Some(range) = range {
+                self.selected_range = range;
+            }
+
+            cx.notify();
+
+            return;
+        }
 
         // Cmd/Ctrl+click follows a rendered link instead of editing it, so the
         // block is neither focused nor selected; the link opens on mouse-up.
@@ -1442,6 +1531,7 @@ impl Block {
         });
     }
 
+    /// Ends selection and follows modified-click links or double-click targets.
     pub(crate) fn on_mouse_up(
         &mut self,
         event: &MouseUpEvent,
@@ -1486,6 +1576,7 @@ impl Block {
         }
     }
 
+    /// Focuses the block before activating its footnote back-reference.
     pub(crate) fn on_footnote_backref_mouse_down(
         &mut self,
         _: &MouseDownEvent,
@@ -1498,6 +1589,7 @@ impl Block {
         }
     }
 
+    /// Requests navigation to the first reference of this footnote.
     pub(crate) fn on_footnote_backref_mouse_up(
         &mut self,
         _: &MouseUpEvent,
@@ -1511,6 +1603,7 @@ impl Block {
         cx.emit(BlockEvent::RequestJumpToFootnoteBackref { id });
     }
 
+    /// Extends block text selection while an active drag continues.
     pub(crate) fn on_mouse_move(
         &mut self,
         event: &MouseMoveEvent,
@@ -1529,6 +1622,7 @@ impl Block {
         }
     }
 
+    /// Focuses the block before activating its task checkbox.
     pub(crate) fn on_task_checkbox_mouse_down(
         &mut self,
         _: &MouseDownEvent,
@@ -1541,6 +1635,7 @@ impl Block {
         }
     }
 
+    /// Requests a task checked-state toggle in rendered mode.
     pub(crate) fn on_task_checkbox_mouse_up(
         &mut self,
         _: &MouseUpEvent,
@@ -1555,6 +1650,7 @@ impl Block {
         cx.emit(BlockEvent::ToggleTaskChecked);
     }
 
+    /// Tracks hover over the column append zone.
     pub(crate) fn on_table_append_column_zone_hover(
         &mut self,
         hovered: &bool,
@@ -1564,6 +1660,7 @@ impl Block {
         self.set_table_append_column_hover_part(None, Some(*hovered), None, cx);
     }
 
+    /// Tracks hover over the column append button.
     pub(crate) fn on_table_append_column_button_hover(
         &mut self,
         hovered: &bool,
@@ -1573,6 +1670,7 @@ impl Block {
         self.set_table_append_column_hover_part(None, None, Some(*hovered), cx);
     }
 
+    /// Tracks hover over the row append zone.
     pub(crate) fn on_table_append_row_zone_hover(
         &mut self,
         hovered: &bool,
@@ -1582,6 +1680,7 @@ impl Block {
         self.set_table_append_row_hover_part(None, Some(*hovered), None, cx);
     }
 
+    /// Tracks hover over the row append button.
     pub(crate) fn on_table_append_row_button_hover(
         &mut self,
         hovered: &bool,
@@ -1591,6 +1690,7 @@ impl Block {
         self.set_table_append_row_hover_part(None, None, Some(*hovered), cx);
     }
 
+    /// Tracks hover over the table's column append edge.
     pub(crate) fn on_table_append_column_edge_hover(
         &mut self,
         hovered: &bool,
@@ -1600,6 +1700,7 @@ impl Block {
         self.set_table_append_column_hover_part(Some(*hovered), None, None, cx);
     }
 
+    /// Tracks hover over the table's row append edge.
     pub(crate) fn on_table_append_row_edge_hover(
         &mut self,
         hovered: &bool,
@@ -1609,6 +1710,7 @@ impl Block {
         self.set_table_append_row_hover_part(Some(*hovered), None, None, cx);
     }
 
+    /// Requests another column from the editor for a native table.
     pub(crate) fn on_append_table_column(
         &mut self,
         _: &ClickEvent,
@@ -1620,6 +1722,7 @@ impl Block {
         }
     }
 
+    /// Requests another body row from the editor for a native table.
     pub(crate) fn on_append_table_row(
         &mut self,
         _: &ClickEvent,
@@ -1631,6 +1734,7 @@ impl Block {
         }
     }
 
+    /// Toggles bold formatting on the current inline selection.
     pub(crate) fn on_bold_selection(
         &mut self,
         _: &BoldSelection,
@@ -1640,6 +1744,7 @@ impl Block {
         self.toggle_inline_format(InlineFormat::Bold, cx);
     }
 
+    /// Toggles italic formatting on the current inline selection.
     pub(crate) fn on_italic_selection(
         &mut self,
         _: &ItalicSelection,
@@ -1649,6 +1754,7 @@ impl Block {
         self.toggle_inline_format(InlineFormat::Italic, cx);
     }
 
+    /// Toggles underline formatting on the current inline selection.
     pub(crate) fn on_underline_selection(
         &mut self,
         _: &UnderlineSelection,
@@ -1658,6 +1764,7 @@ impl Block {
         self.toggle_inline_format(InlineFormat::Underline, cx);
     }
 
+    /// Toggles inline-code formatting on the current selection.
     pub(crate) fn on_code_selection(
         &mut self,
         _: &CodeSelection,
@@ -1667,6 +1774,7 @@ impl Block {
         self.toggle_inline_format(InlineFormat::Code, cx);
     }
 
+    /// Requests a following block or a quote/callout break when applicable.
     pub(crate) fn on_exit_code_block(
         &mut self,
         _: &ExitCodeBlock,

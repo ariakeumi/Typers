@@ -50,7 +50,9 @@ use self::workspace::WorkspaceState;
 /// Link navigation request deferred until a `Window` is available.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PendingOpenLink {
+    /// Human-readable target shown in the confirmation prompt.
     pub(crate) prompt_target: String,
+    /// Resolved URL passed to the platform opener after confirmation.
     pub(crate) open_target: String,
 }
 
@@ -61,27 +63,41 @@ pub(crate) struct PendingOpenLink {
 /// emitted by child blocks. Structural changes are handled centrally so focus,
 /// scrolling, dirty tracking, and serialization stay synchronized.
 pub struct Editor {
+    /// Structural owner of roots and cached visible-order metadata.
     document: DocumentTree,
+    /// Cell editors are indexed separately because they are not document-tree nodes.
     table_cells: HashMap<EntityId, TableCellBinding>,
     /// Which view the editor is currently presenting.
     pub(crate) view_mode: ViewMode,
     /// Deferred focus target applied during render when a [`Window`] is
     /// available.
     pending_focus: Option<EntityId>,
+    /// Last editing target, which can remain set while a dialog owns window focus.
     active_entity_id: Option<EntityId>,
+    /// Queued caret scroll applied once layout bounds are available.
     pending_scroll_active_block_into_view: bool,
+    /// Requests another caret scroll after a layout pass.
     pending_scroll_recheck_after_layout: bool,
+    /// Save request deferred until a render pass has a window.
     pending_save: bool,
+    /// Save As request deferred until a render pass has a window.
     pending_save_as: bool,
+    /// Link confirmation deferred until a render pass has a window.
     pending_open_link: Option<PendingOpenLink>,
+    /// Desired native edited indicator, applied when a window is available.
     pending_window_edited: bool,
+    /// Whether the native title needs rebuilding from path and dirty state.
     pending_window_title_refresh: bool,
+    /// Whether the current document has unsaved edits.
     document_dirty: bool,
+    /// Current document path, absent for a new untitled document.
     file_path: Option<PathBuf>,
+    /// Scroll state for the main block column.
     scroll_handle: ScrollHandle,
+    /// Viewport size used to detect meaningful resize.
     last_scroll_viewport_size: Option<Size<Pixels>>,
-    /// Last frame's visible block ids, to detect structural edits so the height
-    /// cache is refreshed only when the row/block mapping is unchanged.
+    /// Last frame's visible block IDs; changes prevent reading stale row bounds
+    /// by index while retaining block-keyed height estimates.
     prev_visible_block_ids: Vec<EntityId>,
     /// Per-row footprint (height plus trailing gap), keyed by the row's first
     /// block. Scroll-invariant, unlike raw painted positions, so windowing from
@@ -93,84 +109,127 @@ pub struct Editor {
     row_stride_width: Option<f32>,
     /// Where last frame's run sat among the scroll container's children.
     prev_mounted_run: Option<MountedRun>,
+    /// Whether this window already has the unsaved-changes close callback.
     close_guard_installed: bool,
+    /// Whether the guarded-close confirmation is visible.
     show_unsaved_changes_dialog: bool,
     /// When true, the window will close after the next successful save.
     pending_close_after_save: bool,
     /// Focus target to restore when the close dialog is dismissed.
     close_dialog_restore_focus: Option<EntityId>,
+    /// Dropped Markdown file awaiting save/discard confirmation.
     pending_drop_replace_path: Option<PathBuf>,
+    /// Whether the dropped-file replacement dialog is visible.
     show_drop_replace_dialog: bool,
+    /// Resumes the queued dropped-file replacement after a successful save.
     pending_drop_replace_after_save: bool,
+    /// Focus target to restore when dropped-file replacement is canceled.
     drop_replace_restore_focus: Option<EntityId>,
     /// Optional informational dialog shown from the Help menu.
     info_dialog: Option<InfoDialogKind>,
     /// True while an online update check is running in the background.
     update_check_in_progress: bool,
+    /// Cached file tree and document outline for the workspace drawer.
     workspace: WorkspaceState,
+    /// Hover state for status-bar controls.
     status_bar: StatusBarState,
+    /// Currently open insert or table-axis context menu.
     context_menu: Option<ContextMenuState>,
+    /// Table insertion dialog state, if open.
     table_insert_dialog: Option<TableInsertDialogState>,
+    /// Delayed insert-submenu close task, canceled on renewed hover.
     context_menu_submenu_close_task: Option<Task<()>>,
+    /// Hover preview is distinct from the committed row/column selection.
     table_axis_preview: Option<TableAxisSelection>,
+    /// Committed table row or column selection.
     table_axis_selection: Option<TableAxisSelection>,
+    /// Selection spanning visible rendered blocks.
     cross_block_selection: Option<CrossBlockSelection>,
+    /// Anchor held during a rendered cross-block pointer drag.
     cross_block_drag: Option<CrossBlockDrag>,
+    /// Recent Select All presses for block-to-document selection upgrade.
     rendered_select_all_cycle: Option<RenderedSelectAllCycle>,
     /// Open top-level menu in the in-window fallback menu bar.
     menu_bar_open: Option<usize>,
     /// Open child submenu inside the in-window fallback menu panel.
     menu_submenu_open: Option<usize>,
+    /// Pointer presence over the top-level menu bar.
     menu_bar_hovered: bool,
+    /// Pointer presence over the active menu panel.
     menu_panel_hovered: bool,
+    /// Pointer presence over the active submenu panel.
     menu_submenu_panel_hovered: bool,
     /// Hover state for the invisible bridge spanning the gap between the menu
     /// panel and an open submenu. Tracked separately from
     /// `menu_submenu_panel_hovered` so the handoff between the two regions
     /// cannot clobber a single shared flag and tear the menu down.
     menu_submenu_bridge_hovered: bool,
+    /// Delayed close task for the in-window menu bar.
     menu_close_task: Option<Task<()>>,
+    /// Whether the pointer is over the editor's scrollbar region.
     scrollbar_hovered: bool,
+    /// Deadline until which the custom scrollbar remains visible.
     scrollbar_visible_until: Instant,
+    /// Task that repaints after the scrollbar visibility deadline.
     scrollbar_fade_task: Option<Task<()>>,
     /// Forces a repaint shortly after a pending scroll-into-view that could
     /// not be satisfied yet (the target block has no measured bounds), so the
     /// scroll lands on the next frame instead of waiting for the cursor blink.
     scroll_recheck_task: Option<Task<()>>,
+    /// Pointer offset and track dimensions for an active thumb drag.
     scrollbar_drag: Option<ScrollbarDragSession>,
+    /// Past document states available for undo.
     undo_history: Vec<HistoryEntry>,
+    /// Forward document states available for redo.
     redo_history: Vec<HistoryEntry>,
+    /// Snapshot awaiting confirmation that an edit changed source text.
     pending_undo_capture: Option<PendingUndoCapture>,
+    /// Last stable selection expressed in canonical source byte offsets.
     last_selection_snapshot: UndoSelectionSnapshot,
+    /// Source text paired with the stable selection for the next undo capture.
     last_stable_source_text: String,
+    /// Suppresses recursive history capture while restoring an entry.
     history_restore_in_progress: bool,
+    /// Shared parsed image reference definitions for visible blocks.
     image_reference_definitions: Arc<ImageReferenceDefinitions>,
+    /// Shared parsed link reference definitions for visible blocks.
     link_reference_definitions: Arc<LinkReferenceDefinitions>,
+    /// Shared definition and occurrence lookup for footnote navigation.
     footnote_registry: Arc<FootnoteRegistry>,
 }
 
 /// Runtime binding between a table block and one cell editor.
 #[derive(Clone)]
 struct TableCellBinding {
+    /// Table container owning the cell.
     table_block: Entity<Block>,
+    /// Independently focusable cell editor.
     cell: Entity<Block>,
+    /// Visual row and column within the table runtime.
     position: TableCellPosition,
 }
 
 /// Selected row or column in a rendered native table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct TableAxisSelection {
+    /// Table entity whose axis is selected.
     table_block_id: EntityId,
+    /// Whether the selection is a row or column.
     kind: TableAxisKind,
+    /// Visual index, with row zero denoting the header.
     index: usize,
 }
 
 /// Pixel geometry for the custom editor scrollbar.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ScrollbarGeometry {
+    /// Track height in pixels.
     track_height: f32,
+    /// Thumb height in pixels.
     thumb_height: f32,
+    /// Thumb offset from the top of the track.
     thumb_top: f32,
+    /// Maximum downward document scroll distance.
     max_scroll_y: f32,
 }
 
@@ -179,10 +238,14 @@ struct ScrollbarGeometry {
 /// `bottom_h` the one closing out the document.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct RenderWindow {
+    /// Inclusive start and exclusive end in the rendered-row sequence.
     run_start: usize,
     run_end: usize,
+    /// Spacer height before the mounted run or focus island.
     top_h: f32,
+    /// Spacer height after the mounted run or focus island.
     bottom_h: f32,
+    /// Separate focused row mounted outside the visible run.
     focus_island: Option<FocusIsland>,
 }
 
@@ -191,9 +254,12 @@ struct RenderWindow {
 /// makes that mapping checkable rather than assumed.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct MountedRun {
+    /// Half-open row interval represented by consecutive mounted children.
     row_start: usize,
     row_end: usize,
+    /// Index of the first mounted row in the scroll container's children.
     child_base: usize,
+    /// Number of scroll-container children from the measured frame.
     child_count: usize,
 }
 
@@ -201,75 +267,100 @@ struct MountedRun {
 /// the run follows from `row`, and `lead_h` is the spacer directly above it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct FocusIsland {
+    /// Index of the separately mounted focused row.
     row: usize,
+    /// Spacer directly before that row.
     lead_h: f32,
 }
 
 /// Active drag session for the custom scrollbar thumb.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ScrollbarDragSession {
+    /// Pointer's vertical distance from the thumb top at drag start.
     pointer_offset_y: f32,
+    /// Track height captured at drag start.
     track_height: f32,
+    /// Thumb height captured at drag start.
     thumb_height: f32,
+    /// Maximum scroll distance captured at drag start.
     max_scroll_y: f32,
 }
 
-/// Source-mode selection snapshot stored with undo history.
+/// Source-byte selection snapshot stored with undo history across both modes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct UndoSelectionSnapshot {
+    /// UTF-8 byte range in the saved source text, not a block-local display range.
     range: std::ops::Range<usize>,
+    /// Whether the caret is at the range start rather than its end.
     reversed: bool,
 }
 
 /// One undo history entry containing source text and selection state.
 #[derive(Clone, Debug)]
 struct HistoryEntry {
+    /// Serialized document text at capture time.
     source_text: String,
+    /// Selection in source-byte coordinates at capture time.
     selection: UndoSelectionSnapshot,
+    /// Capture time used for edit coalescing.
     timestamp: Instant,
+    /// Whether this edit may coalesce with adjacent typing.
     kind: UndoCaptureKind,
 }
 
 /// Deferred undo capture used to coalesce adjacent typing edits.
 #[derive(Clone, Debug)]
 struct PendingUndoCapture {
+    /// Pre-edit state to commit when the document actually changes.
     snapshot: HistoryEntry,
 }
 
 /// Cross-block selection endpoint in visible block order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct CrossBlockSelectionEndpoint {
+    /// Visible block containing this endpoint.
     pub(super) entity_id: EntityId,
+    /// Block-local visible-text byte offset, not a canonical Markdown offset.
     pub(super) offset: usize,
 }
 
 /// Editor-level selection spanning two visible block endpoints.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct CrossBlockSelection {
+    /// Endpoint where the selection began.
     pub(super) anchor: CrossBlockSelectionEndpoint,
+    /// Current movable endpoint of the selection.
     pub(super) focus: CrossBlockSelectionEndpoint,
 }
 
 /// Drag state while creating or extending a cross-block selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct CrossBlockDrag {
+    /// Pointer-down endpoint from which a drag extends.
     pub(super) anchor: CrossBlockSelectionEndpoint,
 }
 
 /// Short-lived Ctrl/Cmd+A press counter for rendered-mode selection upgrade.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct RenderedSelectAllCycle {
+    /// Block that received the repeated command.
     entity_id: EntityId,
+    /// Press count, capped at the document-selection step.
     count: u8,
+    /// Time of the most recent Select All press.
     last_pressed_at: Instant,
 }
 
 /// Mapping from one visible block's text range to canonical Markdown offsets.
 #[derive(Clone)]
 pub(super) struct SourceTargetMapping {
+    /// Editable block represented by this mapping.
     entity: Entity<Block>,
+    /// Absolute canonical-source byte span, including the block's Markdown prefixes.
     full_source_range: std::ops::Range<usize>,
+    /// Content-byte cursor positions mapped to block-relative source positions.
     content_to_source: Vec<usize>,
+    /// Block-relative source positions mapped back to content-byte positions.
     source_to_content: Vec<usize>,
 }
 
@@ -286,17 +377,22 @@ pub enum ViewMode {
 /// The informational dialogs that can be shown from the Help menu.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InfoDialogKind {
-    /// Dialog describing update-check availability.
+    /// In-progress overlay displayed while the background update check runs.
     CheckForUpdates,
     /// Dialog with app name and version information.
     About,
 }
 
 impl Editor {
+    /// Maximum number of retained undo entries.
     const HISTORY_LIMIT: usize = 200;
+    /// Maximum gap between compatible typing edits that can share one undo entry.
     const HISTORY_COALESCE_WINDOW: Duration = Duration::from_millis(1_000);
+    /// Maximum gap between select-all presses in the rendered selection-upgrade cycle.
     const RENDERED_SELECT_ALL_CYCLE_WINDOW: Duration = Duration::from_millis(750);
 
+    /// Normalizes line endings and creates a rendered editor with subscribed block entities.
+    /// Empty input receives a paragraph; tables, references, focus, and history are initialized.
     pub fn from_markdown(
         cx: &mut Context<Self>,
         markdown: String,

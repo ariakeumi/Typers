@@ -1,7 +1,8 @@
-//! Code-block runtime cache management.
+//! Code-block highlighting and the independent, single-line language input.
 
 use super::*;
 
+/// Flattens line breaks and removes surrounding whitespace from a language label.
 fn normalize_code_language_input(text: &str) -> String {
     text.replace("\r\n", " ")
         .replace(['\r', '\n'], " ")
@@ -10,10 +11,12 @@ fn normalize_code_language_input(text: &str) -> String {
 }
 
 impl Block {
+    /// Returns the cached highlight spans for code-block content, if available.
     pub(crate) fn code_highlight_result(&self) -> Option<&CodeHighlightResult> {
         self.code_highlight.as_ref()
     }
 
+    /// Recomputes highlighting from the block's language and clean visible text.
     pub(super) fn sync_code_highlight(&mut self) {
         self.code_highlight = match &self.record.kind {
             BlockKind::CodeBlock { language } => highlight_code_block(
@@ -24,6 +27,7 @@ impl Block {
         };
     }
 
+    /// Returns the code fence's language label, or an empty string for other blocks.
     pub(crate) fn code_language_text(&self) -> &str {
         match &self.record.kind {
             BlockKind::CodeBlock {
@@ -33,6 +37,7 @@ impl Block {
         }
     }
 
+    /// Returns the active end of the language selection as a UTF-8 byte offset.
     pub(crate) fn code_language_cursor_offset(&self) -> usize {
         if self.code_language_selection_reversed {
             self.code_language_selected_range.start
@@ -41,10 +46,12 @@ impl Block {
         }
     }
 
+    /// Converts a UTF-8 language range to GPUI's UTF-16 code-unit range.
     pub(crate) fn code_language_range_to_utf16(&self, range: &Range<usize>) -> Range<usize> {
         Self::utf8_range_to_utf16_in(self.code_language_text(), range)
     }
 
+    /// Converts a UTF-16 language range to scalar-aligned UTF-8 byte offsets.
     pub(crate) fn code_language_range_from_utf16(
         &self,
         range_utf16: &Range<usize>,
@@ -52,6 +59,7 @@ impl Block {
         Self::utf16_range_to_utf8_in(self.code_language_text(), range_utf16)
     }
 
+    /// Finds the preceding grapheme boundary in the language label.
     pub(crate) fn previous_code_language_boundary(&self, offset: usize) -> usize {
         self.code_language_text()
             .grapheme_indices(true)
@@ -60,6 +68,7 @@ impl Block {
             .unwrap_or(0)
     }
 
+    /// Finds the following grapheme boundary in the language label.
     pub(crate) fn next_code_language_boundary(&self, offset: usize) -> usize {
         self.code_language_text()
             .grapheme_indices(true)
@@ -67,8 +76,9 @@ impl Block {
             .unwrap_or(self.code_language_text().len())
     }
 
+    /// Collapses the language selection at a scalar-aligned UTF-8 offset.
     pub(crate) fn move_code_language_to(&mut self, offset: usize, cx: &mut Context<Self>) {
-        let clamped = offset.min(self.code_language_text().len());
+        let clamped = crate::text_offsets::floor_char_boundary(self.code_language_text(), offset);
         self.code_language_selected_range = clamped..clamped;
         self.code_language_selection_reversed = false;
         self.code_language_marked_range = None;
@@ -76,8 +86,9 @@ impl Block {
         cx.notify();
     }
 
+    /// Extends the language selection to a scalar-aligned UTF-8 offset.
     pub(crate) fn select_code_language_to(&mut self, offset: usize, cx: &mut Context<Self>) {
-        let clamped = offset.min(self.code_language_text().len());
+        let clamped = crate::text_offsets::floor_char_boundary(self.code_language_text(), offset);
         if self.code_language_selection_reversed {
             self.code_language_selected_range.start = clamped;
         } else {
@@ -92,6 +103,13 @@ impl Block {
         cx.notify();
     }
 
+    /// Replaces a UTF-8 language range, then normalizes the label and IME state.
+    ///
+    /// `selected_range_relative` is measured in bytes of the newline-flattened
+    /// insertion; its original endpoint order preserves selection direction.
+    /// Line breaks become spaces, surrounding whitespace is trimmed, and an
+    /// empty label is stored as `None`. Only an actual language change emits
+    /// [`BlockEvent::Changed`].
     pub(crate) fn replace_code_language_text_in_range(
         &mut self,
         range: Range<usize>,
@@ -107,7 +125,7 @@ impl Block {
         self.prepare_undo_capture(UndoCaptureKind::CoalescibleText, cx);
 
         let current = self.code_language_text().to_string();
-        let range = range.start.min(current.len())..range.end.min(current.len());
+        let range = crate::text_offsets::normalize_utf8_range(&current, range);
         let inserted = new_text.replace("\r\n", " ").replace(['\r', '\n'], " ");
         let mut raw_next = String::new();
         raw_next.push_str(&current[..range.start]);
@@ -118,6 +136,11 @@ impl Block {
         let normalized = normalize_code_language_input(&raw_next);
         let normalized_len = normalized.len();
         let raw_inserted_end = range.start + inserted.len();
+        let selection_reversed = selected_range_relative
+            .as_ref()
+            .is_some_and(|relative| relative.end < relative.start);
+        let selected_range_relative = selected_range_relative
+            .map(|relative| crate::text_offsets::normalize_utf8_range(&inserted, relative));
         let next_cursor = selected_range_relative
             .as_ref()
             .map(|relative| range.start + relative.end)
@@ -156,11 +179,12 @@ impl Block {
         self.record.kind = BlockKind::CodeBlock {
             language: (!normalized.is_empty()).then(|| SharedString::from(normalized)),
         };
-        self.code_language_selected_range = next_selection;
-        self.code_language_selection_reversed = selected_range_relative
-            .as_ref()
-            .is_some_and(|relative| relative.end < relative.start);
-        self.code_language_marked_range = next_marked;
+        self.code_language_selected_range =
+            crate::text_offsets::normalize_utf8_range(self.code_language_text(), next_selection);
+        self.code_language_selection_reversed = selection_reversed;
+        self.code_language_marked_range = next_marked.map(|range| {
+            crate::text_offsets::normalize_utf8_range(self.code_language_text(), range)
+        });
         self.cursor_blink_epoch = Instant::now();
         self.sync_code_highlight();
 
@@ -174,6 +198,7 @@ impl Block {
         cx.notify();
     }
 
+    /// Hit-tests the last language layout to a scalar-aligned UTF-8 offset.
     pub(crate) fn code_language_index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
         let text = self.code_language_text();
         if text.is_empty() {
@@ -192,9 +217,13 @@ impl Block {
         if position.x >= bounds.right() {
             return text.len();
         }
-        line.closest_index_for_x(position.x - bounds.left())
+        crate::text_offsets::floor_char_boundary(
+            text,
+            line.closest_index_for_x(position.x - bounds.left()),
+        )
     }
 
+    /// Drops language hit-test geometry and ends its pointer selection session.
     pub(crate) fn reset_code_language_input_layout(&mut self) {
         self.code_language_last_layout = None;
         self.code_language_last_bounds = None;

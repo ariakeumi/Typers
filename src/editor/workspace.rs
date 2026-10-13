@@ -11,56 +11,89 @@ use super::{BlockKind, Editor};
 use crate::i18n::I18nStrings;
 use crate::theme::Theme;
 
+/// Asset path for directory nodes.
 const FOLDER_ICON: &str = "icon/workspace/folder.svg";
+/// Asset path for Markdown file nodes.
 const MARKDOWN_ICON: &str = "icon/workspace/markdown.svg";
+/// Fraction of viewport width requested by the workspace panel.
 const WORKSPACE_PANEL_TARGET_RATIO: f32 = 0.15;
+/// Lower width bound for the workspace panel, in pixels.
 const WORKSPACE_PANEL_MIN_WIDTH: f32 = 240.0;
+/// Upper width bound for the workspace panel, in pixels.
 const WORKSPACE_PANEL_MAX_WIDTH: f32 = 360.0;
+/// Height of each visible tree row, in pixels.
 const WORKSPACE_NODE_HEIGHT: f32 = 28.0;
+/// Additional left inset per tree depth, in pixels.
 const WORKSPACE_NODE_INDENT: f32 = 18.0;
 
+/// The active workspace panel view.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum WorkspaceTab {
+    /// Directory and Markdown file tree.
     #[default]
     Files,
+    /// Headings parsed from the current document.
     Outline,
 }
 
+/// Navigation target represented by a workspace tree node.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum WorkspaceTreeKind {
+    /// A directory that may contain further visible nodes.
     Directory(PathBuf),
+    /// An openable Markdown file.
     MarkdownFile(PathBuf),
+    /// A heading at a zero-based source line and ATX level.
     Heading { line: usize, level: u8 },
 }
 
+/// A file-tree or outline entry with stable identity and nested children.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct WorkspaceTreeNode {
+    /// Stable path- or source-line-based node identifier.
     id: String,
+    /// Text shown for the node.
     label: String,
+    /// Navigation action and underlying target.
     kind: WorkspaceTreeKind,
+    /// Descendants displayed when the node is expanded.
     children: Vec<WorkspaceTreeNode>,
 }
 
+/// Selected file path or outline node identifier.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum WorkspaceSelection {
+    /// Selected file in the Files tab.
     File(PathBuf),
+    /// Selected node ID in the Outline tab.
     Outline(String),
 }
 
+/// Cached workspace trees and interaction state for one editor window.
 #[derive(Default)]
 pub(super) struct WorkspaceState {
+    /// Whether the drawer is visible.
     pub(super) is_open: bool,
+    /// Currently displayed workspace tab.
     active_tab: WorkspaceTab,
+    /// Parent directory of the current document, when it has a path.
     root: Option<PathBuf>,
+    /// Last scanned file tree.
     file_tree: Option<WorkspaceTreeNode>,
+    /// File scan failure shown in the panel.
     file_error: Option<String>,
+    /// Headings parsed from the current source.
     outline_tree: Vec<WorkspaceTreeNode>,
+    /// Source text corresponding to `outline_tree`.
     outline_source: Option<String>,
+    /// IDs of expanded directory and heading nodes.
     expanded: HashSet<String>,
+    /// Current file or heading selection.
     selected: Option<WorkspaceSelection>,
 }
 
 impl Editor {
+    /// Toggles the workspace drawer and refreshes its models when opening.
     pub(crate) fn toggle_workspace_drawer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.workspace.is_open {
             self.workspace.is_open = false;
@@ -74,6 +107,7 @@ impl Editor {
         cx.notify();
     }
 
+    /// Handles the workspace toggle application action.
     pub(crate) fn on_toggle_workspace_action(
         &mut self,
         _: &crate::components::ToggleWorkspace,
@@ -83,6 +117,7 @@ impl Editor {
         self.toggle_workspace_drawer(window, cx);
     }
 
+    /// Invalidates workspace caches after the current document path changes.
     pub(super) fn sync_workspace_after_document_path_change(&mut self, cx: &mut Context<Self>) {
         self.workspace.root = None;
         self.workspace.file_tree = None;
@@ -93,15 +128,18 @@ impl Editor {
         }
     }
 
+    /// Refreshes both file and outline views from current editor state.
     fn sync_workspace_models(&mut self, cx: &mut Context<Self>) {
         self.sync_workspace_file_tree();
         self.sync_workspace_outline(cx);
     }
 
+    /// Uses the current file's parent directory as the workspace root.
     fn workspace_root_for_current_file(&self) -> Option<PathBuf> {
         self.file_path.as_ref()?.parent().map(Path::to_path_buf)
     }
 
+    /// Scans a changed root and updates the selected file path.
     fn sync_workspace_file_tree(&mut self) {
         let next_root = self.workspace_root_for_current_file();
         if self.workspace.root == next_root && self.workspace.file_tree.is_some() {
@@ -143,6 +181,7 @@ impl Editor {
         }
     }
 
+    /// Rebuilds the heading outline only when serialized source changed.
     fn sync_workspace_outline(&mut self, cx: &mut Context<Self>) {
         let source = self.serialized_document_text(cx);
         if self.workspace.outline_source.as_deref() == Some(source.as_str()) {
@@ -155,6 +194,7 @@ impl Editor {
         self.workspace.outline_source = Some(source);
     }
 
+    /// Selects a panel tab and refreshes its models.
     fn set_workspace_tab(&mut self, tab: WorkspaceTab, cx: &mut Context<Self>) {
         if self.workspace.active_tab != tab {
             self.workspace.active_tab = tab;
@@ -163,6 +203,7 @@ impl Editor {
         }
     }
 
+    /// Toggles expansion of a directory or heading node by ID.
     fn toggle_workspace_node(&mut self, id: &str, cx: &mut Context<Self>) {
         if !self.workspace.expanded.remove(id) {
             self.workspace.expanded.insert(id.to_string());
@@ -170,16 +211,55 @@ impl Editor {
         cx.notify();
     }
 
-    fn select_outline_node(&mut self, id: String, cx: &mut Context<Self>) {
+    /// Selects an outline heading and moves editor focus to its source line.
+    fn select_outline_node(&mut self, id: String, line: usize, cx: &mut Context<Self>) {
         self.workspace.selected = Some(WorkspaceSelection::Outline(id));
+        self.reveal_outline_heading(line, cx);
         cx.notify();
     }
 
+    /// Maps an outline heading's source line to its owning block, then focuses
+    /// and scrolls the editor so the body jumps to that heading.
+    ///
+    /// The outline is parsed from `serialized_document_text`, whose line offsets
+    /// align with the per-block source spans produced by
+    /// `build_source_target_mappings`, so the byte offset of the heading line
+    /// lands exactly on the heading block's source range.
+    fn reveal_outline_heading(&mut self, line: usize, cx: &mut Context<Self>) {
+        let source = self.serialized_document_text(cx);
+        let target = source
+            .lines()
+            .take(line)
+            .map(|line| line.len() + 1)
+            .sum::<usize>();
+
+        let mappings = self.build_source_target_mappings(cx);
+        let entity_id = mappings
+            .iter()
+            .find(|mapping| mapping.full_source_range.contains(&target))
+            .or_else(|| {
+                mappings.iter().min_by_key(|mapping| {
+                    Self::source_offset_distance(&mapping.full_source_range, target)
+                })
+            })
+            .map(|mapping| mapping.entity.entity_id());
+
+        let Some(entity_id) = entity_id else {
+            return;
+        };
+        let Some(block) = self.focusable_entity_by_id(entity_id) else {
+            return;
+        };
+        self.focus_block_range(&block, 0..0, cx);
+    }
+
+    /// Selects a file and routes it through the guarded document replacement flow.
     fn open_workspace_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         self.workspace.selected = Some(WorkspaceSelection::File(path.clone()));
         self.request_dropped_markdown_replace(path, window, cx);
     }
 
+    /// Renders the active workspace tab when the drawer is open.
     pub(super) fn render_workspace_panel(
         &mut self,
         theme: &Theme,
@@ -282,6 +362,7 @@ impl Editor {
         )
     }
 
+    /// Renders the file tree or its empty/error state.
     fn render_workspace_files_tree(
         &self,
         theme: &Theme,
@@ -316,6 +397,7 @@ impl Editor {
             .into_any_element()
     }
 
+    /// Renders the heading outline or its empty state.
     fn render_workspace_outline_tree(
         &self,
         theme: &Theme,
@@ -334,6 +416,7 @@ impl Editor {
             .into_any_element()
     }
 
+    /// Renders a centered workspace empty-state message.
     fn render_workspace_empty_state(
         &self,
         title: &str,
@@ -371,6 +454,7 @@ impl Editor {
             .into_any_element()
     }
 
+    /// Flattens expanded nodes into visible rows at their nesting depths.
     fn render_workspace_nodes(
         &self,
         nodes: &[WorkspaceTreeNode],
@@ -393,6 +477,7 @@ impl Editor {
         elements
     }
 
+    /// Renders a file, directory, or heading row with its navigation handler.
     fn render_workspace_node(
         &self,
         node: &WorkspaceTreeNode,
@@ -504,18 +589,24 @@ impl Editor {
                     WorkspaceTreeKind::MarkdownFile(path) => {
                         editor.open_workspace_file(path, window, cx);
                     }
-                    WorkspaceTreeKind::Heading { .. } => editor.select_outline_node(node_id, cx),
+                    WorkspaceTreeKind::Heading { line, .. } => {
+                        editor.select_outline_node(node_id, line, cx);
+                    }
                 });
             })
             .into_any_element()
     }
 }
 
+/// Recognizes `.md` files for the workspace tree, ignoring extension case.
 fn is_markdown_file(path: &Path) -> bool {
     path.extension()
         .is_some_and(|extension| extension.to_string_lossy().eq_ignore_ascii_case("md"))
 }
 
+/// Recursively scans directories, retaining directories and `.md` files.
+///
+/// Directories sort before files; entries within each group sort by lowercase label.
 fn scan_workspace_dir(path: &Path) -> Result<WorkspaceTreeNode> {
     let mut children = Vec::new();
     for entry in
@@ -552,16 +643,19 @@ fn scan_workspace_dir(path: &Path) -> Result<WorkspaceTreeNode> {
     })
 }
 
+/// Uses the final path component as the displayed file or directory name.
 fn file_label(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
+/// Builds a path-based ID shared by file and directory nodes.
 fn file_node_id(path: &Path) -> String {
     format!("file:{}", path.to_string_lossy())
 }
 
+/// Hashes a node ID for GPUI element identity.
 fn stable_node_hash(id: &str) -> u64 {
     use std::hash::{Hash, Hasher};
 
@@ -570,11 +664,13 @@ fn stable_node_hash(id: &str) -> u64 {
     hasher.finish()
 }
 
+/// Clamps the panel's target viewport fraction to its pixel width bounds.
 pub(super) fn workspace_panel_width_for_viewport(viewport_width: f32) -> f32 {
     let target = viewport_width * WORKSPACE_PANEL_TARGET_RATIO;
     target.clamp(WORKSPACE_PANEL_MIN_WIDTH, WORKSPACE_PANEL_MAX_WIDTH)
 }
 
+/// Removes expansion and selection IDs for headings absent from the new outline.
 fn prune_outline_state(workspace: &mut WorkspaceState, outline: &[WorkspaceTreeNode]) {
     let mut current_ids = HashSet::new();
     collect_node_ids(outline, &mut current_ids);
@@ -590,6 +686,7 @@ fn prune_outline_state(workspace: &mut WorkspaceState, outline: &[WorkspaceTreeN
     }
 }
 
+/// Collects every node ID recursively.
 fn collect_node_ids(nodes: &[WorkspaceTreeNode], ids: &mut HashSet<String>) {
     for node in nodes {
         ids.insert(node.id.clone());
@@ -597,10 +694,12 @@ fn collect_node_ids(nodes: &[WorkspaceTreeNode], ids: &mut HashSet<String>) {
     }
 }
 
+/// Distinguishes heading IDs from file-tree IDs.
 fn is_outline_node_id(id: &str) -> bool {
     id.starts_with("outline:")
 }
 
+/// Builds a nested ATX-heading outline while ignoring fenced code lines.
 fn build_outline_tree(markdown: &str) -> Vec<WorkspaceTreeNode> {
     let mut roots = Vec::new();
     let mut stack: Vec<(u8, Vec<usize>)> = Vec::new();
@@ -659,6 +758,7 @@ fn build_outline_tree(markdown: &str) -> Vec<WorkspaceTreeNode> {
     roots
 }
 
+/// Returns the child vector at an index path through the outline tree.
 fn children_at_path_mut<'a>(
     nodes: &'a mut Vec<WorkspaceTreeNode>,
     path: &[usize],
@@ -670,6 +770,7 @@ fn children_at_path_mut<'a>(
     current
 }
 
+/// Recognizes a backtick or tilde fence of at least three markers.
 fn opening_fence(trimmed: &str) -> Option<(char, usize)> {
     let marker = trimmed.chars().next()?;
     if marker != '`' && marker != '~' {
@@ -679,6 +780,7 @@ fn opening_fence(trimmed: &str) -> Option<(char, usize)> {
     (len >= 3).then_some((marker, len))
 }
 
+/// Accepts a matching fence run at least as long as the opener, with no trailing content.
 fn is_closing_fence(trimmed: &str, marker: char, len: usize) -> bool {
     let count = trimmed.chars().take_while(|ch| *ch == marker).count();
     count >= len && trimmed[count..].trim().is_empty()
@@ -691,6 +793,9 @@ mod tests {
         prune_outline_state, scan_workspace_dir, workspace_panel_width_for_viewport,
     };
     use std::fs;
+
+    use crate::components::{BlockKind, Editor};
+    use gpui::{AppContext, TestAppContext};
 
     #[test]
     fn workspace_scan_keeps_dirs_and_md_files_only() {
@@ -761,5 +866,37 @@ mod tests {
         assert_eq!(workspace_panel_width_for_viewport(1000.0), 240.0);
         assert_eq!(workspace_panel_width_for_viewport(2000.0), 300.0);
         assert_eq!(workspace_panel_width_for_viewport(4000.0), 360.0);
+    }
+
+    #[gpui::test]
+    async fn outline_node_click_focuses_and_queues_scroll_for_target_heading(
+        cx: &mut TestAppContext,
+    ) {
+        let markdown =
+            "# Alpha\n\nPara under alpha.\n\n## Beta\n\nPara under beta.\n\n# Gamma".to_string();
+        let editor = cx.new(|cx| Editor::from_markdown(cx, markdown, None));
+
+        editor.update(cx, |editor, cx| {
+            let beta = editor
+                .document
+                .visible_blocks()
+                .iter()
+                .find(|visible| {
+                    matches!(
+                        visible.entity.read(cx).kind(),
+                        BlockKind::Heading { level: 2 }
+                    )
+                })
+                .expect("## Beta heading")
+                .entity
+                .clone();
+
+            // The outline is parsed from the same serialized text, where
+            // "## Beta" lands on line index 4.
+            editor.select_outline_node("outline:4".into(), 4, cx);
+
+            assert_eq!(editor.pending_focus, Some(beta.entity_id()));
+            assert!(editor.pending_scroll_active_block_into_view);
+        });
     }
 }
