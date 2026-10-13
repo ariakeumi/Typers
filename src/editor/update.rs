@@ -9,6 +9,8 @@ use crate::i18n::I18nManager;
 use crate::net::update::{self as update_check, UpdateCheckResult, UpdateVersionInfo};
 
 impl Editor {
+    /// Starts one background version check, or reopens its in-progress dialog.
+    /// Does nothing while the unsaved-changes dialog is visible.
     pub(crate) fn request_check_updates(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.show_unsaved_changes_dialog {
             return;
@@ -64,6 +66,7 @@ impl Editor {
     }
 }
 
+/// Offers the releases page for a newer version; only the first button opens it.
 fn show_update_available_prompt(window: &mut Window, cx: &mut App, info: &UpdateVersionInfo) {
     let strings = cx.global::<I18nManager>().strings().clone();
     let detail = format_update_message(
@@ -96,6 +99,7 @@ fn show_update_available_prompt(window: &mut Window, cx: &mut App, info: &Update
     .detach();
 }
 
+/// Presents the installed and published versions after an up-to-date result.
 fn show_up_to_date_prompt(window: &mut Window, cx: &mut App, info: &UpdateVersionInfo) {
     let strings = cx.global::<I18nManager>().strings().clone();
     let detail = format_update_message(
@@ -113,6 +117,7 @@ fn show_up_to_date_prompt(window: &mut Window, cx: &mut App, info: &UpdateVersio
     );
 }
 
+/// Inserts an error detail into the localized update-failure prompt.
 fn show_update_failed_prompt(window: &mut Window, cx: &mut App, detail: &str) {
     let strings = cx.global::<I18nManager>().strings().clone();
     let message = strings
@@ -128,6 +133,7 @@ fn show_update_failed_prompt(window: &mut Window, cx: &mut App, detail: &str) {
     );
 }
 
+/// Replaces the `{current}` and `{latest}` placeholders in a version message.
 fn format_update_message(template: &str, current_version: &str, latest_version: &str) -> String {
     template
         .replace("{current}", current_version)

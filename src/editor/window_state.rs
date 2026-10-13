@@ -3,6 +3,7 @@
 use super::*;
 
 impl Editor {
+    /// Computes a clamped scrollbar thumb for the viewport and current offset.
     pub(super) fn scrollbar_geometry(
         viewport_height: f32,
         max_scroll_y: f32,
@@ -29,6 +30,7 @@ impl Editor {
         }
     }
 
+    /// Maps a thumb position back to a clamped document scroll offset.
     pub(super) fn scroll_offset_for_thumb_top(
         thumb_top: f32,
         track_height: f32,
@@ -183,6 +185,7 @@ impl Editor {
         1.0 - t * (1.0 - dimensions.centered_min_ratio)
     }
 
+    /// Returns the padded, centered content width without exceeding the viewport.
     pub(crate) fn centered_column_width(
         viewport_width: f32,
         dimensions: &crate::theme::ThemeDimensions,
@@ -220,6 +223,7 @@ impl Editor {
         }
     }
 
+    /// Handles the keyboard action for switching rendered and source views.
     pub(crate) fn on_toggle_view_mode_action(
         &mut self,
         _: &crate::components::ToggleViewMode,
@@ -229,12 +233,14 @@ impl Editor {
         self.toggle_view_mode_from_ui(cx);
     }
 
+    /// Ends pointer selection and captures its source position before switching views.
     pub(super) fn toggle_view_mode_from_ui(&mut self, cx: &mut Context<Self>) {
         self.end_block_pointer_selection_sessions(cx);
         self.last_selection_snapshot = self.capture_source_selection_snapshot(cx);
         self.toggle_view_mode(cx);
     }
 
+    /// Handles the undo action.
     pub(crate) fn on_undo(
         &mut self,
         _: &crate::components::Undo,
@@ -244,6 +250,7 @@ impl Editor {
         self.undo_document(cx);
     }
 
+    /// Handles the redo action.
     pub(crate) fn on_redo(
         &mut self,
         _: &crate::components::Redo,
@@ -253,6 +260,7 @@ impl Editor {
         self.redo_document(cx);
     }
 
+    /// Queues a save from the application action.
     pub(crate) fn on_save_document(
         &mut self,
         _: &crate::components::SaveDocument,
@@ -262,6 +270,7 @@ impl Editor {
         self.request_save_document(cx);
     }
 
+    /// Queues Save As from the application action.
     pub(crate) fn on_save_document_as(
         &mut self,
         _: &crate::components::SaveDocumentAs,
@@ -271,6 +280,7 @@ impl Editor {
         self.request_save_document_as(cx);
     }
 
+    /// Starts HTML export from the application action.
     pub(crate) fn on_export_html(
         &mut self,
         _: &crate::components::ExportHtml,
@@ -280,6 +290,7 @@ impl Editor {
         self.export_document_via_prompt(crate::export::ExportFormat::Html, window, cx);
     }
 
+    /// Starts PDF export from the application action.
     pub(crate) fn on_export_pdf(
         &mut self,
         _: &crate::components::ExportPdf,
@@ -289,6 +300,7 @@ impl Editor {
         self.export_document_via_prompt(crate::export::ExportFormat::Pdf, window, cx);
     }
 
+    /// Requests application quit through the shared menu controller.
     pub(crate) fn on_quit_application(
         &mut self,
         _: &crate::components::QuitApplication,
@@ -298,6 +310,7 @@ impl Editor {
         crate::app_menu::request_quit_application(cx);
     }
 
+    /// Requests guarded closure of this window.
     pub(crate) fn on_close_window(
         &mut self,
         _: &crate::components::CloseWindow,
@@ -307,6 +320,7 @@ impl Editor {
         self.request_close_current_window(window, cx);
     }
 
+    /// Installs the command-line launcher from the application action.
     pub(crate) fn on_install_cli_tool(
         &mut self,
         _: &crate::components::InstallCliTool,
@@ -316,6 +330,7 @@ impl Editor {
         crate::app_menu::install_cli_tool(cx);
     }
 
+    /// Removes the command-line launcher from the application action.
     pub(crate) fn on_uninstall_cli_tool(
         &mut self,
         _: &crate::components::UninstallCliTool,
@@ -325,6 +340,7 @@ impl Editor {
         crate::app_menu::uninstall_cli_tool(cx);
     }
 
+    /// Rebuilds the opposite view while preserving the selection in source coordinates.
     pub(crate) fn toggle_view_mode(&mut self, cx: &mut Context<Self>) {
         self.end_block_pointer_selection_sessions(cx);
         let selection_snapshot = self.capture_source_selection_snapshot(cx);
@@ -377,6 +393,7 @@ impl Editor {
         }
     }
 
+    /// Queues caret scrolling and a post-layout recheck.
     pub(super) fn request_active_block_scroll_into_view(&mut self, cx: &mut Context<Self>) {
         self.pending_scroll_recheck_after_layout = true;
         if !self.pending_scroll_active_block_into_view {
@@ -385,13 +402,16 @@ impl Editor {
         }
     }
 
+    /// Ignores subpixel viewport changes below the scroll-layout tolerance.
     pub(super) fn viewport_size_changed(previous: Size<Pixels>, current: Size<Pixels>) -> bool {
+        /// Minimum width or height change that triggers a viewport update, in pixels.
         const EPSILON: f32 = 0.5;
 
         (f32::from(previous.width) - f32::from(current.width)).abs() > EPSILON
             || (f32::from(previous.height) - f32::from(current.height)).abs() > EPSILON
     }
 
+    /// Opens an information dialog unless an unsaved-changes dialog takes precedence.
     pub(crate) fn show_info_dialog(&mut self, kind: InfoDialogKind, cx: &mut Context<Self>) {
         if self.show_unsaved_changes_dialog {
             return;
@@ -405,12 +425,14 @@ impl Editor {
         cx.notify();
     }
 
+    /// Dismisses the active information dialog, if any.
     pub(crate) fn hide_info_dialog(&mut self, cx: &mut Context<Self>) {
         if self.info_dialog.take().is_some() {
             cx.notify();
         }
     }
 
+    /// Activates a top-level menu and clears any open submenu.
     pub(crate) fn open_menu_bar(&mut self, index: usize, cx: &mut Context<Self>) {
         self.menu_close_task = None;
         if self.menu_bar_open != Some(index) {
@@ -422,6 +444,7 @@ impl Editor {
         }
     }
 
+    /// Activates a submenu and cancels pending menu closure.
     pub(crate) fn open_menu_submenu(&mut self, index: usize, cx: &mut Context<Self>) {
         self.menu_close_task = None;
         if self.menu_submenu_open != Some(index) {
@@ -430,6 +453,7 @@ impl Editor {
         }
     }
 
+    /// Clears the submenu and its hover state.
     pub(crate) fn close_menu_submenu(&mut self, cx: &mut Context<Self>) {
         let had_open_submenu = self.menu_submenu_open.take().is_some();
         let had_submenu_hover = self.menu_submenu_panel_hovered || self.menu_submenu_bridge_hovered;
@@ -440,6 +464,7 @@ impl Editor {
         }
     }
 
+    /// Closes the menu after a short delay if no menu region is hovered.
     pub(super) fn schedule_menu_bar_close(&mut self, cx: &mut Context<Self>) {
         if self.menu_bar_open.is_none() {
             return;
@@ -465,6 +490,7 @@ impl Editor {
         ));
     }
 
+    /// Tracks menu-bar hover and schedules closure on exit when appropriate.
     pub(crate) fn set_menu_bar_hovered(&mut self, hovered: bool, cx: &mut Context<Self>) {
         self.menu_bar_hovered = hovered;
         if hovered {
@@ -477,6 +503,7 @@ impl Editor {
         }
     }
 
+    /// Tracks menu-panel hover and schedules closure on exit when appropriate.
     pub(crate) fn set_menu_panel_hovered(&mut self, hovered: bool, cx: &mut Context<Self>) {
         self.menu_panel_hovered = hovered;
         if hovered {
@@ -489,6 +516,7 @@ impl Editor {
         }
     }
 
+    /// Tracks submenu-panel hover and schedules closure on exit when appropriate.
     pub(crate) fn set_menu_submenu_panel_hovered(&mut self, hovered: bool, cx: &mut Context<Self>) {
         self.menu_submenu_panel_hovered = hovered;
         if hovered {
@@ -522,12 +550,14 @@ impl Editor {
         }
     }
 
+    /// Dismisses an open menu when the editor body is used.
     pub(crate) fn dismiss_menu_bar_from_body(&mut self, cx: &mut Context<Self>) {
         if self.menu_bar_open.is_some() {
             self.close_menu_bar(cx);
         }
     }
 
+    /// Queues a save for the next render-frame synchronization.
     pub(crate) fn request_save_document(&mut self, cx: &mut Context<Self>) {
         if !self.pending_save {
             self.pending_save = true;
@@ -535,6 +565,7 @@ impl Editor {
         }
     }
 
+    /// Queues Save As for the next render-frame synchronization.
     pub(crate) fn request_save_document_as(&mut self, cx: &mut Context<Self>) {
         if !self.pending_save_as {
             self.pending_save_as = true;
@@ -542,6 +573,7 @@ impl Editor {
         }
     }
 
+    /// Queues a link confirmation prompt for the next render frame.
     pub(crate) fn request_open_link_prompt(
         &mut self,
         prompt_target: String,
@@ -555,6 +587,7 @@ impl Editor {
         cx.notify();
     }
 
+    /// Clears the top-level menu, submenu, hover flags, and pending close task.
     pub(crate) fn close_menu_bar(&mut self, cx: &mut Context<Self>) {
         let had_open_menu = self.menu_bar_open.take().is_some();
         let had_open_submenu = self.menu_submenu_open.take().is_some();

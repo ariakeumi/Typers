@@ -1,4 +1,4 @@
-//! Small native single-line text input used by settings forms.
+//! Native single-line settings input with UTF-16 IME ranges and a horizontal viewport.
 
 use std::ops::Range;
 
@@ -7,9 +7,12 @@ use unicode_segmentation::UnicodeSegmentation as _;
 
 use crate::theme::ThemeManager;
 
+/// Fixed outer height of a settings input, in pixels.
 const SINGLE_LINE_INPUT_HEIGHT: f32 = 36.0;
+/// Number of trailing graphemes faded in unfocused overflow mode.
 const FADE_GRAPHEME_COUNT: usize = 4;
 
+/// Emitted after the field's stored value is replaced.
 pub(crate) struct InputChanged;
 
 /// Controls how unfocused input text is presented when it exceeds the field.
@@ -18,41 +21,61 @@ pub(crate) struct InputChanged;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[allow(dead_code)] // All modes are part of the component API; callers choose as needed.
 pub(crate) enum SingleLineOverflow {
+    /// Show the longest fitting grapheme prefix followed by an ellipsis.
     #[default]
     Ellipsis,
+    /// Clip the shaped text at the field edge.
     Clip,
+    /// Reduce opacity across the last visible graphemes.
     Fade,
 }
 
+/// Editable single-line value with UTF-8 selection state and UTF-16 GPUI input.
 pub(crate) struct SingleLineInput {
+    /// Focus target registered with GPUI.
     focus: FocusHandle,
+    /// Source text, without the displayed placeholder or ellipsis.
     content: SharedString,
+    /// Ordered selection in UTF-8 byte offsets of `content`.
     selection: Range<usize>,
+    /// Whether the active selection endpoint is `selection.start`.
     reversed: bool,
+    /// IME composition range in UTF-8 byte offsets of `content`.
     marked: Option<Range<usize>>,
+    /// Most recently painted line, which may contain display-only text.
     last_layout: Option<ShapedLine>,
+    /// Bounds using the line's painted origin, including viewport scroll.
     last_bounds: Option<Bounds<Pixels>>,
+    /// Source byte endpoint shown before any display-only ellipsis.
     last_source_end: usize,
+    /// Text drawn when the source value is empty.
     placeholder: SharedString,
+    /// Whether a pointer drag is extending the selection.
     is_selecting: bool,
+    /// Presentation mode used only while unfocused and overflowing.
     overflow: SingleLineOverflow,
-    // The focused input is drawn in a manually managed viewport so all of the
-    // custom text, selection, hit testing, and IME paths use the same origin.
+    /// Horizontal offset shared by text, cursor, selection, and hit testing.
     viewport_offset: Pixels,
+    /// Width of the shaped text displayed in the last paint.
     content_width: Pixels,
+    /// Width available to text in the last paint.
     viewport_width: Pixels,
+    /// Requests caret visibility on the next prepaint.
     ensure_cursor_visible: bool,
+    /// Whether the field was focused during the preceding prepaint.
     was_focused: bool,
 }
 
 impl EventEmitter<InputChanged> for SingleLineInput {}
 impl Focusable for SingleLineInput {
+    /// Returns the field's focus target.
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
     }
 }
 
 impl SingleLineInput {
+    /// Creates a field with its caret at the end of the initial value.
     pub(crate) fn new(
         value: impl Into<SharedString>,
         placeholder: impl Into<SharedString>,
@@ -80,14 +103,17 @@ impl SingleLineInput {
         }
     }
 
+    /// Sets how overflowing text is presented when the field is unfocused.
     pub(crate) fn with_overflow(mut self, overflow: SingleLineOverflow) -> Self {
         self.overflow = overflow;
         self
     }
+    /// Returns the unmodified source value.
     pub(crate) fn value(&self) -> &str {
         &self.content
     }
     #[cfg(test)]
+    /// Replaces the source value and emits a change event in component tests.
     pub(crate) fn set_value(&mut self, value: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.content = value.into();
         self.selection = self.content.len()..self.content.len();
@@ -96,6 +122,7 @@ impl SingleLineInput {
         cx.emit(InputChanged);
         cx.notify();
     }
+    /// Returns the active selection endpoint as a UTF-8 byte offset.
     fn cursor(&self) -> usize {
         if self.reversed {
             self.selection.start
@@ -103,6 +130,7 @@ impl SingleLineInput {
             self.selection.end
         }
     }
+    /// Finds the preceding grapheme boundary in source text.
     fn previous(&self, offset: usize) -> usize {
         self.content
             .grapheme_indices(true)
@@ -110,19 +138,24 @@ impl SingleLineInput {
             .find_map(|(i, _)| (i < offset).then_some(i))
             .unwrap_or(0)
     }
+    /// Finds the following grapheme boundary in source text.
     fn next(&self, offset: usize) -> usize {
         self.content
             .grapheme_indices(true)
             .find_map(|(i, _)| (i > offset).then_some(i))
             .unwrap_or(self.content.len())
     }
+    /// Collapses the selection at a scalar-aligned UTF-8 byte offset.
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        let offset = crate::text_offsets::floor_char_boundary(&self.content, offset);
         self.selection = offset..offset;
         self.reversed = false;
         self.ensure_cursor_visible = true;
         cx.notify();
     }
+    /// Extends the selection to a scalar-aligned UTF-8 byte offset.
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        let offset = crate::text_offsets::floor_char_boundary(&self.content, offset);
         if self.reversed {
             self.selection.start = offset;
         } else {
@@ -135,6 +168,7 @@ impl SingleLineInput {
         self.ensure_cursor_visible = true;
         cx.notify();
     }
+    /// Hit-tests painted text, clamping any display-only suffix to source text.
     fn index_at(&self, point: Point<Pixels>) -> usize {
         let index = match (&self.last_bounds, &self.last_layout) {
             (_, _) if self.content.is_empty() => 0,
@@ -148,6 +182,7 @@ impl SingleLineInput {
             self.previous(index)
         }
     }
+    /// Focuses the field and begins a pointer selection.
     fn on_mouse_down(
         &mut self,
         event: &MouseDownEvent,
@@ -163,14 +198,17 @@ impl SingleLineInput {
             self.move_to(index, cx);
         }
     }
+    /// Extends the selection while dragging.
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
         if self.is_selecting {
             self.select_to(self.index_at(event.position), cx);
         }
     }
+    /// Ends the pointer selection session.
     fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
         self.is_selecting = false;
     }
+    /// Handles selection, navigation, clipboard, and deletion keys locally.
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         let shift = event.keystroke.modifiers.shift;
@@ -189,7 +227,7 @@ impl SingleLineInput {
             }
             (true, _, "v") => {
                 if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                    self.replace_text_in_range(None, &text.replace(['\r', '\n'], " "), window, cx);
+                    self.replace_text_in_range(None, &text, window, cx);
                 }
             }
             (_, true, "left") => {
@@ -237,6 +275,7 @@ impl SingleLineInput {
         }
         cx.stop_propagation();
     }
+    /// Copies the selected source text, if any.
     fn copy(&self, cx: &mut App) {
         if !self.selection.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(
@@ -244,31 +283,19 @@ impl SingleLineInput {
             ));
         }
     }
-    fn utf16_to_utf8(&self, offset: usize) -> usize {
-        Self::utf16_to_utf8_in(&self.content, offset)
-    }
-    fn utf16_to_utf8_in(text: &str, offset: usize) -> usize {
-        text.chars()
-            .scan(0, |count, ch| {
-                let start = *count;
-                *count += ch.len_utf16();
-                Some((start, ch))
-            })
-            .take_while(|(start, _)| *start < offset)
-            .map(|(_, ch)| ch.len_utf8())
-            .sum()
-    }
+    /// Converts a source byte offset to UTF-16 code units.
     fn utf8_to_utf16(&self, offset: usize) -> usize {
-        self.content[..offset.min(self.content.len())]
-            .encode_utf16()
-            .count()
+        crate::text_offsets::utf8_to_utf16(&self.content, offset)
     }
+    /// Converts an IME range to scalar-aligned source byte offsets.
     fn utf16_range_to_utf8(&self, range: Range<usize>) -> Range<usize> {
-        self.utf16_to_utf8(range.start)..self.utf16_to_utf8(range.end)
+        crate::text_offsets::utf16_range_to_utf8(&self.content, &range)
     }
+    /// Converts an ordered source byte range to UTF-16 code units.
     fn utf8_range_to_utf16(&self, range: Range<usize>) -> Range<usize> {
-        self.utf8_to_utf16(range.start)..self.utf8_to_utf16(range.end)
+        crate::text_offsets::utf8_range_to_utf16(&self.content, &range)
     }
+    /// Scrolls the focused field only for dominant horizontal overflow gestures.
     fn on_scroll_wheel(
         &mut self,
         event: &ScrollWheelEvent,
@@ -303,6 +330,7 @@ impl SingleLineInput {
 }
 
 impl EntityInputHandler for SingleLineInput {
+    /// Returns source text for a UTF-16 IME range and its normalized range.
     fn text_for_range(
         &mut self,
         range: Range<usize>,
@@ -314,6 +342,7 @@ impl EntityInputHandler for SingleLineInput {
         actual.replace(self.utf8_range_to_utf16(range.clone()));
         Some(self.content[range].to_string())
     }
+    /// Reports the current UTF-8 selection as a UTF-16 range.
     fn selected_text_range(
         &mut self,
         _: bool,
@@ -325,14 +354,19 @@ impl EntityInputHandler for SingleLineInput {
             reversed: self.reversed,
         })
     }
+    /// Reports the current IME mark as a UTF-16 range.
     fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
         self.marked
             .clone()
             .map(|range| self.utf8_range_to_utf16(range))
     }
+    /// Clears the IME mark without changing source text.
     fn unmark_text(&mut self, _: &mut Window, _: &mut Context<Self>) {
         self.marked = None;
     }
+    /// Replaces an explicit UTF-16 range, or the marked/selected range.
+    ///
+    /// Line breaks become spaces so the stored value remains single-line.
     fn replace_text_in_range(
         &mut self,
         range: Option<Range<usize>>,
@@ -344,6 +378,7 @@ impl EntityInputHandler for SingleLineInput {
             .map(|range| self.utf16_range_to_utf8(range))
             .or(self.marked.clone())
             .unwrap_or(self.selection.clone());
+        let range = crate::text_offsets::normalize_utf8_range(&self.content, range);
         let text = text.replace(['\r', '\n'], " ");
         self.content = format!(
             "{}{}{}",
@@ -360,6 +395,10 @@ impl EntityInputHandler for SingleLineInput {
         cx.emit(InputChanged);
         cx.notify();
     }
+    /// Replaces text during composition and selects within the insertion.
+    ///
+    /// The optional selection is a UTF-16 range relative to the newline-flattened
+    /// inserted text; a nonempty insertion remains marked.
     fn replace_and_mark_text_in_range(
         &mut self,
         range: Option<Range<usize>>,
@@ -374,16 +413,17 @@ impl EntityInputHandler for SingleLineInput {
             .or_else(|| self.marked.as_ref().map(|r| r.start))
             .unwrap_or(self.selection.start);
         self.replace_text_in_range(range, text, window, cx);
-        if !text.is_empty() {
-            self.marked = Some(start..start + text.len());
+        let sanitized = text.replace(['\r', '\n'], " ");
+        if !sanitized.is_empty() {
+            self.marked = Some(start..start + sanitized.len());
         }
         if let Some(selected) = selected {
-            let relative = Self::utf16_to_utf8_in(text, selected.start)
-                ..Self::utf16_to_utf8_in(text, selected.end);
+            let relative = crate::text_offsets::utf16_range_to_utf8(&sanitized, &selected);
             self.selection = start + relative.start..start + relative.end;
         }
         self.ensure_cursor_visible = true;
     }
+    /// Resolves a UTF-16 source range against the last painted line origin.
     fn bounds_for_range(
         &mut self,
         range: Range<usize>,
@@ -403,6 +443,7 @@ impl EntityInputHandler for SingleLineInput {
             point(origin_x + line.x_for_index(range.end), bounds.bottom()),
         ))
     }
+    /// Hit-tests the painted line and returns a UTF-16 source offset.
     fn character_index_for_point(
         &mut self,
         point: Point<Pixels>,
@@ -414,6 +455,7 @@ impl EntityInputHandler for SingleLineInput {
 }
 
 impl Render for SingleLineInput {
+    /// Builds the input surface and its custom text element.
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.global::<ThemeManager>().current();
         let c = &theme.colors;
@@ -447,31 +489,46 @@ impl Render for SingleLineInput {
     }
 }
 
+/// Custom text element used for shaping, viewport painting, and IME registration.
 struct InputTextElement {
+    /// Backing field whose text and focus state are painted.
     input: Entity<SingleLineInput>,
 }
+/// Geometry and paint data shared between prepaint and paint.
 struct InputPrepaint {
+    /// Shaped display line, possibly truncated while unfocused.
     line: ShapedLine,
+    /// Source byte endpoint shown in `line`.
     source_end: usize,
+    /// Painted x origin after applying the focused viewport offset.
     paint_origin_x: Pixels,
+    /// Caret quad, if focused with no selection.
     cursor: Option<PaintQuad>,
+    /// Selection quad, if focused with a nonempty selection.
     selection: Option<PaintQuad>,
 }
 impl IntoElement for InputTextElement {
+    /// The custom element's concrete GPUI element type.
     type Element = Self;
+    /// Uses this custom element directly in the GPUI tree.
     fn into_element(self) -> Self {
         self
     }
 }
 impl Element for InputTextElement {
+    /// Layout requests do not retain intermediate state.
     type RequestLayoutState = ();
+    /// Prepaint data consumed by the paint pass.
     type PrepaintState = InputPrepaint;
+    /// This anonymous element has no persistent element ID.
     fn id(&self) -> Option<ElementId> {
         None
     }
+    /// This element does not report a source location.
     fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
         None
     }
+    /// Requests a full-width, full-height text viewport.
     fn request_layout(
         &mut self,
         _: Option<&GlobalElementId>,
@@ -484,6 +541,7 @@ impl Element for InputTextElement {
         s.size.height = relative(1.).into();
         (window.request_layout(s, [], cx), ())
     }
+    /// Shapes displayed text and computes viewport, caret, and selection geometry.
     fn prepaint(
         &mut self,
         _: Option<&GlobalElementId>,
@@ -653,6 +711,7 @@ impl Element for InputTextElement {
             selection,
         }
     }
+    /// Registers the focused IME handler, paints clipped text, and saves hit-test data.
     fn paint(
         &mut self,
         _: Option<&GlobalElementId>,
@@ -697,20 +756,24 @@ impl Element for InputTextElement {
     }
 }
 
+/// Returns the furthest horizontal scroll offset for the shaped content.
 fn max_viewport_offset(content_width: f32, viewport_width: f32) -> f32 {
     (content_width - viewport_width).max(0.0)
 }
 
+/// Clamps a horizontal scroll offset to the available overflow.
 fn clamp_viewport_offset(offset: f32, content_width: f32, viewport_width: f32) -> f32 {
     offset.clamp(0.0, max_viewport_offset(content_width, viewport_width))
 }
 
+/// Adjusts a scroll offset only when the caret lies beyond the viewport edge.
 fn cursor_visible_offset(
     offset: f32,
     cursor_x: f32,
     content_width: f32,
     viewport_width: f32,
 ) -> f32 {
+    /// Space kept to the right of a caret brought into view, in pixels.
     const CURSOR_MARGIN: f32 = 2.0;
     let offset = clamp_viewport_offset(offset, content_width, viewport_width);
     let target = if cursor_x < offset {
@@ -723,6 +786,7 @@ fn cursor_visible_offset(
     clamp_viewport_offset(target, content_width, viewport_width)
 }
 
+/// Accepts a horizontal gesture only while content actually overflows.
 fn should_handle_horizontal_scroll(
     delta_x: f32,
     delta_y: f32,
@@ -732,10 +796,12 @@ fn should_handle_horizontal_scroll(
     content_width > viewport_width && delta_x.abs() > delta_y.abs()
 }
 
+/// Finds the last complete grapheme fitting in the shaped line width.
 fn fitting_grapheme_end(text: &str, available_width: Pixels, line: &ShapedLine) -> usize {
     fitting_grapheme_end_by(text, |end| line.x_for_index(end) <= available_width)
 }
 
+/// Finds the longest grapheme prefix satisfying a caller-supplied width test.
 fn fitting_grapheme_end_by(text: &str, mut fits: impl FnMut(usize) -> bool) -> usize {
     text.grapheme_indices(true)
         .map(|(start, grapheme)| start + grapheme.len())
@@ -744,6 +810,7 @@ fn fitting_grapheme_end_by(text: &str, mut fits: impl FnMut(usize) -> bool) -> u
         .unwrap_or(0)
 }
 
+/// Removes any display-only suffix and floors the result to a scalar boundary.
 fn clamp_source_index(content: &str, display_index: usize, source_end: usize) -> usize {
     let mut index = display_index.min(source_end).min(content.len());
     while !content.is_char_boundary(index) {
@@ -753,11 +820,15 @@ fn clamp_source_index(content: &str, display_index: usize, source_end: usize) ->
 }
 
 #[derive(Debug, PartialEq)]
+/// Byte range and opacity of one trailing grapheme in fade mode.
 struct FadeSegment {
+    /// Grapheme byte range in the shaped display text.
     range: Range<usize>,
+    /// Opacity applied to that grapheme's text run.
     opacity: f32,
 }
 
+/// Splits the trailing graphemes into progressively dimmer text runs.
 fn fade_segments(text: &str) -> Vec<FadeSegment> {
     let graphemes = text.grapheme_indices(true).collect::<Vec<_>>();
     let fade_start = graphemes.len().saturating_sub(FADE_GRAPHEME_COUNT);
@@ -778,7 +849,7 @@ mod tests {
         cursor_visible_offset, fade_segments, fitting_grapheme_end_by,
         should_handle_horizontal_scroll,
     };
-    use gpui::{AppContext as _, TestAppContext};
+    use gpui::{AppContext as _, EntityInputHandler as _, TestAppContext};
     use unicode_segmentation::UnicodeSegmentation as _;
 
     #[test]
@@ -871,5 +942,36 @@ mod tests {
                 cx.new(|cx| super::SingleLineInput::new("long value", "", cx).with_overflow(mode));
             input.read_with(cx, |input, _cx| assert_eq!(input.overflow, mode));
         }
+    }
+
+    #[gpui::test]
+    async fn ime_mark_replace_and_cancel_preserve_unicode_ranges(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let input = cx.new(|cx| super::SingleLineInput::new("a😀b", "", cx));
+
+        cx.update(|window, cx| {
+            input.update(cx, |input, input_cx| {
+                input.replace_and_mark_text_in_range(
+                    Some(1..3),
+                    "测e\u{301}",
+                    Some(2..3),
+                    window,
+                    input_cx,
+                );
+                assert_eq!(input.value(), "a测e\u{301}b");
+                assert_eq!(input.marked, Some(1..7));
+                assert_eq!(input.selection, 5..7);
+
+                let mut actual = None;
+                assert_eq!(
+                    input.text_for_range(2..3, &mut actual, window, input_cx),
+                    Some("e".to_string())
+                );
+                assert_eq!(actual, Some(2..3));
+                input.replace_text_in_range(None, "", window, input_cx);
+                assert_eq!(input.value(), "ab");
+                assert_eq!(input.marked, None);
+            });
+        });
     }
 }

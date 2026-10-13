@@ -16,26 +16,34 @@ use crate::components::{Block, BlockKind, CalloutVariant, parse_standalone_image
 /// A block together with its position in the current visible DFS order.
 #[derive(Clone)]
 pub(super) struct VisibleBlock {
+    /// Block entity at this position in visible depth-first order.
     pub entity: Entity<Block>,
 }
 
 /// A block's position inside the runtime tree.
 #[derive(Clone)]
 pub(super) struct BlockLocation {
+    /// Owning block, or `None` for a root.
     pub parent: Option<Entity<Block>>,
+    /// Index within the parent's children or the root list.
     pub index: usize,
 }
 
 /// Cached visible-order metadata for the current runtime tree.
 #[derive(Default, Clone)]
 pub(super) struct VisibleTreeSnapshot {
+    /// Blocks in visible depth-first order.
     visible: Vec<VisibleBlock>,
+    /// Reverse lookup into `visible`.
     visible_index_by_entity: HashMap<EntityId, usize>,
+    /// Parent and sibling position for each block.
     location_by_entity: HashMap<EntityId, BlockLocation>,
+    /// Last visible descendant for each block, including itself for leaves.
     last_visible_descendant_by_entity: HashMap<EntityId, EntityId>,
 }
 
 impl VisibleTreeSnapshot {
+    /// Invalidates all cached order and location data before a rebuild.
     fn clear(&mut self) {
         self.visible.clear();
         self.visible_index_by_entity.clear();
@@ -51,11 +59,14 @@ impl VisibleTreeSnapshot {
 /// edit must go through this type so the runtime tree stays aligned with the
 /// subset of Markdown that the importer and serializer can reconstruct.
 pub(super) struct DocumentTree {
+    /// Ordered top-level blocks.
     roots: Vec<Entity<Block>>,
+    /// Cached depth-first order and structural lookups.
     snapshot: VisibleTreeSnapshot,
 }
 
 impl DocumentTree {
+    /// Creates a tree from roots; callers must rebuild metadata before snapshot lookups.
     pub(super) fn new(roots: Vec<Entity<Block>>) -> Self {
         Self {
             roots,
@@ -63,26 +74,32 @@ impl DocumentTree {
         }
     }
 
+    /// Returns the first root block, if any.
     pub(super) fn first_root(&self) -> Option<&Entity<Block>> {
         self.roots.first()
     }
 
+    /// Returns ordered root blocks without allowing structural mutation.
     pub(super) fn root_blocks(&self) -> &[Entity<Block>] {
         &self.roots
     }
 
+    /// Returns the number of root blocks.
     pub(super) fn root_count(&self) -> usize {
         self.roots.len()
     }
 
+    /// Returns the cached visible depth-first order.
     pub(super) fn visible_blocks(&self) -> &[VisibleBlock] {
         &self.snapshot.visible
     }
 
+    /// Clones the cached visible block order.
     pub(super) fn flatten_visible_blocks(&self) -> Vec<VisibleBlock> {
         self.snapshot.visible.clone()
     }
 
+    /// Finds the visible block whose focus handle owns window focus.
     pub(super) fn focused_block_entity_id(&self, window: &Window, cx: &App) -> Option<EntityId> {
         self.snapshot
             .visible
@@ -91,6 +108,7 @@ impl DocumentTree {
             .map(|visible| visible.entity.entity_id())
     }
 
+    /// Looks up a block's cached visible index.
     pub(super) fn visible_index_for_entity_id(&self, entity_id: EntityId) -> Option<usize> {
         self.snapshot
             .visible_index_by_entity
@@ -98,12 +116,14 @@ impl DocumentTree {
             .copied()
     }
 
+    /// Returns a visible block entity by ID.
     pub(super) fn block_entity_by_id(&self, entity_id: EntityId) -> Option<Entity<Block>> {
         self.visible_index_for_entity_id(entity_id)
             .and_then(|index| self.snapshot.visible.get(index))
             .map(|visible| visible.entity.clone())
     }
 
+    /// Returns the block's parent and sibling index from the snapshot.
     pub(super) fn find_block_location(&self, entity_id: EntityId) -> Option<BlockLocation> {
         self.snapshot.location_by_entity.get(&entity_id).cloned()
     }
@@ -119,6 +139,7 @@ impl DocumentTree {
         }
     }
 
+    /// Returns a block's last visible descendant, or the block itself if a leaf.
     pub(super) fn last_visible_descendant(&self, entity_id: EntityId) -> Option<Entity<Block>> {
         let descendant_id = self
             .snapshot
@@ -128,17 +149,20 @@ impl DocumentTree {
         self.block_entity_by_id(descendant_id)
     }
 
+    /// Replaces all roots and eagerly rebuilds structural metadata.
     pub(super) fn replace_roots(&mut self, roots: Vec<Entity<Block>>, cx: &mut Context<Editor>) {
         self.roots = roots;
         self.rebuild_metadata_and_snapshot(cx);
     }
 
+    /// Serializes the structured tree into canonical Markdown.
     pub(super) fn markdown_text(&self, cx: &App) -> String {
         let mut lines = Vec::new();
         Self::collect_root_markdown_lines(&self.roots, cx, &mut lines);
         lines.join("\n")
     }
 
+    /// Concatenates visible display text for source mode's single-block tree.
     pub(super) fn raw_source_text(&self, cx: &App) -> String {
         self.snapshot
             .visible
@@ -148,6 +172,7 @@ impl DocumentTree {
             .join("\n")
     }
 
+    /// Inserts blocks under a parent or at root level and rebuilds metadata.
     pub(super) fn insert_blocks_at(
         &mut self,
         parent: Option<Entity<Block>>,
@@ -199,6 +224,7 @@ impl DocumentTree {
         );
     }
 
+    /// Removes and returns a block's children without rebuilding the tree.
     pub(super) fn take_children(
         block: &Entity<Block>,
         cx: &mut Context<Editor>,
@@ -210,6 +236,7 @@ impl DocumentTree {
         children
     }
 
+    /// Inserts blocks at an exact sibling index without rebuilding metadata.
     pub(super) fn insert_blocks_at_raw(
         &mut self,
         parent: Option<Entity<Block>>,
@@ -234,6 +261,7 @@ impl DocumentTree {
         }
     }
 
+    /// Removes a block by ID without rebuilding metadata and returns its location.
     pub(super) fn remove_block_by_id_raw(
         &mut self,
         entity_id: EntityId,
@@ -280,6 +308,7 @@ impl DocumentTree {
         }
     }
 
+    /// Walks siblings to update block metadata and visible-order lookup tables.
     fn sync_block_list(
         blocks: &[Entity<Block>],
         parent_entity: Option<Entity<Block>>,
@@ -425,12 +454,14 @@ impl DocumentTree {
         }
     }
 
+    /// Tests whether a root paragraph represents an empty source line.
     fn is_empty_root_paragraph(block: &Block) -> bool {
         block.kind() == BlockKind::Paragraph
             && block.record.title.visible_text().is_empty()
             && block.children.is_empty()
     }
 
+    /// Serializes roots while retaining meaningful leading and trailing empty lines.
     fn collect_root_markdown_lines(blocks: &[Entity<Block>], cx: &App, lines: &mut Vec<String>) {
         let mut pending_empty_roots = 0usize;
         let mut wrote_non_empty_root = false;
@@ -470,6 +501,7 @@ impl DocumentTree {
         }
     }
 
+    /// Appends one block's Markdown lines, including supported child structure.
     fn collect_single_block_markdown_lines(
         block_ref: &Block,
         list_depth: usize,
@@ -635,6 +667,7 @@ impl DocumentTree {
         }
     }
 
+    /// Requires a separating blank line before a non-image child paragraph.
     fn list_child_requires_leading_blank_line(block_ref: &Block) -> bool {
         if block_ref.kind() != BlockKind::Paragraph || !block_ref.children.is_empty() {
             return false;
@@ -644,6 +677,7 @@ impl DocumentTree {
         !markdown.is_empty() && parse_standalone_image(&markdown).is_none()
     }
 
+    /// Appends sibling blocks, inserting blank lines where requested.
     fn collect_markdown_lines(
         blocks: &[Entity<Block>],
         depth: usize,

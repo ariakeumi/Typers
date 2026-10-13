@@ -2,11 +2,12 @@
 
 use std::path::PathBuf;
 
-/// Parses a local file URL into a path.
+/// Decodes a local `file://` URL or passes a plain path through unchanged.
 ///
 /// GPUI's macOS `on_open_urls` callback provides `file://` URLs, while tests
 /// and other callers may pass plain paths. Only local `file://` URLs are
 /// accepted; non-file schemes and remote file authorities are rejected.
+/// Malformed percent escapes or non-UTF-8 decoded URL paths return `None`.
 pub(crate) fn parse_file_url(value: &str) -> Option<PathBuf> {
     if let Some(rest) = value.strip_prefix("file://") {
         let path = if let Some(path) = rest.strip_prefix("localhost/") {
@@ -27,6 +28,7 @@ pub(crate) fn parse_file_url(value: &str) -> Option<PathBuf> {
     Some(PathBuf::from(value))
 }
 
+/// Decodes percent-encoded bytes, rejecting malformed escapes and invalid UTF-8.
 fn percent_decode(value: &str) -> Option<String> {
     let bytes = value.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
@@ -47,6 +49,7 @@ fn percent_decode(value: &str) -> Option<String> {
     String::from_utf8(decoded).ok()
 }
 
+/// Converts an ASCII hexadecimal digit to its numeric value.
 fn hex_value(byte: u8) -> Option<u8> {
     match byte {
         b'0'..=b'9' => Some(byte - b'0'),

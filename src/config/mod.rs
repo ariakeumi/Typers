@@ -15,11 +15,13 @@ pub(crate) use preferences::{
     read_app_preferences,
 };
 
+/// Maximum number of paths retained in recent-file history.
 pub(crate) const RECENT_FILES_LIMIT: usize = 20;
 
 /// Cross-platform configuration directories owned by Velotype.
 #[derive(Debug, Clone)]
 pub(crate) struct VelotypeConfigDirs {
+    /// Platform-specific root containing preferences, history, and imported packs.
     root: PathBuf,
 }
 
@@ -43,35 +45,43 @@ impl VelotypeConfigDirs {
         Self { root: root.into() }
     }
 
+    /// Returns the directory for persisted custom language packs.
     pub(crate) fn languages_dir(&self) -> PathBuf {
         self.root.join("languages")
     }
 
+    /// Returns the directory for persisted custom theme packs.
     pub(crate) fn themes_dir(&self) -> PathBuf {
         self.root.join("themes")
     }
 
+    /// Returns the newline-delimited recent-file history path.
     pub(crate) fn history_file(&self) -> PathBuf {
         self.root.join(".history")
     }
 
+    /// Returns the app's TOML preferences path.
     pub(crate) fn app_config_file(&self) -> PathBuf {
         self.root.join("config.toml")
     }
 }
 
+/// Reads normalized recent-file history from the system configuration directory.
 pub(crate) fn read_recent_files() -> anyhow::Result<Vec<PathBuf>> {
     read_recent_files_with_dirs(&VelotypeConfigDirs::from_system()?)
 }
 
+/// Moves a recordable path to the front of persisted recent-file history.
 pub(crate) fn record_recent_file(path: &Path) -> anyhow::Result<Vec<PathBuf>> {
     record_recent_file_with_dirs(path, &VelotypeConfigDirs::from_system()?)
 }
 
+/// Removes a path from persisted history and returns the remaining entries.
 pub(crate) fn remove_recent_file(path: &Path) -> anyhow::Result<Vec<PathBuf>> {
     remove_recent_file_with_dirs(path, &VelotypeConfigDirs::from_system()?)
 }
 
+/// Reads history from the supplied directories; a missing file yields no entries.
 pub(crate) fn read_recent_files_with_dirs(
     dirs: &VelotypeConfigDirs,
 ) -> anyhow::Result<Vec<PathBuf>> {
@@ -87,6 +97,7 @@ pub(crate) fn read_recent_files_with_dirs(
     Ok(normalize_recent_files(text.lines().map(PathBuf::from)))
 }
 
+/// Records a nonblank path, excluding app drop fixtures in the system temp directory.
 pub(crate) fn record_recent_file_with_dirs(
     path: &Path,
     dirs: &VelotypeConfigDirs,
@@ -107,6 +118,7 @@ pub(crate) fn record_recent_file_with_dirs(
     Ok(paths)
 }
 
+/// Removes matching history entries using platform-specific path comparison.
 pub(crate) fn remove_recent_file_with_dirs(
     path: &Path,
     dirs: &VelotypeConfigDirs,
@@ -117,6 +129,7 @@ pub(crate) fn remove_recent_file_with_dirs(
     Ok(paths)
 }
 
+/// Writes normalized history, deleting the history file when no entries remain.
 fn write_recent_files_with_dirs(
     paths: &[PathBuf],
     dirs: &VelotypeConfigDirs,
@@ -148,6 +161,7 @@ fn write_recent_files_with_dirs(
         .with_context(|| format!("failed to write '{}'", history_file.display()))
 }
 
+/// Trims, filters, deduplicates, and caps paths while preserving their order.
 fn normalize_recent_files(paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
     let mut normalized: Vec<PathBuf> = Vec::new();
     for path in paths {
@@ -174,6 +188,7 @@ fn normalize_recent_files(paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathB
     normalized
 }
 
+/// Rejects blank paths and known drop-fixture names inside the system temp directory.
 fn is_recordable_recent_file_path(path: &Path) -> bool {
     let text = path.to_string_lossy();
     if text.trim().is_empty() {
@@ -183,6 +198,7 @@ fn is_recordable_recent_file_path(path: &Path) -> bool {
     !(is_inside_system_temp_dir(path) && has_velotype_temp_fixture_name(path))
 }
 
+/// Checks lexical containment in the system temp directory without resolving symlinks.
 fn is_inside_system_temp_dir(path: &Path) -> bool {
     let temp_dir = std::env::temp_dir();
     if cfg!(windows) {
@@ -197,6 +213,7 @@ fn is_inside_system_temp_dir(path: &Path) -> bool {
     path.starts_with(temp_dir)
 }
 
+/// Normalizes slashes, trailing separators, and ASCII case for temp-path checks.
 fn normalize_windows_path_text(path: &Path) -> String {
     path.to_string_lossy()
         .replace('/', "\\")
@@ -204,6 +221,7 @@ fn normalize_windows_path_text(path: &Path) -> String {
         .to_ascii_lowercase()
 }
 
+/// Recognizes current and legacy misspelled drop-fixture filename prefixes.
 fn has_velotype_temp_fixture_name(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
@@ -214,6 +232,7 @@ fn has_velotype_temp_fixture_name(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Compares history paths with ASCII case folding on Windows, exactly elsewhere.
 fn same_recent_path(left: &Path, right: &Path) -> bool {
     if cfg!(windows) {
         left.to_string_lossy()
@@ -223,6 +242,7 @@ fn same_recent_path(left: &Path, right: &Path) -> bool {
     }
 }
 
+/// Accepts `.json` and `.jsonc` extensions without regard to ASCII case.
 pub(crate) fn is_supported_config_file(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -232,6 +252,7 @@ pub(crate) fn is_supported_config_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Reads a supported pack file, stripping comments only for the `.jsonc` extension.
 pub(crate) fn read_json_or_jsonc(path: &Path) -> anyhow::Result<Value> {
     if !is_supported_config_file(path) {
         bail!("configuration files must use the .json or .jsonc extension");
@@ -252,11 +273,14 @@ pub(crate) fn read_json_or_jsonc(path: &Path) -> anyhow::Result<Value> {
     Ok(parsed)
 }
 
+/// Parses JSON after removing comments; trailing commas remain invalid.
 pub(crate) fn parse_jsonc_value(text: &str) -> anyhow::Result<Value> {
     let stripped = strip_jsonc_comments(text)?;
     Ok(serde_json::from_str(&stripped)?)
 }
 
+/// Removes line and block comments outside strings, preserving newlines.
+/// Returns an error for an unterminated block comment.
 pub(crate) fn strip_jsonc_comments(input: &str) -> anyhow::Result<String> {
     let mut output = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
@@ -323,6 +347,7 @@ pub(crate) fn strip_jsonc_comments(input: &str) -> anyhow::Result<String> {
     Ok(output)
 }
 
+/// Keeps alphanumerics and `-_.`, folds whitespace to `_`, and falls back to `custom`.
 pub(crate) fn sanitize_config_file_stem(value: &str) -> String {
     let mut output = String::new();
     let mut last_was_separator = false;
@@ -346,6 +371,8 @@ pub(crate) fn sanitize_config_file_stem(value: &str) -> String {
     }
 }
 
+/// Removes recursively empty children and reports whether the value itself is empty.
+/// Nulls and blank strings are empty; booleans and numbers are retained.
 pub(crate) fn prune_empty_json_values(value: &mut Value) -> bool {
     match value {
         Value::Null => true,
@@ -362,6 +389,7 @@ pub(crate) fn prune_empty_json_values(value: &mut Value) -> bool {
     }
 }
 
+/// Recursively merges object keys, ignores empty patches, and replaces other values.
 pub(crate) fn merge_non_empty_json_values(base: &mut Value, patch: &Value) {
     if is_empty_json_value(patch) {
         return;
@@ -387,11 +415,13 @@ pub(crate) fn merge_non_empty_json_values(base: &mut Value, patch: &Value) {
     }
 }
 
+/// Prunes empty descendants and drops object entries left empty by that pruning.
 pub(crate) fn object_without_empty_values(mut object: Map<String, Value>) -> Map<String, Value> {
     object.retain(|_, value| !prune_empty_json_values(value));
     object
 }
 
+/// Tests recursive emptiness without mutating the JSON value.
 fn is_empty_json_value(value: &Value) -> bool {
     match value {
         Value::Null => true,

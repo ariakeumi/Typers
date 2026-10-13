@@ -17,14 +17,20 @@ use crate::components::{
 /// Cross-block selection with endpoints ordered by visible block position.
 #[derive(Clone, Copy)]
 struct NormalizedCrossBlockSelection {
+    /// Earlier endpoint in visible document order.
     start: CrossBlockSelectionEndpoint,
+    /// Later endpoint in visible document order.
     end: CrossBlockSelectionEndpoint,
+    /// Visible index of `start`.
     start_index: usize,
+    /// Visible index of `end`.
     end_index: usize,
+    /// Whether focus precedes anchor in document order.
     reversed: bool,
 }
 
 impl Editor {
+    /// Clears per-block selection highlights and reports whether any changed.
     fn clear_cross_block_selection_visuals(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
         for visible in self.document.visible_blocks().to_vec() {
@@ -38,6 +44,7 @@ impl Editor {
         changed
     }
 
+    /// Clears the editor-wide selection, drag state, and block highlights.
     pub(super) fn clear_cross_block_selection(&mut self, cx: &mut Context<Self>) {
         let had_selection = self.cross_block_selection.take().is_some();
         self.cross_block_drag = None;
@@ -48,6 +55,7 @@ impl Editor {
         }
     }
 
+    /// Starts a rendered drag selection from the block under a pointer position.
     fn begin_cross_block_drag_at_point(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let had_selection = self.cross_block_selection.take().is_some();
         let changed_visuals = self.clear_cross_block_selection_visuals(cx);
@@ -60,6 +68,7 @@ impl Editor {
         }
     }
 
+    /// Captures a left-button rendered drag anchor before block handlers run.
     pub(super) fn on_editor_capture_mouse_down(
         &mut self,
         event: &MouseDownEvent,
@@ -81,6 +90,7 @@ impl Editor {
         cx.propagate();
     }
 
+    /// Extends a rendered drag across visible blocks and updates highlights.
     pub(super) fn on_editor_mouse_move(
         &mut self,
         event: &MouseMoveEvent,
@@ -114,6 +124,7 @@ impl Editor {
         cx.notify();
     }
 
+    /// Ends an editor drag and any block-local pointer selection sessions.
     pub(super) fn on_editor_mouse_up(
         &mut self,
         _event: &MouseUpEvent,
@@ -124,6 +135,7 @@ impl Editor {
         self.end_block_pointer_selection_sessions(cx);
     }
 
+    /// Copies a cross-block Markdown selection or lets block copy handle the action.
     pub(super) fn on_copy_capture(
         &mut self,
         _: &Copy,
@@ -138,6 +150,7 @@ impl Editor {
         cx.stop_propagation();
     }
 
+    /// Copies and removes a cross-block selection or delegates to the focused block.
     pub(super) fn on_cut_capture(&mut self, _: &Cut, _window: &mut Window, cx: &mut Context<Self>) {
         let Some(markdown) = self.cross_block_selected_markdown(cx) else {
             cx.propagate();
@@ -148,6 +161,7 @@ impl Editor {
         cx.stop_propagation();
     }
 
+    /// Deletes a cross-block selection or delegates forward delete to the block.
     pub(super) fn on_delete_capture(
         &mut self,
         _: &Delete,
@@ -161,6 +175,7 @@ impl Editor {
         cx.stop_propagation();
     }
 
+    /// Deletes a cross-block selection or delegates backward delete to the block.
     pub(super) fn on_delete_back_capture(
         &mut self,
         _: &DeleteBack,
@@ -174,6 +189,7 @@ impl Editor {
         cx.stop_propagation();
     }
 
+    /// Checks for a forward selection spanning the first through last visible blocks.
     fn rendered_document_is_fully_selected(&self, cx: &App) -> bool {
         let visible = self.document.visible_blocks().to_vec();
         let Some(first) = visible.first() else {
@@ -198,6 +214,7 @@ impl Editor {
                 }
     }
 
+    /// Selects only the focused block's visible text for the first Select All press.
     fn select_focused_block_text_for_rendered_select_all(
         &mut self,
         block: Entity<Block>,
@@ -220,6 +237,7 @@ impl Editor {
         cx.notify();
     }
 
+    /// Selects the full visible rendered document as an editor-wide range.
     fn select_all_rendered_document(&mut self, cx: &mut Context<Self>) {
         if self.rendered_document_is_fully_selected(cx) {
             return;
@@ -266,6 +284,7 @@ impl Editor {
         cx.notify();
     }
 
+    /// Cycles Select All from current block to full rendered document.
     pub(super) fn on_rendered_select_all_press(
         &mut self,
         block: Entity<Block>,
@@ -303,6 +322,7 @@ impl Editor {
         }
     }
 
+    /// Captures an editor-wide selection as a directional source-byte range.
     pub(super) fn cross_block_source_selection_snapshot(
         &self,
         cx: &App,
@@ -315,6 +335,8 @@ impl Editor {
         })
     }
 
+    /// Restores a nonempty source snapshot spanning distinct visible blocks.
+    /// Returns false when its endpoints cannot form a cross-block selection.
     pub(super) fn apply_cross_block_selection_snapshot_if_possible(
         &mut self,
         snapshot: &UndoSelectionSnapshot,
@@ -361,6 +383,7 @@ impl Editor {
         true
     }
 
+    /// Resolves a pointer position to the nearest visible block text offset.
     fn cross_block_endpoint_for_point(
         &self,
         position: Point<Pixels>,
@@ -405,6 +428,7 @@ impl Editor {
         })
     }
 
+    /// Treats missing blocks and coincident endpoints as empty selections.
     fn cross_block_selection_is_empty(&self, selection: CrossBlockSelection) -> bool {
         let Some(anchor_index) = self
             .document
@@ -421,6 +445,7 @@ impl Editor {
         anchor_index == focus_index && selection.anchor.offset == selection.focus.offset
     }
 
+    /// Clamps endpoints and orders them by visible position, retaining direction.
     fn normalized_cross_block_selection(&self, cx: &App) -> Option<NormalizedCrossBlockSelection> {
         let selection = self.cross_block_selection?;
         let anchor = self.clamp_cross_block_endpoint(selection.anchor, cx)?;
@@ -448,6 +473,7 @@ impl Editor {
         })
     }
 
+    /// Clamps an endpoint to its current block's visible byte length.
     fn clamp_cross_block_endpoint(
         &self,
         endpoint: CrossBlockSelectionEndpoint,
@@ -461,6 +487,7 @@ impl Editor {
         })
     }
 
+    /// Projects the editor-wide selection into each visible block's highlight range.
     fn sync_cross_block_selection_visuals(&mut self, cx: &mut Context<Self>) {
         let normalized = self.normalized_cross_block_selection(cx);
         let visible_blocks = self.document.visible_blocks().to_vec();
@@ -492,6 +519,7 @@ impl Editor {
         }
     }
 
+    /// Indexes editable source mappings by block entity ID.
     fn source_mapping_by_entity_id(&self, cx: &App) -> HashMap<EntityId, SourceTargetMapping> {
         self.build_source_target_mappings(cx)
             .into_iter()
@@ -499,6 +527,7 @@ impl Editor {
             .collect()
     }
 
+    /// Converts a visible block endpoint to an absolute source-byte offset.
     fn endpoint_source_offset(
         &self,
         endpoint: CrossBlockSelectionEndpoint,
@@ -524,6 +553,7 @@ impl Editor {
         )
     }
 
+    /// Maps a source offset to the nearest editable block endpoint.
     fn endpoint_for_source_offset(
         &self,
         offset: usize,
@@ -549,6 +579,7 @@ impl Editor {
         })
     }
 
+    /// Finds the source span, expanding across any included atomic blocks.
     fn cross_block_source_range_for_normalized(
         &self,
         selection: NormalizedCrossBlockSelection,
@@ -595,6 +626,7 @@ impl Editor {
         Some(lo..hi)
     }
 
+    /// Rebuilds the active document representation after a source-level edit.
     fn rebuild_after_cross_block_source_edit(&mut self, source: String, cx: &mut Context<Self>) {
         match self.view_mode {
             ViewMode::Rendered => {
@@ -621,6 +653,7 @@ impl Editor {
         }
     }
 
+    /// Marks newly inserted text when both endpoints map to the same block.
     fn apply_marked_source_range(&mut self, source_range: Range<usize>, cx: &mut Context<Self>) {
         if source_range.is_empty() {
             return;
@@ -644,6 +677,8 @@ impl Editor {
         });
     }
 
+    /// Replaces a cross-block source span, restores selection, and captures undo.
+    /// Returns false when no usable cross-block selection exists.
     pub(super) fn replace_cross_block_selection_with_text(
         &mut self,
         new_text: &str,
@@ -699,6 +734,7 @@ impl Editor {
         true
     }
 
+    /// Serializes selected blocks with document spacing, including atomic blocks.
     pub(super) fn cross_block_selected_markdown(&self, cx: &App) -> Option<String> {
         let selection = self.normalized_cross_block_selection(cx)?;
         let source = self.current_document_source(cx);
@@ -775,6 +811,7 @@ impl Editor {
         Some(result)
     }
 
+    /// Serializes a full block or the selected portion of its Markdown source.
     fn markdown_chunk_for_block(
         &self,
         entity: &Entity<Block>,
@@ -836,6 +873,7 @@ impl Editor {
             .unwrap_or_default()
     }
 
+    /// Deletes a selected source span and restores a caret at its start.
     fn delete_cross_block_selection(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(selection) = self.normalized_cross_block_selection(cx) else {
             return false;

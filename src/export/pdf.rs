@@ -18,10 +18,14 @@ use crate::export::html::render_chromium_pdf_html_with_base_dir_and_fonts;
 use crate::fonts::FontSettings;
 use crate::theme::Theme;
 
+/// Browser viewport width used while loading the print document.
 const CHROMIUM_VIEWPORT_WIDTH: u32 = 1280;
+/// Browser viewport height used while loading the print document.
 const CHROMIUM_VIEWPORT_HEIGHT: u32 = 1600;
+/// Maximum duration of the Chromium PDF operation.
 const PDF_TIMEOUT: Duration = Duration::from_secs(45);
 
+/// Prints themed Markdown to PDF bytes using a temporary Chromium session.
 pub(crate) fn render_pdf_with_fonts(
     markdown: &str,
     theme: &Theme,
@@ -44,6 +48,7 @@ pub(crate) fn render_pdf_with_fonts(
     })
 }
 
+/// Writes print-ready HTML, then removes its temporary file after printing.
 async fn render_pdf_async_with_fonts(
     markdown: &str,
     theme: &Theme,
@@ -59,6 +64,7 @@ async fn render_pdf_async_with_fonts(
     result
 }
 
+/// Loads a local HTML file in headless Chromium and requests PDF output.
 async fn render_pdf_from_html_file_async(html_path: PathBuf) -> anyhow::Result<Vec<u8>> {
     let user_data_dir = unique_temp_path("velotype-chromium-profile");
     fs::create_dir_all(&user_data_dir)
@@ -109,6 +115,7 @@ async fn render_pdf_from_html_file_async(html_path: PathBuf) -> anyhow::Result<V
     result
 }
 
+/// Prints backgrounds and honors CSS page sizing without extra CDP margins.
 fn chromium_pdf_params() -> PrintToPdfParams {
     let mut params = PrintToPdfParams::default();
     params.print_background = Some(true);
@@ -122,20 +129,25 @@ fn chromium_pdf_params() -> PrintToPdfParams {
     params
 }
 
+/// Converts a local path to a browser-loadable file URL.
 fn file_url_from_path(path: &Path) -> anyhow::Result<url::Url> {
     url::Url::from_file_path(path)
         .map_err(|_| anyhow!("failed to convert '{}' to a file URL", path.display()))
 }
 
+/// Creates a UUID-suffixed path in the system temporary directory.
 fn unique_temp_path(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!("{prefix}-{}", Uuid::new_v4()))
 }
 
+/// Owns temporary HTML and removes it when dropped.
 struct PdfTempFiles {
+    /// HTML document loaded by the Chromium session.
     html_path: PathBuf,
 }
 
 impl PdfTempFiles {
+    /// Writes export HTML to a uniquely named temporary file.
     fn create(html: &str) -> anyhow::Result<Self> {
         let html_path = unique_temp_path("velotype-export").with_extension("html");
         fs::write(&html_path, html)
@@ -143,12 +155,14 @@ impl PdfTempFiles {
         Ok(Self { html_path })
     }
 
+    /// Best-effort removal of the temporary HTML file.
     fn cleanup(&self) {
         let _ = fs::remove_file(&self.html_path);
     }
 }
 
 impl Drop for PdfTempFiles {
+    /// Removes temporary HTML if explicit cleanup has not already done so.
     fn drop(&mut self) {
         self.cleanup();
     }

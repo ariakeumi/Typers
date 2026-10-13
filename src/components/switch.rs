@@ -6,16 +6,21 @@ use gpui::{prelude::FluentBuilder, *};
 
 use crate::theme::ThemeManager;
 
-/// A toggle switch that can be checked or unchecked.
+/// A controlled toggle whose owner updates the checked state after clicks.
 #[derive(IntoElement)]
 pub(crate) struct Switch {
+    /// Stable element identity used to retain the previous animation state.
     id: ElementId,
+    /// Checked state supplied by the owner for this render.
     checked: bool,
+    /// Visual disabled state; does not suppress the attached click handler.
     disabled: bool,
+    /// Optional click callback; the switch does not mutate its own value.
     on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
 }
 
 impl Switch {
+    /// Creates an unchecked, enabled switch with no click handler.
     pub fn new(id: impl Into<ElementId>) -> Self {
         Self {
             id: id.into(),
@@ -42,6 +47,7 @@ impl Switch {
 }
 
 impl RenderOnce for Switch {
+    /// Renders themed track and thumb, animating changes to the supplied value.
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.global::<ThemeManager>().current().clone();
         let c = &theme.colors;

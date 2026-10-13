@@ -31,6 +31,111 @@ fn assert_only_code_range(block: &Block, expected: Range<usize>) {
 }
 
 #[gpui::test]
+async fn unicode_selection_and_replacement_stay_on_scalar_boundaries(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    let block = cx.new(|cx| Block::with_record(cx, BlockRecord::paragraph("*测试")));
+
+    cx.update(|_, cx| {
+        block.update(cx, |block, block_cx| {
+            for offset in 0..=block.display_text().len() + 1 {
+                block.move_to(offset, block_cx);
+                assert!(block.display_text().is_char_boundary(block.cursor_offset()));
+                assert!(
+                    block
+                        .display_text()
+                        .is_char_boundary(block.previous_boundary(offset))
+                );
+                assert!(
+                    block
+                        .display_text()
+                        .is_char_boundary(block.next_boundary(offset))
+                );
+                block.select_to(offset, block_cx);
+                assert!(
+                    block
+                        .display_text()
+                        .get(block.selected_range.clone())
+                        .is_some()
+                );
+            }
+            block.replace_text_in_visible_range(2..5, "X", None, false, block_cx);
+        });
+    });
+
+    block.read_with(cx, |block, _| {
+        assert_eq!(block.display_text(), "*X");
+        assert!(block.display_text().is_char_boundary(block.cursor_offset()));
+    });
+}
+
+#[gpui::test]
+async fn unicode_ime_range_conversion_preserves_surrogate_and_combining_edges(
+    cx: &mut TestAppContext,
+) {
+    let cx = cx.add_empty_window();
+    let block = cx.new(|cx| Block::with_record(cx, BlockRecord::paragraph("a😀e\u{301}")));
+
+    block.read_with(cx, |block, _| {
+        assert_eq!(block.range_from_utf16(&(2..2)), 1..1);
+        assert_eq!(block.range_from_utf16(&(1..2)), 1..5);
+        assert_eq!(block.range_from_utf16(&(4..5)), 6..8);
+        assert_eq!(block.range_to_utf16(&(6..8)), 4..5);
+    });
+}
+
+#[gpui::test]
+async fn ime_cancel_removes_only_marked_text_after_cjk_content(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    let block = cx.new(|cx| Block::with_record(cx, BlockRecord::paragraph("前文")));
+
+    cx.update(|window, cx| {
+        block.update(cx, |block, block_cx| {
+            block.move_to("前文".len(), block_cx);
+            <Block as EntityInputHandler>::replace_and_mark_text_in_range(
+                block,
+                None,
+                "ni",
+                Some(2..2),
+                window,
+                block_cx,
+            );
+            assert_eq!(block.display_text(), "前文ni");
+            assert_eq!(block.marked_range, Some(6..8));
+            <Block as EntityInputHandler>::replace_text_in_range(block, None, "", window, block_cx);
+        });
+    });
+
+    block.read_with(cx, |block, _| {
+        assert_eq!(block.display_text(), "前文");
+        assert_eq!(block.selected_range, 6..6);
+        assert_eq!(block.marked_range, None);
+    });
+}
+
+#[gpui::test]
+async fn projected_unicode_footnote_maps_only_to_source_boundaries(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    let mut title = InlineTextTree::from_markdown("[^测试]");
+    title.apply_footnote_reference_state(|_| Some((1, 0)));
+    let block = cx.new(|cx| Block::with_record(cx, BlockRecord::new(BlockKind::Paragraph, title)));
+
+    cx.update(|_, cx| {
+        block.update(cx, |block, block_cx| {
+            block.move_to(0, block_cx);
+            block.sync_inline_projection_for_focus(true);
+            assert_eq!(block.display_text(), "[^测试]");
+            let markdown = block.record.title.serialize_markdown();
+            for offset in 0..=block.display_text().len() {
+                let clean = block.current_to_clean_offset(offset);
+                assert!(block.render_cache.visible_text().is_char_boundary(clean));
+                let source_range = block.current_range_to_markdown_range(offset..offset);
+                assert!(markdown.get(source_range).is_some());
+            }
+        });
+    });
+}
+
+#[gpui::test]
 async fn tab_inserts_character_in_paragraph(cx: &mut TestAppContext) {
     let cx = cx.add_empty_window();
     let block = cx.new(|cx| Block::with_record(cx, BlockRecord::paragraph("ab")));
@@ -2588,6 +2693,44 @@ async fn code_language_input_handles_utf16_ranges(cx: &mut TestAppContext) {
 
     block.read_with(cx, |block, _cx| {
         assert_eq!(block.code_language_text(), "zhpykana");
+        assert_eq!(block.display_text(), "body");
+    });
+}
+
+#[gpui::test]
+async fn code_language_ime_selection_tracks_collapsed_crlf(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    let block = cx.new(|cx| {
+        Block::with_record(
+            cx,
+            BlockRecord::new(
+                BlockKind::CodeBlock {
+                    language: Some("rust".into()),
+                },
+                InlineTextTree::plain("body"),
+            ),
+        )
+    });
+
+    cx.update(|window, cx| {
+        block.update(cx, |block, block_cx| {
+            block.code_language_focus_handle.focus(window);
+            block.code_language_selected_range = 0..4;
+            <Block as EntityInputHandler>::replace_and_mark_text_in_range(
+                block,
+                None,
+                "a\r\n😀",
+                Some(3..5),
+                window,
+                block_cx,
+            );
+        });
+    });
+
+    block.read_with(cx, |block, _| {
+        assert_eq!(block.code_language_text(), "a 😀");
+        assert_eq!(block.code_language_selected_range, 2..6);
+        assert_eq!(block.code_language_marked_range, Some(0..6));
         assert_eq!(block.display_text(), "body");
     });
 }

@@ -1,33 +1,37 @@
 //! Rendering for [`Block`] via GPUI's high-level [`Render`] trait.
 //!
-//! Each block kind produces a distinct visual style: H1 has a bottom border,
-//! list items render a marker column (bullet / ordinal), and raw Markdown
-//! fallback renders as plain text.
+//! Block kinds produce distinct visual styles: H1 and H2 have bottom borders,
+//! list items render marker columns, and raw Markdown fallback uses text.
 
 use gpui::*;
 
+/// Key context used by a focused block's action handlers.
 const BLOCK_EDITOR_CONTEXT: &str = "BlockEditor";
 
 use super::element::{BlockTextElement, CodeLanguageInputElement};
-use super::{Block, BlockEvent, BlockKind, ImageResolvedSource, ImageRuntime};
+use super::{Block, BlockEvent, BlockKind, ImageResolvedSource, ImageRuntime, InlineLinkHit};
 use crate::components::{
-    Editor, HtmlCssColor, HtmlDocument, HtmlNode, HtmlNodeKind, InlineScript, TableAxisHighlight,
-    TableAxisKind, TableAxisMarker, TableCellInlineImageSegment, TableColumnLayout, attr_value,
-    display_math_font_size, inline_math_font_size, parse_display_math_source,
-    parse_html_image_block, parse_mermaid_fence_source, parse_table_cell_inline_images,
-    render_display_math_svg, render_inline_math_svg, render_mermaid_svg_for_display,
-    resolve_image_source, style_for_node,
+    Editor, HtmlContainerImage, HtmlCssColor, HtmlDocument, HtmlNode, HtmlNodeKind, InlineScript,
+    TableAxisHighlight, TableAxisKind, TableAxisMarker, TableCellInlineImageSegment,
+    TableColumnLayout, attr_value, display_math_font_size, inline_math_font_size,
+    parse_display_math_source, parse_html_image_block, parse_mermaid_fence_source,
+    parse_table_cell_inline_images, render_display_math_svg, render_inline_math_svg,
+    render_mermaid_svg_for_display, resolve_image_source, style_for_node,
 };
 use crate::fonts::FontSettings;
 use crate::i18n::{I18nManager, I18nStrings};
 use crate::theme::{Theme, ThemeDimensions, ThemeManager};
 
-// Unicode bullet glyphs for nested list depths.
+/// Bullet glyph for top-level list items.
 const BULLET_FILLED: &str = "\u{2022}";
+/// Bullet glyph for second-level list items.
 const BULLET_HOLLOW: &str = "\u{25E6}";
+/// Bullet glyph for deeper list items.
 const BULLET_SQUARE: &str = "\u{25A1}";
+/// Glyph painted for a checked task item.
 const TASK_CHECKMARK: &str = "\u{2713}";
 
+/// Chooses a bullet glyph from the list nesting depth.
 fn bulleted_list_marker(depth: usize) -> &'static str {
     match depth {
         0 => BULLET_FILLED,
@@ -36,6 +40,7 @@ fn bulleted_list_marker(depth: usize) -> &'static str {
     }
 }
 
+/// Returns whether column preview or selection requires the top axis gutter.
 fn column_axis_gutter_visible(
     preview_marker: Option<TableAxisMarker>,
     selected_marker: Option<TableAxisMarker>,
@@ -65,6 +70,7 @@ fn header_axis_emphasis(color: Hsla) -> Hsla {
     }
 }
 
+/// Uses image alt text, or the localized placeholder when it is empty.
 fn fallback_image_label(alt: &str, strings: &I18nStrings) -> SharedString {
     if alt.trim().is_empty() {
         SharedString::from(strings.image_placeholder.clone())
@@ -73,6 +79,7 @@ fn fallback_image_label(alt: &str, strings: &I18nStrings) -> SharedString {
     }
 }
 
+/// Renders the fallback shown when an image cannot be loaded.
 fn render_image_placeholder(
     runtime: &ImageRuntime,
     width: Length,
@@ -101,6 +108,7 @@ fn render_image_placeholder(
         .into_any_element()
 }
 
+/// Renders localized placeholder text while an image loads.
 fn render_loading_placeholder(
     runtime: &ImageRuntime,
     width: Length,
@@ -137,6 +145,7 @@ fn render_loading_placeholder(
         .into_any_element()
 }
 
+/// Adds one vertical guide per visible quote level around rendered content.
 fn wrap_with_quote_guides(content: AnyElement, quote_depth: usize, theme: &Theme) -> AnyElement {
     if quote_depth == 0 {
         return content;
@@ -164,6 +173,7 @@ fn wrap_with_quote_guides(content: AnyElement, quote_depth: usize, theme: &Theme
         .into_any_element()
 }
 
+/// Returns the theme accent and background colors for a callout variant.
 fn callout_accent_and_background(variant: super::CalloutVariant, theme: &Theme) -> (Hsla, Hsla) {
     let c = &theme.colors;
     match variant {
@@ -175,10 +185,12 @@ fn callout_accent_and_background(variant: super::CalloutVariant, theme: &Theme) 
     }
 }
 
+/// Returns the number of quote guides this block should display.
 fn visible_quote_guides(block: &Block) -> usize {
     block.visible_quote_depth
 }
 
+/// Budgets native table width inside the centered column and quote insets.
 fn effective_table_width(block: &Block, viewport_width: f32, d: &ThemeDimensions) -> f32 {
     let centered_width = Editor::centered_column_width(viewport_width, d);
     let visible_quote_guides = visible_quote_guides(block);
@@ -193,6 +205,7 @@ fn effective_table_width(block: &Block, viewport_width: f32, d: &ThemeDimensions
         .max((d.table_cell_padding_x * 2.0 + 80.0).max(120.0))
 }
 
+/// Returns the centered-column width left after quote and callout insets.
 fn container_image_width_budget(block: &Block, viewport_width: f32, d: &ThemeDimensions) -> f32 {
     let centered_width = Editor::centered_column_width(viewport_width, d);
     let visible_quote_guides = visible_quote_guides(block);
@@ -206,12 +219,14 @@ fn container_image_width_budget(block: &Block, viewport_width: f32, d: &ThemeDim
     centered_width - quote_inset - callout_inset
 }
 
+/// Budgets image width after block padding and list indentation.
 fn effective_image_width(block: &Block, viewport_width: f32, d: &ThemeDimensions) -> f32 {
     let list_inset = d.nested_block_indent * block.render_depth as f32;
     (container_image_width_budget(block, viewport_width, d) - d.block_padding_x * 2.0 - list_inset)
         .max(160.0)
 }
 
+/// Budgets a list-item image after its marker column and gap.
 fn effective_list_item_image_width(block: &Block, viewport_width: f32, d: &ThemeDimensions) -> f32 {
     let marker_width = match block.kind() {
         BlockKind::BulletedListItem => d.list_marker_width,
@@ -241,6 +256,7 @@ fn numbered_list_marker(depth: usize, ordinal: usize) -> String {
 
 /// Expands beyond 26 by wrapping: a...z, a1...z1, a2...z2, ...
 fn alphabetic_list_marker(ordinal: usize) -> String {
+    /// Alphabet used before numbered suffixes are added.
     const ALPHABET: &[u8; 26] = b"abcdefghijklmnopqrstuvwxyz";
 
     let ordinal = ordinal.max(1);
@@ -274,7 +290,9 @@ fn roman_list_marker(ordinal: usize) -> String {
     marker
 }
 
+/// Builds an ASCII Roman numeral before glyph substitution.
 fn ascii_roman_numeral(mut ordinal: usize) -> String {
+    /// Descending Roman numeral values and their ASCII symbols.
     const MAP: &[(usize, &str)] = &[
         (1000, "M"),
         (900, "CM"),
@@ -301,7 +319,9 @@ fn ascii_roman_numeral(mut ordinal: usize) -> String {
     result
 }
 
+/// Matches the longest supported leading Roman token to a Unicode glyph.
 fn roman_unicode_token(remaining: &str) -> Option<(usize, &'static str)> {
+    /// Longest-first substitutions for supported Roman numeral glyphs.
     const TOKENS: &[(&str, &str)] = &[
         ("XII", "\u{216B}"),
         ("XI", "\u{216A}"),
@@ -328,6 +348,7 @@ fn roman_unicode_token(remaining: &str) -> Option<(usize, &'static str)> {
     })
 }
 
+/// Flattens an HTML node's text children, converting `br` to newlines.
 fn html_children_text(node: &HtmlNode) -> String {
     if node.children.is_empty() {
         return node.raw_source.clone();
@@ -344,29 +365,41 @@ fn html_children_text(node: &HtmlNode) -> String {
     text
 }
 
+/// Inheritable text styling while traversing an HTML document.
 #[derive(Clone, Copy, Debug)]
 struct HtmlComputedStyle {
+    /// Computed foreground color.
     color: Hsla,
+    /// Computed font size for this node.
     font_size: f32,
+    /// Root font size used for relative CSS sizes.
     root_font_size: f32,
+    /// Whether an enclosing HTML container centers its inline Markdown rows.
+    centered: bool,
 }
 
+/// Computed text style plus this node's non-inherited background.
 #[derive(Clone, Copy, Debug)]
 struct HtmlNodeVisualStyle {
+    /// Style passed to child nodes.
     computed: HtmlComputedStyle,
+    /// Background applied only to this node.
     background: Option<Hsla>,
 }
 
 impl HtmlComputedStyle {
+    /// Starts HTML styling from the theme's normal text values.
     fn root(theme: &Theme) -> Self {
         Self {
             color: theme.colors.text_default,
             font_size: theme.typography.text_size,
             root_font_size: theme.typography.text_size,
+            centered: false,
         }
     }
 }
 
+/// Resolves an HTML CSS color against its current foreground color.
 fn html_css_color_to_hsla(color: HtmlCssColor, current_color: Hsla) -> Hsla {
     match color {
         HtmlCssColor::CurrentColor => current_color,
@@ -379,6 +412,7 @@ fn html_css_color_to_hsla(color: HtmlCssColor, current_color: Hsla) -> Hsla {
     }
 }
 
+/// Combines inherited text style, tag defaults, and inline CSS for a node.
 fn html_node_visual_style(
     node: &HtmlNode,
     parent: HtmlComputedStyle,
@@ -390,6 +424,12 @@ fn html_node_visual_style(
     let mut background = None;
 
     match node.tag_name.as_str() {
+        "div"
+            if attr_value(node, "align")
+                .is_some_and(|align| align.eq_ignore_ascii_case("center")) =>
+        {
+            computed.centered = true;
+        }
         "a" => computed.color = c.text_link,
         "blockquote" => computed.color = c.text_quote,
         "code" | "kbd" | "pre" => {
@@ -425,7 +465,46 @@ fn html_node_visual_style(
     }
 }
 
+/// Extends a run across linked badges separated by one physical newline.
+fn html_badge_run_end(nodes: &[HtmlNode], start: usize) -> Option<usize> {
+    if !matches!(
+        &nodes.get(start)?.kind,
+        HtmlNodeKind::MarkdownImage(HtmlContainerImage {
+            link_target: Some(_),
+            ..
+        })
+    ) {
+        return None;
+    }
+
+    let mut end = start + 1;
+    while let (Some(separator), Some(next)) = (nodes.get(end), nodes.get(end + 1)) {
+        let one_newline = separator.tag_name == "#text"
+            && separator.raw_source.trim().is_empty()
+            && separator
+                .raw_source
+                .bytes()
+                .filter(|byte| *byte == b'\n')
+                .count()
+                == 1;
+        if !one_newline
+            || !matches!(
+                &next.kind,
+                HtmlNodeKind::MarkdownImage(HtmlContainerImage {
+                    link_target: Some(_),
+                    ..
+                })
+            )
+        {
+            break;
+        }
+        end += 2;
+    }
+    Some(end)
+}
+
 impl Block {
+    /// Toggles the rendered HTML details body and consumes the click.
     fn on_html_details_toggle_mouse_down(
         &mut self,
         _: &MouseDownEvent,
@@ -437,6 +516,7 @@ impl Block {
         cx.notify();
     }
 
+    /// Renders a resolved image with loading, fallback, and optional caption.
     fn render_image_content(
         &self,
         runtime: &ImageRuntime,
@@ -510,6 +590,7 @@ impl Block {
         container.into_any_element()
     }
 
+    /// Renders display math as SVG, retaining source text on parse/render failure.
     fn render_math_content(&self, theme: &Theme) -> AnyElement {
         let c = &theme.colors;
         let d = &theme.dimensions;
@@ -567,6 +648,7 @@ impl Block {
         }
     }
 
+    /// Renders Mermaid as SVG, scrolling wide output and showing source on error.
     fn render_mermaid_content(&self, theme: &Theme, window: &Window) -> AnyElement {
         let c = &theme.colors;
         let d = &theme.dimensions;
@@ -648,6 +730,7 @@ impl Block {
         }
     }
 
+    /// Uses editable text on focus and mixed inline visuals in display mode.
     fn render_text_or_mixed_inline_visuals(
         &self,
         theme: &Theme,
@@ -679,6 +762,7 @@ impl Block {
         self.render_mixed_inline_visual_runs(theme, text_color, font_size, font_weight, cx)
     }
 
+    /// Renders the title tree as wrapping text, scripts, and inline math.
     fn render_mixed_inline_visual_runs(
         &self,
         theme: &Theme,
@@ -697,6 +781,7 @@ impl Block {
         )
     }
 
+    /// Builds a wrapping container for one inline text tree.
     fn render_inline_tree_runs(
         &self,
         tree: &crate::components::InlineTextTree,
@@ -726,6 +811,7 @@ impl Block {
             .into_any_element()
     }
 
+    /// Renders cached spans and any unstyled gaps in an inline tree.
     fn render_inline_tree_children(
         &self,
         tree: &crate::components::InlineTextTree,
@@ -838,6 +924,7 @@ impl Block {
         segments
     }
 
+    /// Renders one text fragment with inline formatting and link activation.
     fn render_inline_text_segment(
         &self,
         text: &str,
@@ -940,6 +1027,7 @@ impl Block {
         element.into_any_element()
     }
 
+    /// Renders inline math as SVG or its source when rendering fails.
     fn render_inline_math_segment(
         &self,
         math: &crate::components::InlineMath,
@@ -979,6 +1067,7 @@ impl Block {
         }
     }
 
+    /// Renders a compact image suitable for a native table cell.
     fn render_inline_image_content(
         &self,
         runtime: &ImageRuntime,
@@ -986,10 +1075,25 @@ impl Block {
         strings: &I18nStrings,
     ) -> AnyElement {
         let d = &theme.dimensions;
-        let source = runtime.resolved_source.clone();
         let max_height = px(d.image_cell_placeholder_height);
         let max_width =
             Length::Definite(px((d.image_cell_placeholder_height * 1.6).max(48.0)).into());
+        self.render_bounded_inline_image_content(
+            runtime, max_width, max_height, None, theme, strings,
+        )
+    }
+
+    /// Shares the table-cell image loader with compact linked badges in HTML divs.
+    fn render_bounded_inline_image_content(
+        &self,
+        runtime: &ImageRuntime,
+        max_width: Length,
+        max_height: Pixels,
+        fixed_height: Option<Pixels>,
+        theme: &Theme,
+        strings: &I18nStrings,
+    ) -> AnyElement {
+        let source = runtime.resolved_source.clone();
         let placeholder_theme = theme.clone();
         let loading_theme = theme.clone();
         let placeholder_strings = strings.clone();
@@ -997,31 +1101,35 @@ impl Block {
         let runtime_for_fallback = runtime.clone();
         let runtime_for_loading = runtime.clone();
 
-        let image = match source {
+        let mut image = match source {
             ImageResolvedSource::Local(path) => img(path),
             ImageResolvedSource::Remote(uri) => img(uri),
         }
         .max_w(max_width)
         .max_h(max_height)
-        .object_fit(ObjectFit::Contain)
-        .with_fallback(move || {
-            render_image_placeholder(
-                &runtime_for_fallback,
-                max_width,
-                max_height,
-                &placeholder_theme,
-                &placeholder_strings,
-            )
-        })
-        .with_loading(move || {
-            render_loading_placeholder(
-                &runtime_for_loading,
-                max_width,
-                max_height,
-                &loading_theme,
-                &loading_strings,
-            )
-        });
+        .object_fit(ObjectFit::Contain);
+        if let Some(height) = fixed_height {
+            image = image.h(height);
+        }
+        let image = image
+            .with_fallback(move || {
+                render_image_placeholder(
+                    &runtime_for_fallback,
+                    max_width,
+                    max_height,
+                    &placeholder_theme,
+                    &placeholder_strings,
+                )
+            })
+            .with_loading(move || {
+                render_loading_placeholder(
+                    &runtime_for_loading,
+                    max_width,
+                    max_height,
+                    &loading_theme,
+                    &loading_strings,
+                )
+            });
 
         div()
             .flex()
@@ -1032,6 +1140,7 @@ impl Block {
             .into_any_element()
     }
 
+    /// Renders mixed image and text segments in a table cell when images exist.
     fn render_table_cell_inline_images(
         &self,
         theme: &Theme,
@@ -1097,6 +1206,7 @@ impl Block {
         )
     }
 
+    /// Renders semantic HTML nodes or preserves non-semantic raw source.
     fn render_html_document(
         &self,
         document: &HtmlDocument,
@@ -1134,6 +1244,7 @@ impl Block {
             .into_any_element()
     }
 
+    /// Dispatches a parsed HTML node to its native visual representation.
     fn render_html_node(
         &self,
         node: &HtmlNode,
@@ -1159,6 +1270,48 @@ impl Block {
                 .into_any_element();
         }
 
+        if let HtmlNodeKind::MarkdownImage(syntax) = &node.kind {
+            if let Some(runtime) = self.image_runtime_for_syntax(syntax.syntax.clone()) {
+                let strings = cx.global::<I18nManager>().strings_arc();
+                return self.render_image_content(
+                    &runtime,
+                    Length::Definite(relative(1.0)),
+                    px(d.image_root_max_height),
+                    px(d.image_root_placeholder_height),
+                    theme,
+                    &strings,
+                );
+            }
+            return div()
+                .text_size(px(inherited_style.font_size))
+                .text_color(inherited_style.color)
+                .child(SharedString::from(node.raw_source.clone()))
+                .into_any_element();
+        }
+
+        if let HtmlNodeKind::MarkdownInline(tree) = &node.kind {
+            let mut row = div()
+                .w_full()
+                .min_w(px(0.0))
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .text_size(px(inherited_style.font_size))
+                .line_height(rems(t.text_line_height))
+                .children(self.render_inline_tree_children(
+                    tree,
+                    theme,
+                    inherited_style.color,
+                    inherited_style.font_size,
+                    FontWeight::NORMAL,
+                    cx,
+                ));
+            if inherited_style.centered {
+                row = row.justify_center();
+            }
+            return row.into_any_element();
+        }
+
         if node.tag_name == "#text" {
             return div()
                 .min_w(px(0.0))
@@ -1170,6 +1323,39 @@ impl Block {
 
         let node_style = html_node_visual_style(node, inherited_style, theme);
         match node.tag_name.as_str() {
+            "div" => {
+                let has_markdown_children = node.children.iter().any(|child| {
+                    matches!(
+                        child.kind,
+                        HtmlNodeKind::MarkdownImage(_) | HtmlNodeKind::MarkdownInline(_)
+                    )
+                });
+                let mut element = div()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap(px(if has_markdown_children {
+                        d.block_gap
+                    } else {
+                        0.0
+                    }))
+                    .text_size(px(node_style.computed.font_size))
+                    .text_color(node_style.computed.color)
+                    .children(self.render_html_div_children(
+                        node,
+                        theme,
+                        node_style.computed,
+                        has_markdown_children,
+                        cx,
+                    ));
+                if node_style.computed.centered {
+                    element = element.items_center().text_center();
+                }
+                if let Some(bg) = node_style.background {
+                    element = element.bg(bg);
+                }
+                element.into_any_element()
+            }
             "strong" | "b" => {
                 self.render_html_inline_container(node, theme, node_style, FontWeight::BOLD, cx)
             }
@@ -1365,6 +1551,113 @@ impl Block {
         }
     }
 
+    /// Keeps consecutive linked badges in a wrapping row; other children retain block order.
+    fn render_html_div_children(
+        &self,
+        node: &HtmlNode,
+        theme: &Theme,
+        inherited_style: HtmlComputedStyle,
+        has_markdown_children: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let mut children = Vec::new();
+        let mut index = 0;
+        while index < node.children.len() {
+            if let Some(end) = html_badge_run_end(&node.children, index) {
+                let strings = cx.global::<I18nManager>().strings_arc();
+                let badges = node.children[index..end].iter().filter_map(|child| {
+                    let HtmlNodeKind::MarkdownImage(image) = &child.kind else {
+                        return None;
+                    };
+                    Some(self.render_html_badge_image(
+                        image,
+                        &child.raw_source,
+                        theme,
+                        &strings,
+                        cx,
+                    ))
+                });
+                children.push(
+                    div()
+                        .w_full()
+                        .min_w(px(0.0))
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(theme.dimensions.image_caption_gap))
+                        .children(badges)
+                        .into_any_element(),
+                );
+                index = end;
+                continue;
+            }
+
+            let child = &node.children[index];
+            if !has_markdown_children
+                || child.tag_name != "#text"
+                || !child.raw_source.trim().is_empty()
+            {
+                children.push(self.render_html_node(child, theme, inherited_style, cx));
+            }
+            index += 1;
+        }
+        children
+    }
+
+    /// Uses the existing image loader and link prompt for a compact badge.
+    fn render_html_badge_image(
+        &self,
+        image: &HtmlContainerImage,
+        source: &str,
+        theme: &Theme,
+        strings: &I18nStrings,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(runtime) = self.image_runtime_for_syntax(image.syntax.clone()) else {
+            return div()
+                .child(SharedString::from(source.to_string()))
+                .into_any_element();
+        };
+        let max_height = px((theme.typography.text_size * 1.4).clamp(18.0, 32.0));
+        let content = self.render_bounded_inline_image_content(
+            &runtime,
+            Length::Definite(px(220.0).into()),
+            max_height,
+            Some(max_height),
+            theme,
+            strings,
+        );
+        let Some(target) = &image.link_target else {
+            return content;
+        };
+        let hit = InlineLinkHit {
+            prompt_target: target.clone(),
+            open_target: target.clone(),
+        };
+        let badge = div()
+            .flex()
+            .items_center()
+            .child(content)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(Self::on_rendered_link_mouse_down),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(move |block, event: &MouseUpEvent, _window, cx| {
+                    if event.modifiers.secondary() {
+                        block.open_rendered_link(&hit, cx);
+                    }
+                }),
+            );
+        LinkFollowCursor {
+            child: badge.into_any_element(),
+        }
+        .into_any_element()
+    }
+
+    /// Renders inline HTML children with computed typography and background.
     fn render_html_inline_container(
         &self,
         node: &HtmlNode,
@@ -1403,6 +1696,7 @@ impl Block {
         element.into_any_element()
     }
 
+    /// Renders a resolved HTML image or its raw node when no source exists.
     fn render_html_image(
         &self,
         node: &HtmlNode,
@@ -1456,6 +1750,7 @@ impl Block {
         }
     }
 
+    /// Renders an HTML table container and its parsed child rows.
     fn render_html_table(
         &self,
         node: &HtmlNode,
@@ -1480,6 +1775,7 @@ impl Block {
         element.into_any_element()
     }
 
+    /// Renders an HTML table row as a horizontal cell layout.
     fn render_html_table_row(
         &self,
         node: &HtmlNode,
@@ -1503,6 +1799,7 @@ impl Block {
         element.into_any_element()
     }
 
+    /// Renders an HTML details disclosure and its conditional body.
     fn render_html_details(
         &self,
         node: &HtmlNode,
@@ -1564,6 +1861,7 @@ impl Block {
         container.into_any_element()
     }
 
+    /// Registers block keyboard and pointer actions on the shared wrapper.
     fn render_shell(
         &self,
         block_id: ElementId,
@@ -1632,6 +1930,7 @@ impl Block {
 }
 
 impl Focusable for Block {
+    /// Returns the focus handle used by this block's render shell.
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
@@ -1639,10 +1938,11 @@ impl Focusable for Block {
 
 /// The render method builds the full element tree for a block:
 /// - Common wrapper: key_context, track_focus, action handlers, mouse events.
-/// - Kind-specific styling: headings get size/weight/border, list items get
-///   a flex row with marker + content, everything else renders as plain text.
+/// - Kind-specific styling: headings get size/weight, the top two also get
+///   borders, and list items get a marker beside their content.
 /// - The [`BlockTextElement`] handles text layout, selection, and cursor.
 impl Render for Block {
+    /// Builds the block-kind-specific element tree and interaction shell.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focused = self.focus_handle.is_focused(window);
         let code_language_focused = self.code_language_focus_handle.is_focused(window);
@@ -2975,12 +3275,6 @@ impl Render for Block {
     }
 }
 
-/// Break a styled inline text run into wrap-friendly chunks for the mixed
-/// inline-visual layout. Runs that carry their own box (inline code, background
-/// highlight) stay a single chunk so their padding/background is continuous;
-/// everything else is split on whitespace with each word keeping its trailing
-/// space, so the `flex_wrap` row can break between words instead of pushing the
-/// next inline visual onto its own line.
 /// Wraps a rendered inline link run so the hand cursor only appears while the
 /// Cmd/Ctrl follow modifier is held. Links in mixed inline-visual blocks (math,
 /// scripts, inline images) render as plain divs, so this sets `PointingHand`
@@ -2989,29 +3283,37 @@ impl Render for Block {
 /// so the cursor re-evaluates without the pointer moving. Layout and painting
 /// are delegated to the child.
 struct LinkFollowCursor {
+    /// Rendered link segment whose layout and painting are delegated.
     child: AnyElement,
 }
 
 impl IntoElement for LinkFollowCursor {
+    /// Uses the cursor wrapper itself as the GPUI element.
     type Element = Self;
 
+    /// Passes the wrapper into GPUI unchanged.
     fn into_element(self) -> Self::Element {
         self
     }
 }
 
 impl Element for LinkFollowCursor {
+    /// The child owns layout state.
     type RequestLayoutState = ();
+    /// Hitbox used to gate the pointing-hand cursor.
     type PrepaintState = Hitbox;
 
+    /// This wrapper does not expose a stable element ID.
     fn id(&self) -> Option<ElementId> {
         None
     }
 
+    /// This wrapper does not expose a source location.
     fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
         None
     }
 
+    /// Delegates the layout request to the rendered link child.
     fn request_layout(
         &mut self,
         _id: Option<&GlobalElementId>,
@@ -3022,6 +3324,7 @@ impl Element for LinkFollowCursor {
         (self.child.request_layout(window, cx), ())
     }
 
+    /// Prepaints the child and creates a hover hitbox over its bounds.
     fn prepaint(
         &mut self,
         _id: Option<&GlobalElementId>,
@@ -3035,6 +3338,7 @@ impl Element for LinkFollowCursor {
         window.insert_hitbox(bounds, HitboxBehavior::Normal)
     }
 
+    /// Paints the child and shows a hand cursor while the follow key is held.
     fn paint(
         &mut self,
         _id: Option<&GlobalElementId>,
@@ -3054,6 +3358,8 @@ impl Element for LinkFollowCursor {
     }
 }
 
+/// Splits plain text at whitespace for flex wrapping while keeping boxed
+/// code and highlighted spans intact.
 fn inline_word_chunks(text: &str, code: bool, has_background: bool) -> Vec<&str> {
     if text.is_empty() {
         return Vec::new();
@@ -3067,13 +3373,50 @@ fn inline_word_chunks(text: &str, code: bool, has_background: bool) -> Vec<&str>
 #[cfg(test)]
 mod tests {
     use super::{
-        HtmlComputedStyle, column_axis_gutter_visible, html_node_visual_style, inline_word_chunks,
+        HtmlComputedStyle, column_axis_gutter_visible, html_badge_run_end, html_node_visual_style,
+        inline_word_chunks,
     };
     use crate::components::{Block, BlockKind, BlockRecord, InlineTextTree, parse_html_document};
     use crate::components::{TableAxisKind, TableAxisMarker};
     use crate::i18n::I18nManager;
     use crate::theme::{Theme, ThemeManager};
     use gpui::{Hsla, Rgba, TestAppContext, px};
+
+    #[test]
+    fn consecutive_linked_badges_share_a_row_but_blank_lines_break_it() {
+        let document = parse_html_document(
+            "<div align=\"center\">\n[![one](one.svg)](https://one.test)\n[![two](two.svg)](https://two.test)\n\n[![three](three.svg)](https://three.test)\n</div>",
+        );
+        let nodes = &document.nodes[0].children;
+        let badge_indices = nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| {
+                matches!(node.kind, crate::components::HtmlNodeKind::MarkdownImage(_))
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(badge_indices.len(), 3);
+        assert_eq!(
+            html_badge_run_end(nodes, badge_indices[0]),
+            Some(badge_indices[1] + 1)
+        );
+        assert_eq!(
+            html_badge_run_end(nodes, badge_indices[2]),
+            Some(badge_indices[2] + 1)
+        );
+
+        let banner = parse_html_document("<div>\n![banner](banner.png)\n</div>");
+        let banner_index = banner.nodes[0]
+            .children
+            .iter()
+            .position(|node| matches!(node.kind, crate::components::HtmlNodeKind::MarkdownImage(_)))
+            .expect("banner image");
+        assert_eq!(
+            html_badge_run_end(&banner.nodes[0].children, banner_index),
+            None
+        );
+    }
 
     #[test]
     fn top_gutter_only_appears_for_column_axis_state() {

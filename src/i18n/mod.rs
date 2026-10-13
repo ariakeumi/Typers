@@ -45,7 +45,7 @@ pub struct I18nStrings {
     pub drop_no_markdown_file_message: String,
     /// Label for dismissing simple informational dialogs.
     pub info_dialog_ok: String,
-    /// Title of the placeholder update-check dialog.
+    /// Title shown while an update check is running.
     pub help_check_updates_title: String,
     /// Body text shown while an update check is running.
     pub help_check_updates_message: String,
@@ -159,18 +159,29 @@ pub struct I18nStrings {
     pub preferences_startup_last_opened_file: String,
     /// Theme preference field label.
     pub preferences_local_theme: String,
+    /// Label for the document body font family list.
     pub preferences_font_body: String,
+    /// Label for the code font family list.
     pub preferences_font_code: String,
+    /// Label for the application UI font family list.
     pub preferences_font_ui: String,
+    /// Help text displayed above the font family inputs.
     pub preferences_font_help: String,
+    /// Availability warning displayed verbatim when no requested family is installed.
     pub preferences_font_unavailable_template: String,
+    /// Validation message for a font list with no nonblank families.
     pub preferences_font_error_empty: String,
+    /// Validation message for an unclosed quote in a font family list.
     pub preferences_font_error_unterminated_quote: String,
     /// Image paste behavior field label.
     pub preferences_image_insert_behavior: String,
+    /// Image policy label for leaving existing files in place.
     pub preferences_image_paste_none: String,
+    /// Image policy label for copying to the document or working directory.
     pub preferences_image_paste_copy_to_document_folder: String,
+    /// Image policy label for copying to an `assets` subdirectory.
     pub preferences_image_paste_copy_to_assets_folder: String,
+    /// Image policy label for a document-named assets directory.
     pub preferences_image_paste_copy_to_named_assets_folder: String,
     /// Save button label in the preferences window.
     pub preferences_save: String,
@@ -178,63 +189,121 @@ pub struct I18nStrings {
     pub preferences_cancel: String,
     /// Title shown when preferences cannot be saved.
     pub preferences_save_failed_title: String,
+    /// Heading for file-related shortcuts.
     pub preferences_shortcuts_group_file: String,
+    /// Heading for editing shortcuts.
     pub preferences_shortcuts_group_edit: String,
+    /// Heading for navigation shortcuts.
     pub preferences_shortcuts_group_navigation: String,
+    /// Heading for inline formatting shortcuts.
     pub preferences_shortcuts_group_formatting: String,
+    /// Heading for block editing shortcuts.
     pub preferences_shortcuts_group_block: String,
+    /// Heading for uncategorized shortcuts.
     pub preferences_shortcuts_group_other: String,
+    /// Button label for recording a replacement shortcut.
     pub preferences_shortcut_record: String,
+    /// Button label for restoring a command's default shortcuts.
     pub preferences_shortcut_reset: String,
+    /// Label shown while waiting for a shortcut keystroke.
     pub preferences_shortcut_recording: String,
+    /// Conflict message with `{command}` replaced by the conflicting command label.
     pub preferences_shortcut_conflict_template: String,
+    /// Invalid-binding message with `{shortcut}` replaced by the captured key.
     pub preferences_shortcut_invalid_template: String,
+    /// Command label for inserting a newline.
     pub preferences_shortcut_newline: String,
+    /// Command label for deleting backward.
     pub preferences_shortcut_delete_back: String,
+    /// Command label for deleting forward.
     pub preferences_shortcut_delete: String,
+    /// Command label for deleting the previous word.
     pub preferences_shortcut_word_delete_back: String,
+    /// Command label for deleting the next word.
     pub preferences_shortcut_word_delete_forward: String,
+    /// Command label for focusing the previous block.
     pub preferences_shortcut_focus_prev: String,
+    /// Command label for focusing the next block.
     pub preferences_shortcut_focus_next: String,
+    /// Command label for moving the caret left.
     pub preferences_shortcut_move_left: String,
+    /// Command label for moving the caret right.
     pub preferences_shortcut_move_right: String,
+    /// Command label for moving backward by a word.
     pub preferences_shortcut_word_move_left: String,
+    /// Command label for moving forward by a word.
     pub preferences_shortcut_word_move_right: String,
+    /// Command label for moving to line start.
     pub preferences_shortcut_home: String,
+    /// Command label for moving to line end.
     pub preferences_shortcut_end: String,
+    /// Command label for upward block navigation.
     pub preferences_shortcut_block_up: String,
+    /// Command label for downward block navigation.
     pub preferences_shortcut_block_down: String,
+    /// Command label for paging upward.
     pub preferences_shortcut_page_up: String,
+    /// Command label for paging downward.
     pub preferences_shortcut_page_down: String,
+    /// Command label for jumping to document start.
     pub preferences_shortcut_jump_to_top: String,
+    /// Command label for jumping to document end.
     pub preferences_shortcut_jump_to_bottom: String,
+    /// Command label for extending selection left.
     pub preferences_shortcut_select_left: String,
+    /// Command label for extending selection right.
     pub preferences_shortcut_select_right: String,
+    /// Command label for extending selection to the previous word.
     pub preferences_shortcut_word_select_left: String,
+    /// Command label for extending selection to the next word.
     pub preferences_shortcut_word_select_right: String,
+    /// Command label for selecting to line start.
     pub preferences_shortcut_select_home: String,
+    /// Command label for selecting to line end.
     pub preferences_shortcut_select_end: String,
+    /// Command label for selecting all content.
     pub preferences_shortcut_select_all: String,
+    /// Command label for copying the selection.
     pub preferences_shortcut_copy: String,
+    /// Command label for cutting the selection.
     pub preferences_shortcut_cut: String,
+    /// Command label for pasting clipboard content.
     pub preferences_shortcut_paste: String,
+    /// Command label for undoing an edit.
     pub preferences_shortcut_undo: String,
+    /// Command label for redoing an edit.
     pub preferences_shortcut_redo: String,
+    /// Command label for applying bold to the selection.
     pub preferences_shortcut_bold_selection: String,
+    /// Command label for applying italics to the selection.
     pub preferences_shortcut_italic_selection: String,
+    /// Command label for underlining the selection.
     pub preferences_shortcut_underline_selection: String,
+    /// Command label for applying inline code to the selection.
     pub preferences_shortcut_code_selection: String,
+    /// Command label for indenting a block.
     pub preferences_shortcut_indent_block: String,
+    /// Command label for outdenting a block.
     pub preferences_shortcut_outdent_block: String,
+    /// Command label for exiting a code block.
     pub preferences_shortcut_exit_code_block: String,
+    /// Command label for saving the current document.
     pub preferences_shortcut_save_document: String,
+    /// Command label for saving to another path.
     pub preferences_shortcut_save_document_as: String,
+    /// Command label for opening a new window.
     pub preferences_shortcut_new_window: String,
+    /// Command label for opening a Markdown file.
     pub preferences_shortcut_open_file: String,
+    /// Command label for quitting the application.
     pub preferences_shortcut_quit_application: String,
+    /// Command label for closing the current window.
     pub preferences_shortcut_close_window: String,
+    /// Command label for dismissing transient editor UI.
     pub preferences_shortcut_dismiss_transient_ui: String,
+    /// Command label for switching source/rendered mode.
     pub preferences_shortcut_toggle_view_mode: String,
+    /// Command label for toggling the workspace drawer.
     pub preferences_shortcut_toggle_workspace: String,
     /// Workspace drawer Files tab.
     pub workspace_tab_files: String,
@@ -330,200 +399,391 @@ pub struct I18nStrings {
     pub preferences_status_bar_show_mode_switch: String,
 }
 
-/// Partial string set used by JSON language packs.
+/// Partial string input; absent entries inherit the defaults passed to `into_strings`.
+/// Present strings, including empty ones, are retained unless pruned by the caller.
 #[derive(Debug, Default, Deserialize)]
 struct I18nStringsDe {
+    /// Optional dirty-document title marker.
     dirty_title_marker: Option<String>,
+    /// Optional unsaved-changes dialog title.
     unsaved_changes_title: Option<String>,
+    /// Optional unsaved-changes explanation.
     unsaved_changes_message: Option<String>,
+    /// Optional save-and-close label.
     unsaved_changes_save_and_close: Option<String>,
+    /// Optional discard-and-close label.
     unsaved_changes_discard_and_close: Option<String>,
+    /// Optional keep-editing label.
     unsaved_changes_cancel: Option<String>,
+    /// Optional dropped-file replacement title.
     drop_replace_title: Option<String>,
+    /// Optional dropped-file replacement explanation.
     drop_replace_message: Option<String>,
+    /// Optional save-before-replacement label.
     drop_replace_save_and_replace: Option<String>,
+    /// Optional discard-before-replacement label.
     drop_replace_discard_and_replace: Option<String>,
+    /// Optional replacement cancellation label.
     drop_replace_cancel: Option<String>,
+    /// Optional unsupported-drop message.
     drop_no_markdown_file_message: Option<String>,
+    /// Optional informational prompt dismissal label.
     info_dialog_ok: Option<String>,
+    /// Optional in-progress update-check title.
     help_check_updates_title: Option<String>,
+    /// Optional in-progress update-check message.
     help_check_updates_message: Option<String>,
+    /// Optional newer-version prompt title.
     update_available_title: Option<String>,
+    /// Optional newer-version message with `{current}` and `{latest}` placeholders.
     update_available_message_template: Option<String>,
+    /// Optional current-version prompt title.
     update_up_to_date_title: Option<String>,
+    /// Optional current-version message with `{current}` and `{latest}` placeholders.
     update_up_to_date_message_template: Option<String>,
+    /// Optional update failure title.
     update_failed_title: Option<String>,
+    /// Optional update failure message with an `{error}` placeholder.
     update_failed_message_template: Option<String>,
+    /// Optional release-page action label.
     update_open_release: Option<String>,
+    /// Optional update postponement label.
     update_later: Option<String>,
+    /// Optional About dialog title.
     help_about_title: Option<String>,
+    /// Optional supplemental About text.
     help_about_message: Option<String>,
+    /// Optional About repository-link label.
     help_about_github_label: Option<String>,
+    /// Optional About star-request text.
     help_about_star_message: Option<String>,
+    /// Optional File menu title.
     menu_file: Option<String>,
+    /// Optional Export menu title.
     menu_export: Option<String>,
+    /// Optional Language menu title.
     menu_language: Option<String>,
+    /// Optional Theme menu title.
     menu_theme: Option<String>,
+    /// Optional Workspace menu title.
     menu_workspace: Option<String>,
+    /// Optional Help menu title.
     menu_help: Option<String>,
+    /// Optional language-pack import menu label.
     menu_add_language_config: Option<String>,
+    /// Optional theme-pack import menu label.
     menu_add_theme_config: Option<String>,
+    /// Optional new-window menu label.
     menu_new_window: Option<String>,
+    /// Optional close-window menu label.
     menu_close_window: Option<String>,
+    /// Optional open-file menu label.
     menu_open_file: Option<String>,
+    /// Optional recent-file submenu label.
     menu_open_recent_file: Option<String>,
+    /// Optional preferences menu label.
     menu_preferences: Option<String>,
+    /// Optional empty-history menu label.
     menu_no_recent_files: Option<String>,
+    /// Optional save menu label.
     menu_save: Option<String>,
+    /// Optional save-as menu label.
     menu_save_as: Option<String>,
+    /// Optional quit menu label.
     menu_quit: Option<String>,
+    /// Optional HTML export menu label.
     menu_export_html: Option<String>,
+    /// Optional PDF export menu label.
     menu_export_pdf: Option<String>,
+    /// Optional update-check menu label.
     menu_check_updates: Option<String>,
+    /// Optional About menu label.
     menu_about: Option<String>,
+    /// Optional CLI installation menu label.
     menu_install_cli_tool: Option<String>,
+    /// Optional CLI removal menu label.
     menu_uninstall_cli_tool: Option<String>,
+    /// Optional workspace drawer menu label.
     menu_toggle_workspace: Option<String>,
+    /// Optional native Markdown file-picker prompt.
     open_markdown_files_prompt: Option<String>,
+    /// Optional native language-pack picker prompt.
     add_language_config_prompt: Option<String>,
+    /// Optional native theme-pack picker prompt.
     add_theme_config_prompt: Option<String>,
+    /// Optional file-open failure title.
     open_failed_title: Option<String>,
+    /// Optional missing-recent-file title.
     recent_file_missing_title: Option<String>,
+    /// Optional missing-file message with a `{path}` placeholder.
     recent_file_missing_message_template: Option<String>,
+    /// Optional document-save failure title.
     save_failed_title: Option<String>,
+    /// Optional export failure title.
     export_failed_title: Option<String>,
+    /// Optional image-paste failure title.
     image_paste_failed_title: Option<String>,
+    /// Optional pack-import failure title.
     config_import_failed_title: Option<String>,
+    /// Optional preferences window title.
     preferences_window_title: Option<String>,
+    /// Optional startup settings navigation label.
     preferences_nav_file: Option<String>,
+    /// Optional theme settings navigation label.
     preferences_nav_theme: Option<String>,
+    /// Optional image settings navigation label.
     preferences_nav_image: Option<String>,
+    /// Optional shortcuts navigation label.
     preferences_nav_shortcuts: Option<String>,
+    /// Optional startup policy field label.
     preferences_startup_option: Option<String>,
+    /// Optional new-document startup choice label.
     preferences_startup_new_file: Option<String>,
+    /// Optional recent-document startup choice label.
     preferences_startup_last_opened_file: Option<String>,
+    /// Optional theme selector field label.
     preferences_local_theme: Option<String>,
+    /// Optional body font family field label.
     preferences_font_body: Option<String>,
+    /// Optional code font family field label.
     preferences_font_code: Option<String>,
+    /// Optional UI font family field label.
     preferences_font_ui: Option<String>,
+    /// Optional font-list help text.
     preferences_font_help: Option<String>,
+    /// Optional font availability warning, displayed without placeholder replacement.
     preferences_font_unavailable_template: Option<String>,
+    /// Optional empty-font-list error message.
     preferences_font_error_empty: Option<String>,
+    /// Optional unclosed-font-quote error message.
     preferences_font_error_unterminated_quote: Option<String>,
+    /// Optional image storage policy field label.
     preferences_image_insert_behavior: Option<String>,
+    /// Optional leave-image-files-in-place policy label.
     preferences_image_paste_none: Option<String>,
+    /// Optional copy-to-document-directory policy label.
     preferences_image_paste_copy_to_document_folder: Option<String>,
+    /// Optional copy-to-assets policy label.
     preferences_image_paste_copy_to_assets_folder: Option<String>,
+    /// Optional copy-to-named-assets policy label.
     preferences_image_paste_copy_to_named_assets_folder: Option<String>,
+    /// Optional preferences save label.
     preferences_save: Option<String>,
+    /// Optional preferences cancel label.
     preferences_cancel: Option<String>,
+    /// Optional preferences write-failure title.
     preferences_save_failed_title: Option<String>,
+    /// Optional file shortcut category heading.
     preferences_shortcuts_group_file: Option<String>,
+    /// Optional editing shortcut category heading.
     preferences_shortcuts_group_edit: Option<String>,
+    /// Optional navigation shortcut category heading.
     preferences_shortcuts_group_navigation: Option<String>,
+    /// Optional formatting shortcut category heading.
     preferences_shortcuts_group_formatting: Option<String>,
+    /// Optional block shortcut category heading.
     preferences_shortcuts_group_block: Option<String>,
+    /// Optional miscellaneous shortcut category heading.
     preferences_shortcuts_group_other: Option<String>,
+    /// Optional shortcut recording button label.
     preferences_shortcut_record: Option<String>,
+    /// Optional shortcut reset button label.
     preferences_shortcut_reset: Option<String>,
+    /// Optional awaiting-keystroke label.
     preferences_shortcut_recording: Option<String>,
+    /// Optional shortcut conflict message with a `{command}` placeholder.
     preferences_shortcut_conflict_template: Option<String>,
+    /// Optional invalid shortcut message with a `{shortcut}` placeholder.
     preferences_shortcut_invalid_template: Option<String>,
+    /// Optional newline command label.
     preferences_shortcut_newline: Option<String>,
+    /// Optional backward deletion command label.
     preferences_shortcut_delete_back: Option<String>,
+    /// Optional forward deletion command label.
     preferences_shortcut_delete: Option<String>,
+    /// Optional previous-word deletion command label.
     preferences_shortcut_word_delete_back: Option<String>,
+    /// Optional next-word deletion command label.
     preferences_shortcut_word_delete_forward: Option<String>,
+    /// Optional previous-block focus command label.
     preferences_shortcut_focus_prev: Option<String>,
+    /// Optional next-block focus command label.
     preferences_shortcut_focus_next: Option<String>,
+    /// Optional leftward caret command label.
     preferences_shortcut_move_left: Option<String>,
+    /// Optional rightward caret command label.
     preferences_shortcut_move_right: Option<String>,
+    /// Optional previous-word movement command label.
     preferences_shortcut_word_move_left: Option<String>,
+    /// Optional next-word movement command label.
     preferences_shortcut_word_move_right: Option<String>,
+    /// Optional line-start movement command label.
     preferences_shortcut_home: Option<String>,
+    /// Optional line-end movement command label.
     preferences_shortcut_end: Option<String>,
+    /// Optional upward block navigation command label.
     preferences_shortcut_block_up: Option<String>,
+    /// Optional downward block navigation command label.
     preferences_shortcut_block_down: Option<String>,
+    /// Optional page-up command label.
     preferences_shortcut_page_up: Option<String>,
+    /// Optional page-down command label.
     preferences_shortcut_page_down: Option<String>,
+    /// Optional document-start command label.
     preferences_shortcut_jump_to_top: Option<String>,
+    /// Optional document-end command label.
     preferences_shortcut_jump_to_bottom: Option<String>,
+    /// Optional leftward selection command label.
     preferences_shortcut_select_left: Option<String>,
+    /// Optional rightward selection command label.
     preferences_shortcut_select_right: Option<String>,
+    /// Optional previous-word selection command label.
     preferences_shortcut_word_select_left: Option<String>,
+    /// Optional next-word selection command label.
     preferences_shortcut_word_select_right: Option<String>,
+    /// Optional select-to-line-start command label.
     preferences_shortcut_select_home: Option<String>,
+    /// Optional select-to-line-end command label.
     preferences_shortcut_select_end: Option<String>,
+    /// Optional select-all command label.
     preferences_shortcut_select_all: Option<String>,
+    /// Optional copy command label.
     preferences_shortcut_copy: Option<String>,
+    /// Optional cut command label.
     preferences_shortcut_cut: Option<String>,
+    /// Optional paste command label.
     preferences_shortcut_paste: Option<String>,
+    /// Optional undo command label.
     preferences_shortcut_undo: Option<String>,
+    /// Optional redo command label.
     preferences_shortcut_redo: Option<String>,
+    /// Optional bold-selection command label.
     preferences_shortcut_bold_selection: Option<String>,
+    /// Optional italic-selection command label.
     preferences_shortcut_italic_selection: Option<String>,
+    /// Optional underline-selection command label.
     preferences_shortcut_underline_selection: Option<String>,
+    /// Optional inline-code-selection command label.
     preferences_shortcut_code_selection: Option<String>,
+    /// Optional block indentation command label.
     preferences_shortcut_indent_block: Option<String>,
+    /// Optional block outdent command label.
     preferences_shortcut_outdent_block: Option<String>,
+    /// Optional exit-code-block command label.
     preferences_shortcut_exit_code_block: Option<String>,
+    /// Optional document save command label.
     preferences_shortcut_save_document: Option<String>,
+    /// Optional save-as command label.
     preferences_shortcut_save_document_as: Option<String>,
+    /// Optional new-window command label.
     preferences_shortcut_new_window: Option<String>,
+    /// Optional open-file command label.
     preferences_shortcut_open_file: Option<String>,
+    /// Optional quit-application command label.
     preferences_shortcut_quit_application: Option<String>,
+    /// Optional close-window command label.
     preferences_shortcut_close_window: Option<String>,
+    /// Optional transient-UI dismissal command label.
     preferences_shortcut_dismiss_transient_ui: Option<String>,
+    /// Optional view-mode toggle command label.
     preferences_shortcut_toggle_view_mode: Option<String>,
+    /// Optional workspace toggle command label.
     preferences_shortcut_toggle_workspace: Option<String>,
+    /// Optional workspace Files tab label.
     workspace_tab_files: Option<String>,
+    /// Optional workspace Outline tab label.
     workspace_tab_outline: Option<String>,
+    /// Optional workspace-without-file title.
     workspace_no_file_title: Option<String>,
+    /// Optional workspace-without-file message.
     workspace_no_file_message: Option<String>,
+    /// Optional empty-workspace-file-list message.
     workspace_empty_files: Option<String>,
+    /// Optional empty-document-outline message.
     workspace_empty_outline: Option<String>,
+    /// Optional workspace scan failure title.
     workspace_scan_failed_title: Option<String>,
+    /// Optional external-link confirmation title.
     open_link_title: Option<String>,
+    /// Optional external-link confirmation button label.
     open_link_open: Option<String>,
+    /// Optional external-link cancellation label.
     open_link_cancel: Option<String>,
+    /// Optional compact source-mode switch label.
     view_mode_source: Option<String>,
+    /// Optional source-mode switch hover label.
     view_mode_switch_to_source: Option<String>,
+    /// Optional compact rendered-mode switch label.
     view_mode_rendered: Option<String>,
+    /// Optional rendered-mode switch hover label.
     view_mode_switch_to_rendered: Option<String>,
+    /// Optional root insert-menu label.
     context_menu_insert: Option<String>,
+    /// Optional insert-table submenu label.
     context_menu_table: Option<String>,
+    /// Optional left-align-column action label.
     table_axis_align_column_left: Option<String>,
+    /// Optional center-align-column action label.
     table_axis_align_column_center: Option<String>,
+    /// Optional right-align-column action label.
     table_axis_align_column_right: Option<String>,
+    /// Optional move-column-left action label.
     table_axis_move_column_left: Option<String>,
+    /// Optional move-column-right action label.
     table_axis_move_column_right: Option<String>,
+    /// Optional delete-column action label.
     table_axis_delete_column: Option<String>,
+    /// Optional move-row-up action label.
     table_axis_move_row_up: Option<String>,
+    /// Optional move-row-down action label.
     table_axis_move_row_down: Option<String>,
+    /// Optional delete-row action label.
     table_axis_delete_row: Option<String>,
+    /// Optional table header styling toggle label.
     table_header_row: Option<String>,
+    /// Optional table insertion dialog title.
     table_insert_title: Option<String>,
+    /// Optional table insertion explanation.
     table_insert_description: Option<String>,
+    /// Optional table body-row count label.
     table_insert_body_rows: Option<String>,
+    /// Optional table column count label.
     table_insert_columns: Option<String>,
+    /// Optional table insertion cancellation label.
     table_insert_cancel: Option<String>,
+    /// Optional table insertion confirmation label.
     table_insert_confirm: Option<String>,
+    /// Optional image label when alt text is absent.
     image_placeholder: Option<String>,
+    /// Optional loading-image label without alt text.
     image_loading_without_alt: Option<String>,
+    /// Optional loading-image message with an `{alt}` placeholder.
     image_loading_with_alt_template: Option<String>,
+    /// Optional code language input placeholder.
     code_language_placeholder: Option<String>,
+    /// Optional status bar workspace-toggle label.
     status_bar_files: Option<String>,
+    /// Optional status bar source-mode label.
     status_bar_mode_source: Option<String>,
+    /// Optional status bar rendered-mode label.
     status_bar_mode_rendered: Option<String>,
+    /// Optional word-count suffix.
     status_bar_word_count_suffix: Option<String>,
+    /// Optional status bar preferences navigation label.
     preferences_nav_status_bar: Option<String>,
+    /// Optional status bar visibility switch label.
     preferences_status_bar_enabled: Option<String>,
+    /// Optional word-count visibility switch label.
     preferences_status_bar_show_word_count: Option<String>,
+    /// Optional cursor-position visibility switch label.
     preferences_status_bar_show_cursor_position: Option<String>,
+    /// Optional workspace-toggle visibility switch label.
     preferences_status_bar_show_sidebar_toggle: Option<String>,
+    /// Optional mode-switch visibility switch label.
     preferences_status_bar_show_mode_switch: Option<String>,
 }
 
+/// String keys retained when normalizing imported packs; unknown keys are dropped.
 const I18N_STRING_KEYS: &[&str] = &[
     "dirty_title_marker",
     "unsaved_changes_title",
@@ -717,6 +977,7 @@ const I18N_STRING_KEYS: &[&str] = &[
 ];
 
 impl I18nStringsDe {
+    /// Completes absent entries from the supplied defaults, retaining present strings verbatim.
     fn into_strings(self, defaults: I18nStrings) -> I18nStrings {
         I18nStrings {
             dirty_title_marker: self
@@ -1233,6 +1494,7 @@ impl I18nStringsDe {
 }
 
 impl<'de> Deserialize<'de> for I18nStrings {
+    /// Deserializes a partial string object using English for absent entries.
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -1671,15 +1933,22 @@ impl I18nStrings {
 /// Metadata for a selectable UI language.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LanguageCatalogEntry {
+    /// Identifier accepted by [`I18nManager::set_language_by_id`].
     pub id: String,
+    /// Human-readable language label in selection menus.
     pub name: String,
 }
 
+/// Persisted identifier for built-in Simplified Chinese.
 const BUILTIN_LANGUAGE_ZH_CN_ID: &str = "zh-CN";
+/// Native-language display name of the Simplified Chinese pack.
 const BUILTIN_LANGUAGE_ZH_CN_NAME: &str = "简体中文";
+/// Persisted identifier for built-in English.
 const BUILTIN_LANGUAGE_EN_US_ID: &str = "en-US";
+/// Display name of the built-in English pack.
 const BUILTIN_LANGUAGE_EN_US_NAME: &str = "English";
 
+/// Lists built-in languages in menu order, Chinese before English.
 fn builtin_language_catalog() -> Vec<LanguageCatalogEntry> {
     vec![
         LanguageCatalogEntry {
@@ -1697,49 +1966,69 @@ fn builtin_language_catalog() -> Vec<LanguageCatalogEntry> {
 #[derive(Debug, Clone, Serialize)]
 #[allow(dead_code)]
 pub struct I18nLanguagePack {
+    /// Language identifier used for selection and fallback lookup.
     pub id: String,
+    /// Display name, defaulting to the built-in name or identifier when parsed directly.
     pub name: String,
+    /// Optional pack author metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
+    /// Optional pack description metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Optional pack version metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// Optional pack homepage metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
+    /// Optional pack license metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub license: Option<String>,
+    /// Complete strings after filling omissions from the ID's built-in set or English.
     pub strings: I18nStrings,
 }
 
+/// Partial JSON pack input used before ID-specific string fallback is applied.
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 struct I18nLanguagePackDe {
+    /// Required language identifier.
     id: String,
+    /// Optional display name; direct parsing can infer one.
     name: Option<String>,
+    /// Optional author carried into the resolved pack.
     author: Option<String>,
+    /// Optional description carried into the resolved pack.
     description: Option<String>,
+    /// Optional version carried into the resolved pack.
     version: Option<String>,
+    /// Optional homepage carried into the resolved pack.
     homepage: Option<String>,
+    /// Optional license carried into the resolved pack.
     license: Option<String>,
+    /// Optional overrides, defaulting to an entirely absent string set.
     #[serde(default)]
     strings: I18nStringsDe,
 }
 
 #[allow(dead_code)]
 impl I18nLanguagePack {
-    /// Parses a language pack from JSON text.
+    /// Parses strict JSON, prunes empty values, and fills missing strings by language ID.
+    /// Unlike importing, direct parsing permits built-in IDs and an omitted name.
     pub fn from_json(json: &str) -> anyhow::Result<Self> {
         let mut value: Value = serde_json::from_str(json)?;
         prune_empty_json_values(&mut value);
         Self::from_value(value)
     }
 
+    /// Deserializes pack metadata and resolves partial strings without import validation.
     fn from_value(value: Value) -> anyhow::Result<Self> {
         let raw: I18nLanguagePackDe = serde_json::from_value(value)?;
         Ok(Self::from_partial(raw))
     }
 
+    /// Completes strings from a matching built-in language or English and infers a name.
     fn from_partial(raw: I18nLanguagePackDe) -> Self {
         let fallback = I18nStrings::for_language_id(&raw.id).unwrap_or_else(I18nStrings::en_us);
         let name = raw
@@ -1759,6 +2048,7 @@ impl I18nLanguagePack {
 }
 
 #[allow(dead_code)]
+/// Returns the display name of an exact built-in language ID.
 fn language_name_for_id(language_id: &str) -> Option<&'static str> {
     match language_id {
         BUILTIN_LANGUAGE_ZH_CN_ID => Some(BUILTIN_LANGUAGE_ZH_CN_NAME),
@@ -1767,6 +2057,7 @@ fn language_name_for_id(language_id: &str) -> Option<&'static str> {
     }
 }
 
+/// Identifies reserved language IDs that imported packs may not replace.
 fn is_builtin_language_id(language_id: &str) -> bool {
     matches!(
         language_id,
@@ -1774,6 +2065,7 @@ fn is_builtin_language_id(language_id: &str) -> bool {
     )
 }
 
+/// Accepts nonblank ASCII IDs containing a letter and only alphanumerics or `-_.`.
 fn is_valid_custom_language_id(language_id: &str) -> bool {
     !language_id.trim().is_empty()
         && language_id
@@ -1782,7 +2074,8 @@ fn is_valid_custom_language_id(language_id: &str) -> bool {
         && language_id.chars().any(|ch| ch.is_ascii_alphabetic())
 }
 
-/// Selects a built-in language id from preferred system locales.
+/// Uses the first supported preferred locale, mapping `zh` to Chinese and `en` to English.
+/// Falls back to English when no locale matches.
 pub fn language_id_for_locale_preferences<I, S>(locales: I) -> &'static str
 where
     I: IntoIterator<Item = S>,
@@ -1794,6 +2087,7 @@ where
         .unwrap_or(BUILTIN_LANGUAGE_EN_US_ID)
 }
 
+/// Matches a locale's language after removing encoding/modifiers and normalizing separators.
 fn language_id_for_locale(locale: &str) -> Option<&'static str> {
     let locale = locale.trim();
     if locale.is_empty() {
@@ -1821,15 +2115,20 @@ fn language_id_for_locale(locale: &str) -> Option<&'static str> {
 
 /// Global singleton that holds the current UI language strings.
 pub struct I18nManager {
+    /// Identifier associated with the active strings.
     current_language_id: String,
+    /// Shared snapshot used by menus and rendering.
     strings: Arc<I18nStrings>,
+    /// Imported packs available for selection.
     custom_languages: Vec<I18nLanguagePack>,
+    /// Built-in-first catalog followed by imported language labels.
     language_catalog: Vec<LanguageCatalogEntry>,
 }
 
 impl Global for I18nManager {}
 
 impl Default for I18nManager {
+    /// Creates an English manager without loading persisted custom packs.
     fn default() -> Self {
         Self::new_with_language_id(BUILTIN_LANGUAGE_EN_US_ID)
     }
@@ -1845,7 +2144,8 @@ impl I18nManager {
         Self::init_with_language_id(cx, &language_id);
     }
 
-    /// Installs a specific UI language into GPUI's global state.
+    /// Loads persisted packs and installs the requested language in GPUI global state.
+    /// Unknown IDs leave English selected; pack-loading errors are logged.
     pub fn init_with_language_id(cx: &mut App, language_id: &str) {
         let mut manager = Self::new_with_language_id(BUILTIN_LANGUAGE_EN_US_ID);
         if let Ok(dirs) = VelotypeConfigDirs::from_system()
@@ -1885,9 +2185,7 @@ impl I18nManager {
         &self.strings
     }
 
-    /// Returns an `Arc` clone of the currently active strings — O(1), no
-    /// per-field copy. Use this in hot render paths instead of cloning the
-    /// whole `I18nStrings` struct (137 `String` fields).
+    /// Returns a shared snapshot of the active strings without copying each string.
     pub fn strings_arc(&self) -> Arc<I18nStrings> {
         self.strings.clone()
     }
@@ -1897,7 +2195,8 @@ impl I18nManager {
         &self.language_catalog
     }
 
-    /// Activates a UI language by identifier.
+    /// Activates a recognized ID, returning whether the selected ID changed.
+    /// Unknown IDs return `false` without replacing strings; reselecting reloads them.
     pub fn set_language_by_id(&mut self, language_id: &str) -> bool {
         let strings = if let Some(strings) = I18nStrings::for_language_id(language_id) {
             strings
@@ -1922,6 +2221,7 @@ impl I18nManager {
         self.import_language_config_with_dirs(path, &dirs)
     }
 
+    /// Normalizes, persists, registers, and selects a custom pack in the supplied root.
     fn import_language_config_with_dirs(
         &mut self,
         path: impl AsRef<Path>,
@@ -1942,6 +2242,7 @@ impl I18nManager {
         Ok(imported_id)
     }
 
+    /// Loads packs sorted by name/ID, logging and skipping invalid configuration files.
     fn load_custom_languages_from_dirs(&mut self, dirs: &VelotypeConfigDirs) -> anyhow::Result<()> {
         let languages_dir = dirs.languages_dir();
         if !languages_dir.exists() {
@@ -1970,6 +2271,7 @@ impl I18nManager {
         Ok(())
     }
 
+    /// Replaces a pack with the same ID or appends it, then rebuilds the catalog.
     fn upsert_custom_language(&mut self, pack: I18nLanguagePack) {
         if let Some(existing) = self
             .custom_languages
@@ -1983,6 +2285,7 @@ impl I18nManager {
         self.rebuild_language_catalog();
     }
 
+    /// Rebuilds built-in-first selection labels from the loaded custom packs.
     fn rebuild_language_catalog(&mut self) {
         let mut catalog = builtin_language_catalog();
         catalog.extend(
@@ -1997,6 +2300,8 @@ impl I18nManager {
     }
 }
 
+/// Validates a custom ID and name, filters known keys, and resolves English fallbacks.
+/// Returns the completed pack and its normalized partial JSON for persistence.
 fn custom_language_pack_from_value(mut value: Value) -> anyhow::Result<(I18nLanguagePack, Value)> {
     prune_empty_json_values(&mut value);
     let Value::Object(object) = value else {
@@ -2036,6 +2341,7 @@ fn custom_language_pack_from_value(mut value: Value) -> anyhow::Result<(I18nLang
     Ok((pack, normalized))
 }
 
+/// Extracts a required trimmed nonblank string, reporting a field-specific error.
 fn required_string(object: &Map<String, Value>, key: &str) -> anyhow::Result<String> {
     let Some(value) = object.get(key) else {
         bail!("missing required field '{key}'");

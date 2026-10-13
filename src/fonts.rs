@@ -4,20 +4,27 @@ use gpui::{App, Font, FontFallbacks, Global, font};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+/// GPUI's platform system-font alias, also recognized by CSS export.
 pub(crate) const SYSTEM_UI_FONT: &str = ".SystemUIFont";
+/// Default family list for document text.
 pub(crate) const DEFAULT_BODY_STACK: &str = ".SystemUIFont";
+/// Default family list for application controls.
 pub(crate) const DEFAULT_UI_STACK: &str = ".SystemUIFont";
+/// Cross-platform default family list for code text.
 pub(crate) const DEFAULT_CODE_STACK: &str =
     "SFMono-Regular, Consolas, Liberation Mono, Menlo, monospace";
 
+/// Case-insensitive lookup of available font families with their original spelling.
 #[derive(Clone, Debug)]
 pub(crate) struct FontCatalog {
+    /// Lowercased family names mapped to canonical names, shared across clones.
     families: Arc<HashMap<String, String>>,
 }
 
 impl Global for FontCatalog {}
 
 impl FontCatalog {
+    /// Indexes families, retaining the first spelling and always adding the system alias.
     pub(crate) fn from_names(names: impl IntoIterator<Item = String>) -> Self {
         let mut families = HashMap::new();
         for name in names {
@@ -31,12 +38,14 @@ impl FontCatalog {
         }
     }
 
+    /// Looks up an available family's canonical spelling without regard to case.
     fn canonical_name(&self, family: &str) -> Option<&str> {
         self.families
             .get(&family.to_lowercase())
             .map(String::as_str)
     }
 
+    /// Clones the installed catalog, or returns one containing only the system alias.
     pub(crate) fn current(cx: &App) -> Self {
         cx.try_global::<Self>()
             .cloned()
@@ -44,14 +53,19 @@ impl FontCatalog {
     }
 }
 
+/// Editable family lists persisted in app preferences before local resolution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FontPreferences {
+    /// Family list for document body text.
     pub body_stack: String,
+    /// Family list for inline and block code.
     pub code_stack: String,
+    /// Family list for application controls.
     pub ui_stack: String,
 }
 
 impl Default for FontPreferences {
+    /// Uses system fonts for body/UI text and the cross-platform code stack.
     fn default() -> Self {
         Self {
             body_stack: DEFAULT_BODY_STACK.into(),
@@ -61,13 +75,17 @@ impl Default for FontPreferences {
     }
 }
 
+/// Syntax errors that prevent a family list from being resolved.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum FontStackParseError {
+    /// No nonblank family remains after parsing.
     Empty,
+    /// A single- or double-quoted family has no closing quote.
     UnterminatedQuote,
 }
 
 impl std::fmt::Display for FontStackParseError {
+    /// Formats a short English validation message.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Empty => write!(f, "enter at least one font family"),
@@ -126,6 +144,7 @@ pub(crate) fn parse_font_stack(input: &str) -> Result<Vec<String>, FontStackPars
     }
 }
 
+/// Appends a trimmed nonblank family and clears the parsing buffer.
 fn push_family(families: &mut Vec<String>, current: &mut String) {
     let family = current.trim();
     if !family.is_empty() {
@@ -134,6 +153,7 @@ fn push_family(families: &mut Vec<String>, current: &mut String) {
     current.clear();
 }
 
+/// Maps supported CSS generic families to ordered native candidates for an OS.
 fn generic_families(name: &str, target_os: &str) -> Option<&'static [&'static str]> {
     match (name.to_ascii_lowercase().as_str(), target_os) {
         ("sans-serif", "windows") => Some(&["Segoe UI", "Arial"]),
@@ -149,6 +169,7 @@ fn generic_families(name: &str, target_os: &str) -> Option<&'static [&'static st
     }
 }
 
+/// Returns Tibetan fallback candidates in platform-preferred order.
 pub(crate) fn tibetan_font_families(target_os: &str) -> &'static [&'static str] {
     match target_os {
         "windows" => &[
@@ -168,6 +189,7 @@ pub(crate) fn tibetan_font_families(target_os: &str) -> &'static [&'static str] 
     }
 }
 
+/// Tibetan fallback families retained in exported CSS regardless of local availability.
 const CSS_TIBETAN_FONT_FAMILIES: &[&str] = &[
     "Noto Serif Tibetan",
     "Noto Sans Tibetan",
@@ -176,6 +198,7 @@ const CSS_TIBETAN_FONT_FAMILIES: &[&str] = &[
     "BabelStone Tibetan",
 ];
 
+/// Expands supported generic families and deduplicates candidates in encounter order.
 fn expand_generics(families: &[String], target_os: &str) -> Vec<String> {
     let mut result = Vec::new();
     let mut seen = HashSet::new();
@@ -193,19 +216,23 @@ fn expand_generics(families: &[String], target_os: &str) -> Vec<String> {
     result
 }
 
+/// A cached native font and a portable CSS family list resolved from one preference.
 #[derive(Clone, Debug)]
 pub(crate) struct ResolvedFontStack {
     #[cfg(test)]
     native_families: Vec<String>,
-    /// True when none of the user-provided families can be used locally.
-    /// The renderer will then use its built-in fallback chain, ending in the
-    /// system UI font.
+    /// True when no requested family or expanded generic candidate is available.
+    /// In that case the native stack starts with the system UI font.
     pub uses_system_default: bool,
+    /// Requested families followed by optional Tibetan fallbacks and the system alias.
     css_families: Vec<String>,
+    /// Native font with its fallback chain constructed once during resolution.
     native_font: Font,
 }
 
 impl ResolvedFontStack {
+    /// Resolves installed candidates, optional Tibetan fallbacks, and the system alias.
+    /// Missing local families remain in the CSS stack for use on other machines.
     fn resolve(
         input: &str,
         catalog: &FontCatalog,
@@ -252,10 +279,12 @@ impl ResolvedFontStack {
         })
     }
 
+    /// Clones the cached native font, including its fallback list.
     pub(crate) fn font(&self) -> Font {
         self.native_font.clone()
     }
 
+    /// Formats escaped CSS families, translating the system alias to `system-ui`.
     pub(crate) fn css_font_family(&self) -> String {
         self.css_families
             .iter()
@@ -273,6 +302,7 @@ impl ResolvedFontStack {
     }
 }
 
+/// Uses the first family as primary and attaches remaining families as fallbacks.
 fn native_font(families: &[String]) -> Font {
     let mut result = font(
         families
@@ -286,6 +316,7 @@ fn native_font(families: &[String]) -> Font {
     result
 }
 
+/// Identifies the three generic families emitted without CSS quotes.
 fn is_css_generic_family(family: &str) -> bool {
     matches!(
         family.to_ascii_lowercase().as_str(),
@@ -293,6 +324,7 @@ fn is_css_generic_family(family: &str) -> bool {
     )
 }
 
+/// Appends a family only if no ASCII-case-insensitive match already exists.
 fn push_unique(values: &mut Vec<String>, value: &str) {
     if !values
         .iter()
@@ -302,6 +334,7 @@ fn push_unique(values: &mut Vec<String>, value: &str) {
     }
 }
 
+/// Quotes a CSS family, escaping controls, quotes, backslashes, and HTML delimiters.
 fn css_quote_family(family: &str) -> String {
     let escaped = family
         .chars()
@@ -318,16 +351,21 @@ fn css_quote_family(family: &str) -> String {
     format!("\"{escaped}\"")
 }
 
+/// Resolved document and UI fonts shared through GPUI global state and export.
 #[derive(Clone, Debug)]
 pub(crate) struct FontSettings {
+    /// Native and CSS families for document body text.
     pub body: ResolvedFontStack,
+    /// Native and CSS families for code text.
     pub code: ResolvedFontStack,
+    /// Native and CSS families for application controls.
     pub ui: ResolvedFontStack,
 }
 
 impl Global for FontSettings {}
 
 impl FontSettings {
+    /// Reports whether a valid stack has no locally available requested candidate.
     pub(crate) fn stack_uses_system_default(
         input: &str,
         catalog: &FontCatalog,
@@ -336,6 +374,7 @@ impl FontSettings {
         Ok(ResolvedFontStack::resolve(input, catalog, target_os, true)?.uses_system_default)
     }
 
+    /// Resolves all three stacks with Tibetan fallbacks, failing on invalid syntax.
     pub(crate) fn resolve(
         preferences: FontPreferences,
         catalog: &FontCatalog,
@@ -348,6 +387,7 @@ impl FontSettings {
         })
     }
 
+    /// Installs the local catalog and resolved fonts, using defaults on a parse error.
     pub(crate) fn init(cx: &mut App, preferences: FontPreferences) {
         let catalog = FontCatalog::from_names(cx.text_system().all_font_names());
         let settings =
@@ -359,6 +399,7 @@ impl FontSettings {
         cx.set_global(settings);
     }
 
+    /// Replaces global fonts only after all supplied stacks resolve successfully.
     pub(crate) fn update(
         cx: &mut App,
         preferences: FontPreferences,
@@ -369,6 +410,7 @@ impl FontSettings {
         Ok(())
     }
 
+    /// Clones global settings or resolves defaults against the current catalog.
     pub(crate) fn current(cx: &App) -> Self {
         cx.try_global::<Self>().cloned().unwrap_or_else(|| {
             Self::resolve(
@@ -380,18 +422,22 @@ impl FontSettings {
         })
     }
 
+    /// Returns the current body font, resolving defaults if globals are absent.
     pub(crate) fn body_font(cx: &App) -> Font {
         Self::current_stack_font(cx, |settings| &settings.body)
     }
 
+    /// Returns the current code font, resolving defaults if globals are absent.
     pub(crate) fn code_font(cx: &App) -> Font {
         Self::current_stack_font(cx, |settings| &settings.code)
     }
 
+    /// Returns the current UI font, resolving defaults if globals are absent.
     pub(crate) fn ui_font(cx: &App) -> Font {
         Self::current_stack_font(cx, |settings| &settings.ui)
     }
 
+    /// Selects a cached font directly from global settings, with a default fallback.
     fn current_stack_font(cx: &App, select: impl FnOnce(&Self) -> &ResolvedFontStack) -> Font {
         if let Some(settings) = cx.try_global::<Self>() {
             select(settings).font()

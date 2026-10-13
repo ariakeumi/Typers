@@ -56,7 +56,7 @@ pub(crate) enum CodeLanguageKey {
     Toml,
     /// Mermaid diagram source.
     Mermaid,
-    /// Plain text or unknown language fallback.
+    /// Explicit plain-text alias; unknown language names do not resolve to this key.
     PlainText,
 }
 
@@ -90,24 +90,31 @@ pub(crate) enum CodeHighlightClass {
 /// Highlighted byte range inside a code block.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CodeHighlightSpan {
+    /// Half-open UTF-8 byte range in the exact source passed to the highlighter.
     pub(crate) range: Range<usize>,
+    /// Semantic class used to choose a theme color at render time.
     pub(crate) class: CodeHighlightClass,
 }
 
 /// Highlight result cached on a code block.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CodeHighlightResult {
+    /// Recognized language, even if its grammar is unavailable or highlighting failed.
     pub(crate) language: CodeLanguageKey,
+    /// Ordered nonempty ranges; adjacent ranges with the same class are merged.
     pub(crate) spans: Vec<CodeHighlightSpan>,
 }
 
 /// Language aliases accepted from fenced-code info strings.
 #[derive(Clone, Copy)]
 struct LanguageDescriptor {
+    /// Stable key returned for any alias in this descriptor.
     key: CodeLanguageKey,
+    /// Case-insensitive names accepted as the first fenced-code info token.
     aliases: &'static [&'static str],
 }
 
+/// Known language aliases, independent of which grammar features are enabled.
 const LANGUAGE_DESCRIPTORS: &[LanguageDescriptor] = &[
     LanguageDescriptor {
         key: CodeLanguageKey::Rust,
@@ -199,6 +206,7 @@ const LANGUAGE_DESCRIPTORS: &[LanguageDescriptor] = &[
     },
 ];
 
+/// Capture names configured in every grammar; tree-sitter highlight IDs index this slice.
 const HIGHLIGHT_NAMES: &[&str] = &[
     "attribute",
     "comment",
@@ -231,15 +239,18 @@ const HIGHLIGHT_NAMES: &[&str] = &[
 /// Lazily built tree-sitter highlighter registry.
 #[cfg(feature = "code-highlight-core")]
 struct CodeHighlightRegistry {
+    /// Successfully constructed configurations for enabled grammar bundles.
     configs: HashMap<CodeLanguageKey, HighlightConfiguration>,
 }
 
+/// Process-wide immutable configurations initialized on first highlighting request.
 #[cfg(feature = "code-highlight-core")]
 static CODE_HIGHLIGHT_REGISTRY: LazyLock<CodeHighlightRegistry> =
     LazyLock::new(CodeHighlightRegistry::new);
 
 #[cfg(feature = "code-highlight-core")]
 impl CodeHighlightRegistry {
+    /// Builds enabled grammar configurations, silently omitting construction failures.
     fn new() -> Self {
         let mut configs = HashMap::new();
         #[cfg(feature = "code-highlight-official")]
@@ -305,11 +316,13 @@ impl CodeHighlightRegistry {
         Self { configs }
     }
 
+    /// Borrows the configured grammar, if the enabled bundle supplied one.
     fn config_for(&self, key: CodeLanguageKey) -> Option<&HighlightConfiguration> {
         self.configs.get(&key)
     }
 }
 
+/// Inserts a grammar only when configuration construction succeeded.
 #[cfg(feature = "code-highlight-core")]
 fn maybe_insert_config(
     configs: &mut HashMap<CodeLanguageKey, HighlightConfiguration>,
@@ -321,6 +334,8 @@ fn maybe_insert_config(
     }
 }
 
+/// Compiles grammar queries and assigns the shared capture-name ordering.
+/// Returns `None` when tree-sitter rejects the language or queries.
 #[cfg(feature = "code-highlight-core")]
 fn configure_highlights(
     language: tree_sitter::Language,
@@ -341,6 +356,7 @@ fn configure_highlights(
     Some(config)
 }
 
+/// Builds Rust highlighting with its bundled highlight and injection queries.
 #[cfg(all(feature = "code-highlight-core", feature = "code-highlight-official"))]
 fn build_rust_config() -> Option<HighlightConfiguration> {
     configure_highlights(
@@ -352,6 +368,7 @@ fn build_rust_config() -> Option<HighlightConfiguration> {
     )
 }
 
+/// Builds JavaScript highlighting with bundled injection and local-scope queries.
 fn build_javascript_config() -> Option<HighlightConfiguration> {
     configure_highlights(
         tree_sitter_javascript::LANGUAGE.into(),
@@ -362,6 +379,7 @@ fn build_javascript_config() -> Option<HighlightConfiguration> {
     )
 }
 
+/// Adds JSX captures to the JavaScript grammar's base highlighting queries.
 fn build_jsx_config() -> Option<HighlightConfiguration> {
     let query = format!(
         "{}\n{}",
@@ -377,6 +395,7 @@ fn build_jsx_config() -> Option<HighlightConfiguration> {
     )
 }
 
+/// Builds the TypeScript grammar with bundled captures and local-scope queries.
 fn build_typescript_config() -> Option<HighlightConfiguration> {
     configure_highlights(
         tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
@@ -387,6 +406,7 @@ fn build_typescript_config() -> Option<HighlightConfiguration> {
     )
 }
 
+/// Applies the TypeScript captures and local-scope queries to the TSX grammar.
 fn build_tsx_config() -> Option<HighlightConfiguration> {
     configure_highlights(
         tree_sitter_typescript::LANGUAGE_TSX.into(),
@@ -397,6 +417,7 @@ fn build_tsx_config() -> Option<HighlightConfiguration> {
     )
 }
 
+/// Builds JSON highlighting without injection or local-scope queries.
 fn build_json_config() -> Option<HighlightConfiguration> {
     configure_highlights(
         tree_sitter_json::LANGUAGE.into(),
@@ -407,6 +428,7 @@ fn build_json_config() -> Option<HighlightConfiguration> {
     )
 }
 
+/// Builds Markdown block highlighting with bundled block injection queries.
 fn build_markdown_config() -> Option<HighlightConfiguration> {
     configure_highlights(
         tree_sitter_md::LANGUAGE.into(),
@@ -417,6 +439,7 @@ fn build_markdown_config() -> Option<HighlightConfiguration> {
     )
 }
 
+/// Builds Bash highlighting from the grammar's bundled captures.
 fn build_bash_config() -> Option<HighlightConfiguration> {
     configure_highlights(
         tree_sitter_bash::LANGUAGE.into(),
@@ -427,6 +450,7 @@ fn build_bash_config() -> Option<HighlightConfiguration> {
     )
 }
 
+/// Builds C highlighting from the grammar's bundled captures.
 fn build_c_config() -> Option<HighlightConfiguration> {
     configure_highlights(
         tree_sitter_c::LANGUAGE.into(),
@@ -437,6 +461,7 @@ fn build_c_config() -> Option<HighlightConfiguration> {
     )
 }
 
+/// Builds C++ highlighting from the grammar's bundled captures.
 fn build_cpp_config() -> Option<HighlightConfiguration> {
     configure_highlights(
         tree_sitter_cpp::LANGUAGE.into(),
@@ -447,6 +472,7 @@ fn build_cpp_config() -> Option<HighlightConfiguration> {
     )
 }
 
+/// Builds C# highlighting from the grammar's bundled captures.
 fn build_csharp_config() -> Option<HighlightConfiguration> {
     configure_highlights(
         tree_sitter_c_sharp::LANGUAGE.into(),
@@ -457,6 +483,7 @@ fn build_csharp_config() -> Option<HighlightConfiguration> {
     )
 }
 
+/// Builds CSS highlighting from the grammar's bundled captures.
 fn build_css_config() -> Option<HighlightConfiguration> {
     configure_highlights(
         tree_sitter_css::LANGUAGE.into(),
@@ -467,6 +494,7 @@ fn build_css_config() -> Option<HighlightConfiguration> {
     )
 }
 
+/// Builds Go highlighting from the grammar's bundled captures.
 fn build_go_config() -> Option<HighlightConfiguration> {
     configure_highlights(
         tree_sitter_go::LANGUAGE.into(),
@@ -477,6 +505,7 @@ fn build_go_config() -> Option<HighlightConfiguration> {
     )
 }
 
+/// Builds HTML highlighting with bundled capture and injection queries.
 fn build_html_config() -> Option<HighlightConfiguration> {
     configure_highlights(
         tree_sitter_html::LANGUAGE.into(),
@@ -487,6 +516,7 @@ fn build_html_config() -> Option<HighlightConfiguration> {
     )
 }
 
+/// Builds Java highlighting from the grammar's bundled captures.
 fn build_java_config() -> Option<HighlightConfiguration> {
     configure_highlights(
         tree_sitter_java::LANGUAGE.into(),
@@ -497,6 +527,7 @@ fn build_java_config() -> Option<HighlightConfiguration> {
     )
 }
 
+/// Builds PHP highlighting with bundled capture and injection queries.
 fn build_php_config() -> Option<HighlightConfiguration> {
     configure_highlights(
         tree_sitter_php::LANGUAGE_PHP.into(),
@@ -507,6 +538,7 @@ fn build_php_config() -> Option<HighlightConfiguration> {
     )
 }
 
+/// Builds Python highlighting from the grammar's bundled captures.
 fn build_python_config() -> Option<HighlightConfiguration> {
     configure_highlights(
         tree_sitter_python::LANGUAGE.into(),
@@ -517,6 +549,7 @@ fn build_python_config() -> Option<HighlightConfiguration> {
     )
 }
 
+/// Builds Ruby highlighting with bundled captures and local-scope queries.
 fn build_ruby_config() -> Option<HighlightConfiguration> {
     configure_highlights(
         tree_sitter_ruby::LANGUAGE.into(),
@@ -527,6 +560,7 @@ fn build_ruby_config() -> Option<HighlightConfiguration> {
     )
 }
 
+/// Builds YAML highlighting when the configuration-language bundle is enabled.
 #[cfg(all(feature = "code-highlight-core", feature = "code-highlight-config"))]
 fn build_yaml_config() -> Option<HighlightConfiguration> {
     configure_highlights(
@@ -538,6 +572,7 @@ fn build_yaml_config() -> Option<HighlightConfiguration> {
     )
 }
 
+/// Builds TOML highlighting when the configuration-language bundle is enabled.
 #[cfg(all(feature = "code-highlight-core", feature = "code-highlight-config"))]
 fn build_toml_config() -> Option<HighlightConfiguration> {
     configure_highlights(
@@ -549,6 +584,7 @@ fn build_toml_config() -> Option<HighlightConfiguration> {
     )
 }
 
+/// Looks up an exact alias ignoring ASCII case, without trimming or tokenizing it.
 fn descriptor_for_language(language: &str) -> Option<&'static LanguageDescriptor> {
     LANGUAGE_DESCRIPTORS.iter().find(|descriptor| {
         descriptor
@@ -558,6 +594,7 @@ fn descriptor_for_language(language: &str) -> Option<&'static LanguageDescriptor
     })
 }
 
+/// Resolves the first whitespace-delimited info token; absent or unknown names return `None`.
 pub(crate) fn resolve_code_language_key(language: Option<&str>) -> Option<CodeLanguageKey> {
     let normalized = language?
         .split_whitespace()
@@ -568,6 +605,8 @@ pub(crate) fn resolve_code_language_key(language: Option<&str>) -> Option<CodeLa
     descriptor_for_language(normalized).map(|descriptor| descriptor.key)
 }
 
+/// Highlights source bytes for a recognized language, without resolving injected grammars.
+/// Unknown languages return `None`; missing grammars or any highlighting error yield empty spans.
 pub(crate) fn highlight_code_block(
     language: Option<&str>,
     source: &str,
@@ -626,6 +665,7 @@ pub(crate) fn highlight_code_block(
     })
 }
 
+/// Appends a nonempty source range, merging it with an adjacent span of the same class.
 fn push_highlight_span(
     spans: &mut Vec<CodeHighlightSpan>,
     range: Range<usize>,
@@ -646,6 +686,7 @@ fn push_highlight_span(
     spans.push(CodeHighlightSpan { range, class });
 }
 
+/// Maps a configured capture ID to its theme class, rejecting unmapped IDs or names.
 #[cfg(feature = "code-highlight-core")]
 fn class_for_highlight(highlight: Highlight) -> Option<CodeHighlightClass> {
     let name = HIGHLIGHT_NAMES.get(highlight.0)?;
@@ -667,6 +708,7 @@ fn class_for_highlight(highlight: Highlight) -> Option<CodeHighlightClass> {
     })
 }
 
+/// Selects the current theme color without storing colors in the highlight cache.
 pub(crate) fn code_highlight_color(colors: &ThemeColors, class: CodeHighlightClass) -> Hsla {
     match class {
         CodeHighlightClass::Comment => colors.code_syntax_comment,

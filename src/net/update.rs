@@ -10,15 +10,22 @@ use std::time::Duration;
 use reqwest::header::{ACCEPT, HeaderMap, HeaderValue, USER_AGENT};
 use semver::Version;
 
+/// Primary update manifest on the project's main branch.
 pub(crate) const GITHUB_CARGO_TOML_URL: &str =
     "https://raw.githubusercontent.com/manyougz/velotype/refs/heads/main/Cargo.toml";
+/// Mirror manifest queried only after the primary request times out.
 pub(crate) const GITEE_CARGO_TOML_URL: &str =
     "https://raw.giteeusercontent.com/manyougz/velotype/raw/main/Cargo.toml";
+/// Releases page opened by the editor when an update is available.
 pub(crate) const RELEASES_URL: &str = "https://github.com/manyougz/velotype/releases";
 
+/// Maximum time to establish the manifest request's connection.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+/// Overall timeout for a single manifest request.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+/// Response formats accepted by manifest requests.
 const UPDATE_ACCEPT: &str = "text/plain,application/toml,*/*;q=0.8";
+/// Identifies the compiled app version and project in update requests.
 const UPDATE_USER_AGENT: &str = concat!(
     "Velotype/",
     env!("CARGO_PKG_VERSION"),
@@ -35,6 +42,7 @@ pub(crate) enum UpdateSource {
 }
 
 impl UpdateSource {
+    /// Returns this source's raw Cargo manifest endpoint.
     fn url(self) -> &'static str {
         match self {
             Self::GitHub => GITHUB_CARGO_TOML_URL,
@@ -44,6 +52,7 @@ impl UpdateSource {
 }
 
 impl fmt::Display for UpdateSource {
+    /// Formats the source name for user-visible diagnostics.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::GitHub => f.write_str("GitHub"),
@@ -68,12 +77,16 @@ pub(crate) enum RemoteFetchFailureKind {
 /// Error produced while fetching one remote manifest.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RemoteFetchFailure {
+    /// Endpoint whose fetch failed.
     pub(crate) source: UpdateSource,
+    /// Classification used to decide whether mirror fallback is permitted.
     pub(crate) kind: RemoteFetchFailureKind,
+    /// Diagnostic text included in the formatted error.
     detail: String,
 }
 
 impl RemoteFetchFailure {
+    /// Creates a classified fetch failure with owned diagnostic text.
     fn new(source: UpdateSource, kind: RemoteFetchFailureKind, detail: impl Into<String>) -> Self {
         Self {
             source,
@@ -82,16 +95,19 @@ impl RemoteFetchFailure {
         }
     }
 
+    /// Creates a timeout failure eligible for primary-to-mirror fallback.
     fn timeout(source: UpdateSource, detail: impl Into<String>) -> Self {
         Self::new(source, RemoteFetchFailureKind::Timeout, detail)
     }
 
+    /// Returns whether the fetch was classified as a timeout.
     fn is_timeout(&self) -> bool {
         self.kind == RemoteFetchFailureKind::Timeout
     }
 }
 
 impl fmt::Display for RemoteFetchFailure {
+    /// Formats the failing source and its diagnostic detail.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -108,11 +124,12 @@ impl std::error::Error for RemoteFetchFailure {}
 pub(crate) enum UpdateCheckError {
     /// No usable remote manifest could be fetched.
     Fetch(RemoteFetchFailure),
-    /// The manifest was fetched but could not produce a valid package version.
+    /// A version was invalid or the fetched manifest could not be parsed.
     ParseVersion(String),
 }
 
 impl fmt::Display for UpdateCheckError {
+    /// Formats the underlying fetch or version-parsing diagnostic.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Fetch(error) => write!(f, "{error}"),
@@ -135,17 +152,22 @@ pub(crate) enum UpdateCheckResult {
 /// Version data shown in localized update prompts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct UpdateVersionInfo {
+    /// Running build's supplied version string.
     pub(crate) current_version: String,
+    /// Trimmed version string from the fetched manifest.
     pub(crate) latest_version: String,
+    /// Endpoint that supplied the manifest used for comparison.
     pub(crate) source: UpdateSource,
 }
 
+/// Performs a blocking SemVer update check, using Gitee only after a GitHub timeout.
 pub(crate) fn check_latest_version(
     current_version: &str,
 ) -> Result<UpdateCheckResult, UpdateCheckError> {
     check_latest_version_with(current_version, fetch_remote_cargo_toml)
 }
 
+/// Runs the primary/mirror policy with a supplied blocking manifest fetcher.
 fn check_latest_version_with<F>(
     current_version: &str,
     mut fetch: F,
@@ -163,6 +185,7 @@ where
     }
 }
 
+/// Parses both versions and reports whether the manifest is newer than this build.
 fn compare_manifest_version(
     current_version: &str,
     manifest: &str,
@@ -184,12 +207,14 @@ fn compare_manifest_version(
     }
 }
 
+/// Parses SemVer, adding the supplied label to invalid-version diagnostics.
 fn parse_semver(version: &str, label: &str) -> Result<Version, UpdateCheckError> {
     Version::parse(version).map_err(|err| {
         UpdateCheckError::ParseVersion(format!("{label} '{version}' is not valid SemVer: {err}"))
     })
 }
 
+/// Extracts a nonempty trimmed `[package].version` string without validating SemVer.
 pub(crate) fn extract_package_version(manifest: &str) -> Result<String, UpdateCheckError> {
     let parsed: toml::Value = toml::from_str(manifest).map_err(|err| {
         UpdateCheckError::ParseVersion(format!("failed to parse remote Cargo.toml: {err}"))
@@ -208,6 +233,7 @@ pub(crate) fn extract_package_version(manifest: &str) -> Result<String, UpdateCh
         })
 }
 
+/// Fetches a manifest synchronously with timeouts and classified transport/status errors.
 fn fetch_remote_cargo_toml(source: UpdateSource) -> Result<String, RemoteFetchFailure> {
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
@@ -244,6 +270,7 @@ fn fetch_remote_cargo_toml(source: UpdateSource) -> Result<String, RemoteFetchFa
     })
 }
 
+/// Builds manifest Accept and versioned user-agent headers.
 fn update_request_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static(UPDATE_USER_AGENT));

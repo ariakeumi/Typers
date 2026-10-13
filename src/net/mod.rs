@@ -15,11 +15,15 @@ use reqwest::header::{
     ACCEPT, ACCEPT_LANGUAGE, CACHE_CONTROL, HeaderMap, HeaderValue, PRAGMA, USER_AGENT,
 };
 
+/// Preferred image response formats for requests without an explicit Accept header.
 const DEFAULT_IMAGE_ACCEPT: &str =
     "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
+/// Browser-like language preferences used when the caller provides none.
 const DEFAULT_ACCEPT_LANGUAGE: &str = "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7";
+/// Directive used for both Cache-Control and the legacy Pragma header.
 const DEFAULT_CACHE_CONTROL: &str = "no-cache";
 
+/// Installs the image HTTP bridge, retaining GPUI's client if construction fails.
 pub(crate) fn install_http_client(cx: &mut App) {
     match ReqwestTransportHttpClient::new(
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
@@ -29,6 +33,7 @@ pub(crate) fn install_http_client(cx: &mut App) {
     }
 }
 
+/// Returns whether the source parses as a URI with an HTTP or HTTPS scheme.
 pub(crate) fn is_remote_image_source(source: &str) -> bool {
     http_client::Uri::from_str(source)
         .ok()
@@ -42,12 +47,16 @@ pub(crate) fn is_remote_image_source(source: &str) -> bool {
 /// needs simple HTTP(S) fetches. Requests are executed on a short-lived thread
 /// and returned as `AsyncBody` values to match GPUI's contract.
 struct ReqwestTransportHttpClient {
+    /// Shared blocking transport, cloned for each request worker.
     client: reqwest::blocking::Client,
+    /// User-agent value exposed through GPUI's client interface.
     user_agent: HeaderValue,
+    /// Image-fetch defaults that do not override explicit request headers.
     default_headers: HeaderMap,
 }
 
 impl ReqwestTransportHttpClient {
+    /// Builds a blocking client with image headers and a ten-redirect limit.
     fn new(user_agent: &str) -> anyhow::Result<Self> {
         let default_headers = default_image_request_headers(user_agent)?;
         let client = reqwest::blocking::Client::builder()
@@ -62,6 +71,9 @@ impl ReqwestTransportHttpClient {
         })
     }
 
+    /// Buffers request/response bodies and bridges HTTP metadata on a worker thread.
+    ///
+    /// HTTP error statuses are returned as responses rather than transport errors.
     fn execute_request(
         client: reqwest::blocking::Client,
         default_headers: HeaderMap,
@@ -101,6 +113,7 @@ impl ReqwestTransportHttpClient {
     }
 }
 
+/// Builds browser-like image headers, rejecting an invalid user-agent value.
 fn default_image_request_headers(user_agent: &str) -> anyhow::Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_str(user_agent)?);
@@ -117,6 +130,7 @@ fn default_image_request_headers(user_agent: &str) -> anyhow::Result<HeaderMap> 
     Ok(headers)
 }
 
+/// Applies caller headers and fills only header names missing from the request.
 fn apply_missing_default_headers(
     builder: reqwest::blocking::RequestBuilder,
     request_headers: &HeaderMap,
@@ -132,14 +146,17 @@ fn apply_missing_default_headers(
 }
 
 impl HttpClient for ReqwestTransportHttpClient {
+    /// Returns the diagnostic name of this GPUI transport implementation.
     fn type_name(&self) -> &'static str {
         "velotype_reqwest_transport_http_client"
     }
 
+    /// Exposes the user-agent configured when the bridge was created.
     fn user_agent(&self) -> Option<&HeaderValue> {
         Some(&self.user_agent)
     }
 
+    /// Starts a short-lived blocking worker and returns its result asynchronously.
     fn send(
         &self,
         request: http_client::Request<AsyncBody>,
@@ -157,6 +174,7 @@ impl HttpClient for ReqwestTransportHttpClient {
         .boxed()
     }
 
+    /// Exposes no GPUI proxy override; reqwest retains its own proxy behavior.
     fn proxy(&self) -> Option<&http_client::Url> {
         None
     }

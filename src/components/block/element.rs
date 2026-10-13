@@ -1,3 +1,5 @@
+//! Low-level text elements, layout geometry, and inline hit testing for blocks.
+
 use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
@@ -8,14 +10,19 @@ use super::{Block, InlineFootnoteHit, InlineLinkHit, code_highlight_color};
 use crate::components::HtmlCssColor;
 use crate::theme::{ThemeColors, ThemeManager};
 
+/// Minimum width reserved for source line-number digits.
 const SOURCE_LINE_NUMBER_MIN_DIGITS: usize = 2;
+/// Space between source line numbers and editable text.
 const SOURCE_LINE_NUMBER_GAP: f32 = 12.0;
+/// Approximate monospace digit width relative to the font size.
 const SOURCE_LINE_NUMBER_DIGIT_WIDTH_RATIO: f32 = 0.62;
 
+/// Counts newline-delimited source lines, including a trailing empty line.
 fn source_line_count(text: &str) -> usize {
     text.split('\n').count().max(1)
 }
 
+/// Estimates the source-number gutter from line count and font size.
 fn source_line_number_gutter_width(line_count: usize, font_size: Pixels) -> Pixels {
     let digits = line_count
         .max(1)
@@ -26,6 +33,7 @@ fn source_line_number_gutter_width(line_count: usize, font_size: Pixels) -> Pixe
         + px(SOURCE_LINE_NUMBER_GAP)
 }
 
+/// Excludes the source-number gutter while keeping at least one text pixel.
 fn source_text_bounds(bounds: Bounds<Pixels>, gutter_width: Pixels) -> Bounds<Pixels> {
     if gutter_width <= px(0.0) {
         return bounds;
@@ -42,6 +50,7 @@ fn source_text_bounds(bounds: Bounds<Pixels>, gutter_width: Pixels) -> Bounds<Pi
     )
 }
 
+/// Returns the top offset of each hard line after soft wrapping.
 fn source_line_number_tops(lines: &[WrappedLine], line_height: Pixels) -> Vec<Pixels> {
     let mut tops = Vec::with_capacity(lines.len());
     let mut y = Pixels::default();
@@ -52,6 +61,7 @@ fn source_line_number_tops(lines: &[WrappedLine], line_height: Pixels) -> Vec<Pi
     tops
 }
 
+/// Builds GPUI text runs from inline styles, links, HTML styles, and IME marks.
 fn build_text_runs(
     input: &Block,
     display_text: &SharedString,
@@ -164,6 +174,7 @@ fn build_text_runs(
     }
 }
 
+/// Resolves an HTML CSS color, including `currentColor`, for a text run.
 fn html_css_color_to_hsla(color: HtmlCssColor, current_color: Hsla) -> Hsla {
     match color {
         HtmlCssColor::CurrentColor => current_color,
@@ -176,6 +187,7 @@ fn html_css_color_to_hsla(color: HtmlCssColor, current_color: Hsla) -> Hsla {
     }
 }
 
+/// Builds syntax-colored code runs while preserving IME mark underlines.
 fn build_code_text_runs(
     input: &Block,
     display_text: &SharedString,
@@ -268,6 +280,7 @@ pub(super) fn line_index_for_offset(ranges: &[Range<usize>], offset: usize) -> (
     (last, ranges[last].len())
 }
 
+/// Computes the left edge of a shaped line within aligned text bounds.
 pub(crate) fn aligned_line_left(
     line: &WrappedLine,
     bounds: Bounds<Pixels>,
@@ -281,10 +294,12 @@ pub(crate) fn aligned_line_left(
     }
 }
 
+/// Returns the full height of a hard line including its soft-wrapped rows.
 pub(super) fn wrapped_line_height(line: &WrappedLine, line_height: Pixels) -> Pixels {
     line.size(line_height).height
 }
 
+/// Sums heights of hard lines preceding `line_idx`.
 pub(super) fn wrapped_line_top(
     lines: &[WrappedLine],
     line_height: Pixels,
@@ -295,6 +310,7 @@ pub(super) fn wrapped_line_top(
     })
 }
 
+/// Finds the hard line containing a vertical offset and its local y position.
 pub(super) fn wrapped_line_for_y(
     lines: &[WrappedLine],
     line_height: Pixels,
@@ -316,6 +332,7 @@ pub(super) fn wrapped_line_for_y(
     Some((lines.len() - 1, px(0.0)))
 }
 
+/// Returns the byte offset at a shaped soft-wrap boundary.
 fn wrap_boundary_offset(line: &WrappedLine, wrap_idx: usize) -> Option<usize> {
     let boundary = line.wrap_boundaries().get(wrap_idx)?;
     let run = line.unwrapped_layout.runs.get(boundary.run_ix)?;
@@ -323,6 +340,7 @@ fn wrap_boundary_offset(line: &WrappedLine, wrap_idx: usize) -> Option<usize> {
     Some(glyph.index)
 }
 
+/// Lists byte offsets that delimit the line's soft-wrapped rows.
 fn wrapped_row_offsets(line: &WrappedLine) -> Vec<usize> {
     let mut offsets = Vec::with_capacity(line.wrap_boundaries().len() + 2);
     offsets.push(0);
@@ -336,6 +354,7 @@ fn wrapped_row_offsets(line: &WrappedLine) -> Vec<usize> {
     offsets
 }
 
+/// Computes the aligned x origin of one soft-wrapped row.
 fn wrapped_row_origin_x(
     line: &WrappedLine,
     bounds: Bounds<Pixels>,
@@ -355,6 +374,8 @@ fn wrapped_row_origin_x(
     }
 }
 
+/// Locates a byte offset within a shaped line, choosing the next row when
+/// requested at a soft-wrap boundary.
 pub(super) fn position_for_offset(
     line: &WrappedLine,
     offset: usize,
@@ -376,6 +397,7 @@ pub(super) fn position_for_offset(
     line.position_for_index(offset, line_height)
 }
 
+/// Returns the cursor rectangle for a flat visible-text byte offset.
 pub(super) fn cursor_bounds_for_offset(
     lines: &[WrappedLine],
     bounds: Bounds<Pixels>,
@@ -397,6 +419,8 @@ pub(super) fn cursor_bounds_for_offset(
     ))
 }
 
+/// Returns the union of visible rectangles for a byte range, or a cursor
+/// rectangle for an empty range.
 pub(super) fn range_bounds(
     lines: &[WrappedLine],
     bounds: Bounds<Pixels>,
@@ -434,6 +458,7 @@ pub(super) fn range_bounds(
     Some(union)
 }
 
+/// Returns selection rectangles within one hard line's soft-wrapped rows.
 fn range_segment_bounds_for_hard_line(
     lines: &[WrappedLine],
     bounds: Bounds<Pixels>,
@@ -473,6 +498,7 @@ fn range_segment_bounds_for_hard_line(
     segments
 }
 
+/// Splits a flat byte range into painted rectangles across hard and soft lines.
 pub(super) fn range_segment_bounds(
     lines: &[WrappedLine],
     bounds: Bounds<Pixels>,
@@ -516,6 +542,7 @@ pub(super) fn range_segment_bounds(
     segments
 }
 
+/// Tests a point against a rectangle with exclusive right and bottom edges.
 fn point_inside_bounds(bounds: Bounds<Pixels>, position: Point<Pixels>) -> bool {
     position.x >= bounds.left()
         && position.x < bounds.right()
@@ -523,6 +550,7 @@ fn point_inside_bounds(bounds: Bounds<Pixels>, position: Point<Pixels>) -> bool 
         && position.y < bounds.bottom()
 }
 
+/// Hit-tests rendered inline link text, excluding raw source mode.
 pub(crate) fn link_at_position<'a>(
     input: &'a Block,
     lines: &[WrappedLine],
@@ -562,6 +590,7 @@ pub(crate) fn link_at_position<'a>(
     None
 }
 
+/// Hit-tests rendered inline footnote references, excluding raw source mode.
 pub(crate) fn footnote_at_position<'a>(
     input: &'a Block,
     lines: &[WrappedLine],
@@ -607,51 +636,70 @@ pub(crate) fn footnote_at_position<'a>(
 /// Supports multi-line text (used by code blocks) via hard `\n` breaks.
 /// Each `\n` produces a separate `WrappedLine` from the text shaper.
 pub struct BlockTextElement {
+    /// Block whose visible text and selection are painted.
     input: Entity<Block>,
+    /// Whether this frame paints placeholder text instead of the title.
     is_placeholder: bool,
+    /// Optional placeholder text replacing the theme default.
     placeholder_text: Option<SharedString>,
+    /// Optional placeholder color replacing the theme default.
     placeholder_color: Option<Hsla>,
 }
 
 /// Single-line text element used to edit a fenced code block's info string.
 pub struct CodeLanguageInputElement {
+    /// Block supplying the editable code-fence info string.
     input: Entity<Block>,
+    /// Text painted when the info string is empty.
     placeholder: SharedString,
 }
 
 impl CodeLanguageInputElement {
+    /// Creates a code-language input element for a block.
     pub fn new(input: Entity<Block>, placeholder: SharedString) -> Self {
         Self { input, placeholder }
     }
 }
 
+/// Prepared code-language text and paint geometry for one frame.
 pub struct CodeLanguageInputPrepaintState {
+    /// Shaped language text or placeholder.
     line: Option<ShapedLine>,
+    /// Caret quad when focused with no selection.
     cursor: Option<PaintQuad>,
+    /// Selection quad when a nonempty range is selected.
     selection: Option<PaintQuad>,
+    /// Pointer hitbox for the input bounds.
     hitbox: Option<Hitbox>,
 }
 
 impl IntoElement for CodeLanguageInputElement {
+    /// Uses the input element itself as the GPUI element.
     type Element = Self;
 
+    /// Passes the input element into GPUI unchanged.
     fn into_element(self) -> Self::Element {
         self
     }
 }
 
 impl Element for CodeLanguageInputElement {
+    /// No intermediate state is needed for layout requests.
     type RequestLayoutState = ();
+    /// Prepared language text and interaction geometry.
     type PrepaintState = CodeLanguageInputPrepaintState;
 
+    /// This element does not expose a stable element ID.
     fn id(&self) -> Option<ElementId> {
         None
     }
 
+    /// This element does not expose a source location.
     fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
         None
     }
 
+    /// Reserves the full width and code-language input height.
     fn request_layout(
         &mut self,
         _id: Option<&GlobalElementId>,
@@ -668,6 +716,7 @@ impl Element for CodeLanguageInputElement {
         (window.request_layout(style, [], cx), ())
     }
 
+    /// Shapes language text and prepares its cursor, selection, and hitbox.
     fn prepaint(
         &mut self,
         _id: Option<&GlobalElementId>,
@@ -775,6 +824,7 @@ impl Element for CodeLanguageInputElement {
         }
     }
 
+    /// Paints language text and stores its layout for input hit testing.
     fn paint(
         &mut self,
         _id: Option<&GlobalElementId>,
@@ -822,6 +872,7 @@ impl Element for CodeLanguageInputElement {
 }
 
 impl BlockTextElement {
+    /// Creates a block text element with the theme's default placeholder.
     pub fn new(input: Entity<Block>, is_placeholder: bool) -> Self {
         Self {
             input,
@@ -831,6 +882,7 @@ impl BlockTextElement {
         }
     }
 
+    /// Creates a block text element with explicit placeholder text and color.
     pub fn with_placeholder(
         input: Entity<Block>,
         is_placeholder: bool,
@@ -848,36 +900,51 @@ impl BlockTextElement {
 
 /// Prepared text layout and paint geometry for one `BlockTextElement` frame.
 pub struct PrepaintState {
+    /// Shaped hard lines, each potentially containing soft-wrapped rows.
     lines: Vec<WrappedLine>,
+    /// Shaped source line numbers, when source mode shows them.
     source_line_numbers: Vec<ShapedLine>,
+    /// Width reserved at the left of the text for source line numbers.
     source_line_number_gutter_width: Pixels,
+    /// Caret quad for a collapsed selection.
     cursor: Option<PaintQuad>,
+    /// Selection quads split at wrapped-row boundaries.
     selection: Vec<PaintQuad>,
+    /// Inline-code background quads painted behind text.
     code_backgrounds: Vec<PaintQuad>,
+    /// Height of a single visual text row.
     line_height: Pixels,
+    /// Pointer hitbox for the complete element.
     hitbox: Hitbox,
 }
 
 impl IntoElement for BlockTextElement {
+    /// Uses the text element itself as the GPUI element.
     type Element = Self;
 
+    /// Passes the text element into GPUI unchanged.
     fn into_element(self) -> Self::Element {
         self
     }
 }
 
 impl Element for BlockTextElement {
+    /// Shares shaped lines from measured layout with prepaint.
     type RequestLayoutState = Rc<RefCell<Option<Vec<WrappedLine>>>>;
+    /// Prepared text and paint geometry.
     type PrepaintState = PrepaintState;
 
+    /// This element does not expose a stable element ID.
     fn id(&self) -> Option<ElementId> {
         None
     }
 
+    /// This element does not expose a source location.
     fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
         None
     }
 
+    /// Shapes styled text at the available width and measures wrapped lines.
     fn request_layout(
         &mut self,
         _id: Option<&GlobalElementId>,
@@ -991,6 +1058,7 @@ impl Element for BlockTextElement {
         (layout_id, shared_lines)
     }
 
+    /// Prepares source line numbers, selection, cursor, and code backgrounds.
     fn prepaint(
         &mut self,
         _id: Option<&GlobalElementId>,
@@ -1157,6 +1225,7 @@ impl Element for BlockTextElement {
         }
     }
 
+    /// Paints text geometry and caches line layout for caret hit testing.
     fn paint(
         &mut self,
         _id: Option<&GlobalElementId>,

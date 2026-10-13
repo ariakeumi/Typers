@@ -10,6 +10,7 @@ use crate::components::BlockRecord;
 use crate::i18n::I18nManager;
 
 impl Editor {
+    /// Accepts existing `.md` and `.markdown` files, ignoring extension case.
     pub(super) fn is_markdown_file_path(path: &Path) -> bool {
         path.is_file()
             && path.extension().is_some_and(|extension| {
@@ -18,6 +19,7 @@ impl Editor {
             })
     }
 
+    /// Returns the first supported file in drop order.
     pub(super) fn first_dropped_markdown_path(paths: &[PathBuf]) -> Option<PathBuf> {
         paths
             .iter()
@@ -25,6 +27,7 @@ impl Editor {
             .cloned()
     }
 
+    /// Routes an external file drop to replacement or an error prompt.
     pub(crate) fn on_external_paths_drop(
         &mut self,
         paths: &ExternalPaths,
@@ -40,6 +43,7 @@ impl Editor {
         self.request_dropped_markdown_replace(path, window, cx);
     }
 
+    /// Opens a clean drop immediately or defers a dirty document behind confirmation.
     pub(crate) fn request_dropped_markdown_replace(
         &mut self,
         path: PathBuf,
@@ -68,6 +72,7 @@ impl Editor {
         }
     }
 
+    /// Reads a Markdown file, replaces this window's document, and records it as recent.
     pub(super) fn replace_document_from_path(
         &mut self,
         path: &Path,
@@ -80,6 +85,7 @@ impl Editor {
         Ok(())
     }
 
+    /// Rebuilds the document from Markdown and resets mode, focus, history, and transient UI.
     pub(super) fn replace_document_from_markdown(
         &mut self,
         markdown: String,
@@ -134,6 +140,7 @@ impl Editor {
         cx.notify();
     }
 
+    /// Cancels a pending replacement and restores focus to the prior block.
     pub(crate) fn cancel_drop_replace_dialog(&mut self, cx: &mut Context<Self>) {
         let restore_focus = self.drop_replace_restore_focus.take();
         self.clear_pending_drop_replace_state(cx);
@@ -144,6 +151,7 @@ impl Editor {
         cx.notify();
     }
 
+    /// Replaces the document without saving its current changes.
     pub(crate) fn discard_pending_drop_replace(
         &mut self,
         window: &mut Window,
@@ -161,6 +169,7 @@ impl Editor {
         }
     }
 
+    /// Saves the current document before opening the pending dropped file.
     pub(crate) fn save_and_replace_pending_drop(
         &mut self,
         window: &mut Window,
@@ -188,6 +197,7 @@ impl Editor {
         cx.notify();
     }
 
+    /// Handles cancellation of the drop replacement dialog.
     pub(crate) fn on_cancel_drop_replace_dialog(
         &mut self,
         _: &ClickEvent,
@@ -197,6 +207,7 @@ impl Editor {
         self.cancel_drop_replace_dialog(cx);
     }
 
+    /// Handles confirmation to discard changes and open the dropped file.
     pub(crate) fn on_discard_and_replace_drop(
         &mut self,
         _: &ClickEvent,
@@ -206,6 +217,7 @@ impl Editor {
         self.discard_pending_drop_replace(window, cx);
     }
 
+    /// Handles confirmation to save changes and open the dropped file.
     pub(crate) fn on_save_and_replace_drop(
         &mut self,
         _: &ClickEvent,
@@ -215,6 +227,7 @@ impl Editor {
         self.save_and_replace_pending_drop(window, cx);
     }
 
+    /// Completes a replacement after a synchronous save succeeds.
     fn replace_after_successful_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(drop_path) = self.pending_drop_replace_path.take() else {
             self.clear_pending_drop_replace_state(cx);
@@ -228,6 +241,7 @@ impl Editor {
         }
     }
 
+    /// Prompts for a path, writes an untitled document, then performs the replacement.
     fn save_via_prompt_then_replace_drop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(drop_path) = self.pending_drop_replace_path.clone() else {
             self.clear_pending_drop_replace_state(cx);
@@ -328,6 +342,7 @@ impl Editor {
         .detach();
     }
 
+    /// Completes an asynchronously saved replacement and propagates file-open errors.
     fn replace_after_successful_save_async(&mut self, cx: &mut Context<Self>) -> Result<()> {
         let Some(drop_path) = self.pending_drop_replace_path.take() else {
             self.clear_pending_drop_replace_state(cx);
@@ -338,6 +353,7 @@ impl Editor {
         self.replace_document_from_path(&drop_path, cx)
     }
 
+    /// Abandons a failed or canceled save-and-replace attempt and restores focus.
     fn abort_pending_drop_replace_after_save(&mut self, cx: &mut Context<Self>) {
         self.pending_drop_replace_after_save = false;
         self.show_drop_replace_dialog = false;
@@ -350,6 +366,7 @@ impl Editor {
         cx.notify();
     }
 
+    /// Clears all pending drop state, notifying only when something changed.
     fn clear_pending_drop_replace_state(&mut self, cx: &mut Context<Self>) {
         let had_path = self.pending_drop_replace_path.take().is_some();
         let had_dialog = self.show_drop_replace_dialog;
@@ -363,6 +380,7 @@ impl Editor {
         }
     }
 
+    /// Reports an unsupported drop or a failed file open in a critical prompt.
     fn show_drop_open_failed_prompt(
         &self,
         detail: String,

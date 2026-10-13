@@ -22,27 +22,38 @@ pub(super) enum TableInsertTarget {
 pub(super) enum ContextMenuState {
     /// General block context menu with an insert submenu.
     Insert {
+        /// Window position where the menu opens.
         position: Point<Pixels>,
+        /// Document insertion point captured on opening.
         target: TableInsertTarget,
+        /// Whether the insert parent item owns pointer hover.
         insert_hovered: bool,
+        /// Whether the submenu owns pointer hover.
         submenu_hovered: bool,
+        /// Whether the delayed submenu is currently visible.
         submenu_open: bool,
     },
     /// Table row or column context menu for an existing native table.
     TableAxis {
+        /// Window position where the menu opens.
         position: Point<Pixels>,
+        /// Row or column targeted by its commands.
         selection: TableAxisSelection,
     },
 }
 
 /// State for the table insertion dialog opened from the context menu.
 pub(super) struct TableInsertDialogState {
+    /// Insertion point captured from the context menu.
     pub target: TableInsertTarget,
+    /// Number of body rows, excluding the header.
     pub body_rows: usize,
+    /// Number of table columns.
     pub columns: usize,
 }
 
 impl Editor {
+    /// Walks parent links to the root block containing an entity.
     pub(super) fn root_ancestor_entity_id(&self, entity_id: EntityId) -> EntityId {
         let mut current = entity_id;
         while let Some(location) = self.document.find_block_location(current) {
@@ -54,6 +65,7 @@ impl Editor {
         current
     }
 
+    /// Opens a rendered-mode insert menu at the requested position.
     fn open_insert_context_menu(
         &mut self,
         position: Point<Pixels>,
@@ -76,6 +88,7 @@ impl Editor {
         cx.notify();
     }
 
+    /// Opens a rendered-mode menu for the selected table row or column.
     pub(super) fn open_table_axis_context_menu(
         &mut self,
         position: Point<Pixels>,
@@ -95,12 +108,14 @@ impl Editor {
         cx.notify();
     }
 
+    /// Dismisses the table insertion dialog if present.
     pub(super) fn close_table_insert_dialog(&mut self, cx: &mut Context<Self>) {
         if self.table_insert_dialog.take().is_some() {
             cx.notify();
         }
     }
 
+    /// Dismisses the active context menu and pending submenu-close task.
     fn close_context_menu(&mut self, cx: &mut Context<Self>) {
         let had_menu = self.context_menu.take().is_some();
         let had_submenu_close = self.context_menu_submenu_close_task.take().is_some();
@@ -109,6 +124,7 @@ impl Editor {
         }
     }
 
+    /// Dismisses both context menus and the insertion dialog.
     pub(super) fn dismiss_contextual_overlays(&mut self, cx: &mut Context<Self>) {
         let had_menu = self.context_menu.take().is_some();
         let had_dialog = self.table_insert_dialog.take().is_some();
@@ -118,6 +134,7 @@ impl Editor {
         }
     }
 
+    /// Defers submenu closure until the pointer has left both menu regions.
     fn schedule_context_menu_submenu_close(&mut self, cx: &mut Context<Self>) {
         if !matches!(self.context_menu, Some(ContextMenuState::Insert { .. })) {
             return;
@@ -149,6 +166,7 @@ impl Editor {
         ));
     }
 
+    /// Keeps the insert submenu open while either parent or submenu is hovered.
     fn set_context_menu_hover_state(
         &mut self,
         hovered: bool,
@@ -202,6 +220,7 @@ impl Editor {
         }
     }
 
+    /// Opens the append-target context menu on a rendered editor background.
     pub(super) fn on_editor_context_menu_mouse_down(
         &mut self,
         event: &MouseDownEvent,
@@ -215,6 +234,7 @@ impl Editor {
         self.open_insert_context_menu(event.position, TableInsertTarget::Append, cx);
     }
 
+    /// Opens an insert menu after a suitable block's root ancestor.
     pub(super) fn on_block_context_menu_mouse_down(
         &mut self,
         entity_id: EntityId,
@@ -241,6 +261,7 @@ impl Editor {
         self.open_insert_context_menu(event.position, target, cx);
     }
 
+    /// Dismisses contextual overlays on an outside pointer press.
     pub(super) fn on_dismiss_context_menu_overlay(
         &mut self,
         _event: &MouseDownEvent,
@@ -250,6 +271,7 @@ impl Editor {
         self.dismiss_contextual_overlays(cx);
     }
 
+    /// Handles the global transient-UI dismissal action.
     pub(super) fn on_dismiss_transient_ui(
         &mut self,
         _: &DismissTransientUi,
@@ -259,6 +281,7 @@ impl Editor {
         self.dismiss_contextual_overlays(cx);
     }
 
+    /// Tracks pointer presence over the insert-menu parent item.
     pub(super) fn on_context_menu_insert_hover(
         &mut self,
         hovered: &bool,
@@ -268,6 +291,7 @@ impl Editor {
         self.set_context_menu_hover_state(*hovered, false, cx);
     }
 
+    /// Tracks pointer presence over the insert submenu.
     pub(super) fn on_context_menu_submenu_hover(
         &mut self,
         hovered: &bool,
@@ -277,6 +301,7 @@ impl Editor {
         self.set_context_menu_hover_state(*hovered, true, cx);
     }
 
+    /// Opens a table dialog initialized with two body rows and two columns.
     pub(super) fn on_open_table_insert_dialog(
         &mut self,
         _event: &ClickEvent,
@@ -295,6 +320,7 @@ impl Editor {
         cx.notify();
     }
 
+    /// Decreases the requested body-row count, stopping at one.
     pub(super) fn on_table_rows_decrement(
         &mut self,
         _event: &ClickEvent,
@@ -307,6 +333,7 @@ impl Editor {
         }
     }
 
+    /// Increases the requested body-row count.
     pub(super) fn on_table_rows_increment(
         &mut self,
         _event: &ClickEvent,
@@ -319,6 +346,7 @@ impl Editor {
         }
     }
 
+    /// Decreases the requested column count, stopping at one.
     pub(super) fn on_table_columns_decrement(
         &mut self,
         _event: &ClickEvent,
@@ -331,6 +359,7 @@ impl Editor {
         }
     }
 
+    /// Increases the requested column count.
     pub(super) fn on_table_columns_increment(
         &mut self,
         _event: &ClickEvent,
@@ -343,6 +372,7 @@ impl Editor {
         }
     }
 
+    /// Cancels table insertion without changing the document.
     pub(super) fn on_cancel_table_insert_dialog(
         &mut self,
         _event: &ClickEvent,
@@ -352,6 +382,7 @@ impl Editor {
         self.close_table_insert_dialog(cx);
     }
 
+    /// Inserts a native table, adds a trailing caret target, and focuses its first cell.
     pub(super) fn on_confirm_table_insert_dialog(
         &mut self,
         _event: &ClickEvent,
@@ -412,6 +443,7 @@ impl Editor {
         cx.notify();
     }
 
+    /// Returns the row or column represented by the current axis menu.
     fn active_axis_menu_selection(&self) -> Option<TableAxisSelection> {
         match self.context_menu.as_ref() {
             Some(ContextMenuState::TableAxis { selection, .. }) => Some(*selection),
@@ -419,6 +451,7 @@ impl Editor {
         }
     }
 
+    /// Applies alignment to the column selected in the open axis menu.
     fn on_apply_column_alignment(
         &mut self,
         alignment: TableColumnAlignment,
@@ -437,6 +470,7 @@ impl Editor {
         self.set_table_column_alignment(&table_block, selection.index, alignment, cx);
     }
 
+    /// Sets the selected column to default (unmarked left) alignment.
     pub(super) fn on_align_table_column_left(
         &mut self,
         _event: &ClickEvent,
@@ -449,6 +483,7 @@ impl Editor {
         self.on_apply_column_alignment(TableColumnAlignment::Default, cx);
     }
 
+    /// Centers the selected table column.
     pub(super) fn on_align_table_column_center(
         &mut self,
         _event: &ClickEvent,
@@ -458,6 +493,7 @@ impl Editor {
         self.on_apply_column_alignment(TableColumnAlignment::Center, cx);
     }
 
+    /// Right-aligns the selected table column.
     pub(super) fn on_align_table_column_right(
         &mut self,
         _event: &ClickEvent,
@@ -467,6 +503,7 @@ impl Editor {
         self.on_apply_column_alignment(TableColumnAlignment::Right, cx);
     }
 
+    /// Moves the selected visual row upward when it is not the header.
     pub(super) fn on_move_table_row_up(
         &mut self,
         _event: &ClickEvent,
@@ -486,6 +523,7 @@ impl Editor {
         self.move_table_row(&table_block, selection.index, -1, cx);
     }
 
+    /// Moves the selected visual row downward when another row follows.
     pub(super) fn on_move_table_row_down(
         &mut self,
         _event: &ClickEvent,
@@ -515,6 +553,7 @@ impl Editor {
         self.move_table_row(&table_block, selection.index, 1, cx);
     }
 
+    /// Moves the selected column left when it has a preceding column.
     pub(super) fn on_move_table_column_left(
         &mut self,
         _event: &ClickEvent,
@@ -534,6 +573,7 @@ impl Editor {
         self.move_table_column(&table_block, selection.index, -1, cx);
     }
 
+    /// Moves the selected column right when it has a following column.
     pub(super) fn on_move_table_column_right(
         &mut self,
         _event: &ClickEvent,
@@ -563,6 +603,7 @@ impl Editor {
         self.move_table_column(&table_block, selection.index, 1, cx);
     }
 
+    /// Deletes the selected row, promoting a body row or removing an empty table.
     pub(super) fn on_delete_table_row(
         &mut self,
         _event: &ClickEvent,
@@ -599,6 +640,7 @@ impl Editor {
         }
     }
 
+    /// Toggles the preference for visually distinct table headers.
     pub(super) fn on_toggle_table_headers(
         &mut self,
         _event: &ClickEvent,
@@ -613,6 +655,7 @@ impl Editor {
         cx.notify();
     }
 
+    /// Deletes the selected column or the whole table if it is the last one.
     pub(super) fn on_delete_table_column(
         &mut self,
         _event: &ClickEvent,
@@ -643,6 +686,7 @@ impl Editor {
         }
     }
 
+    /// Builds an enabled or disabled table-axis command row.
     fn render_axis_menu_item(
         theme: &Theme,
         id: &'static str,
@@ -697,6 +741,7 @@ impl Editor {
         }
     }
 
+    /// Renders the active insert or table-axis context menu, if any.
     pub(super) fn render_context_menu_overlay(
         &self,
         theme: &Theme,
@@ -1018,6 +1063,7 @@ impl Editor {
         }
     }
 
+    /// Renders the modal table insertion controls, if open.
     pub(super) fn render_table_insert_dialog_overlay(
         &self,
         theme: &Theme,

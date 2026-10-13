@@ -13,10 +13,15 @@ use super::CollapsedCaretAffinity;
 /// One displayed segment in an expanded inline projection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ExpandedInlineSegment {
+    /// Byte range in the temporary displayed text.
     pub(super) display_range: Range<usize>,
+    /// Corresponding byte range in clean visible text; delimiters are empty.
     pub(super) clean_range: Range<usize>,
+    /// Source fragment that owns this segment.
     pub(super) fragment_index: usize,
+    /// Index into `link_runs` for segments of an expanded link.
     pub(super) link_group: Option<usize>,
+    /// Whether the segment is text or projected syntax.
     pub(super) kind: ExpandedInlineSegmentKind,
 }
 
@@ -44,6 +49,7 @@ pub(super) enum ExpandedInlineKind {
 }
 
 impl ExpandedInlineKind {
+    /// Whether this delimiter kind represents an active fragment style.
     fn applies_to(self, style: InlineStyle) -> bool {
         match self {
             Self::Link => false,
@@ -60,6 +66,7 @@ impl ExpandedInlineKind {
         }
     }
 
+    /// Returns the opening syntax shown for this kind.
     fn open_marker(self) -> &'static str {
         match self {
             Self::Link => "[",
@@ -74,6 +81,7 @@ impl ExpandedInlineKind {
         }
     }
 
+    /// Returns the closing syntax shown for this kind.
     fn close_marker(self) -> &'static str {
         match self {
             Self::Link => ")",
@@ -83,6 +91,7 @@ impl ExpandedInlineKind {
         }
     }
 
+    /// Returns the editable style flag, if this kind represents one.
     pub(super) fn style_flag(self) -> Option<StyleFlag> {
         match self {
             Self::Link => None,
@@ -95,6 +104,7 @@ impl ExpandedInlineKind {
         }
     }
 
+    /// Orders nested delimiters from outermost to innermost.
     fn projection_rank(self) -> u8 {
         match self {
             Self::Link => 0,
@@ -132,42 +142,61 @@ pub(super) enum ExpandedInlineSegmentKind {
 /// One projected link run spanning one or more inline fragments.
 #[derive(Clone, Debug)]
 pub(super) struct ExpandedLinkRun {
+    /// Link metadata shared by the run's label fragments.
     pub(super) link: InlineLink,
+    /// Inclusive first source fragment index.
     pub(super) start_fragment_index: usize,
+    /// Exclusive final source fragment index.
     pub(super) end_fragment_index: usize,
+    /// Label byte range in clean visible text.
     pub(super) clean_range: Range<usize>,
+    /// Full projected syntax byte range, including delimiters and target.
     pub(super) display_range: Range<usize>,
+    /// Editable target byte range in the projected display.
     pub(super) target_display_range: Range<usize>,
 }
 
 /// One projected footnote reference run.
 #[derive(Clone, Debug)]
 pub(super) struct ExpandedFootnoteRun {
+    /// Footnote metadata, including its source identifier.
     pub(super) footnote: InlineFootnoteReference,
+    /// Reference byte range in clean visible text.
     pub(super) clean_range: Range<usize>,
+    /// Full projected reference byte range.
     pub(super) display_range: Range<usize>,
 }
 
 /// Selection snapshot translated into an expanded link display range.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ProjectedLinkSelectionSnapshot {
+    /// Clean label range used to find the same link after rebuilding.
     pub(super) clean_range: Range<usize>,
+    /// Selection byte range relative to the projected link's display start.
     pub(super) display_relative_range: Range<usize>,
+    /// Whether the selection focus precedes its anchor.
     pub(super) selection_reversed: bool,
 }
 
 /// Render cache and offset maps for an expanded inline projection.
 #[derive(Clone, Debug)]
 pub(crate) struct ExpandedInlineProjection {
+    /// Render cache for the temporary display text.
     pub(super) cache: InlineRenderCache,
+    /// Ordered text and delimiter spans in display coordinates.
     pub(super) segments: Vec<ExpandedInlineSegment>,
+    /// Clean byte offset to the default displayed caret offset.
     pub(super) clean_to_display_cursor: Vec<usize>,
+    /// Display byte offset to its clean visible-text offset.
     pub(super) display_to_clean: Vec<usize>,
+    /// Expanded links with separately editable target syntax.
     pub(super) link_runs: Vec<ExpandedLinkRun>,
+    /// Expanded footnote references.
     pub(super) footnote_runs: Vec<ExpandedFootnoteRun>,
 }
 
 #[cfg(test)]
+/// Computes a simple expanded display offset for test fixtures.
 pub(super) fn expanded_display_offset_for_clean(
     fragments: &[InlineFragment],
     clean: usize,
@@ -206,6 +235,7 @@ pub(super) fn expanded_display_offset_for_clean(
 }
 
 #[cfg(test)]
+/// Computes a simple expanded caret offset inside code or script test spans.
 pub(super) fn expanded_display_cursor_offset_for_clean(
     fragments: &[InlineFragment],
     clean: usize,
@@ -250,9 +280,10 @@ pub(super) fn expanded_display_cursor_offset_for_clean(
 }
 
 impl ExpandedInlineProjection {
-    // Projection is a temporary editing view over clean inline fragments. It
-    // exposes delimiters only for the fragment touched by the caret, selection,
-    // or IME marked range, while preserving maps back to clean text offsets.
+    /// Builds a temporary editing view for fragments touched by the selection
+    /// or IME mark, preserving byte maps back to clean visible text.
+    ///
+    /// Returns `None` when no inline construct needs expansion.
     pub(super) fn build(
         fragments: &[InlineFragment],
         clean_selected: Range<usize>,
@@ -656,6 +687,7 @@ impl ExpandedInlineProjection {
         })
     }
 
+    /// Snaps pointer hits on delimiters to their adjacent editable boundary.
     #[allow(dead_code)]
     pub(super) fn pointer_target_offset(&self, offset: usize) -> usize {
         for segment in &self.segments {
@@ -689,6 +721,7 @@ impl ExpandedInlineProjection {
         offset
     }
 
+    /// Identifies a caret just outside an opening or closing delimiter.
     pub(super) fn collapsed_affinity_for_display_offset(
         &self,
         offset: usize,
@@ -721,6 +754,7 @@ impl ExpandedInlineProjection {
         })
     }
 
+    /// Maps a clean caret byte offset into display space using boundary affinity.
     pub(super) fn display_offset_for_clean_cursor(
         &self,
         clean: usize,
@@ -766,6 +800,7 @@ impl ExpandedInlineProjection {
         }
     }
 
+    /// Finds the left-arrow target that crosses a projected delimiter as a unit.
     pub(super) fn move_left_target(
         &self,
         offset: usize,
@@ -791,6 +826,7 @@ impl ExpandedInlineProjection {
         None
     }
 
+    /// Finds the right-arrow target that crosses a projected delimiter as a unit.
     pub(super) fn move_right_target(
         &self,
         offset: usize,
@@ -813,6 +849,7 @@ impl ExpandedInlineProjection {
         None
     }
 
+    /// Collects projected style delimiters for a touched source fragment.
     fn expanded_kinds_for_fragment(
         fragments: &[InlineFragment],
         fragment_index: usize,
@@ -843,6 +880,7 @@ impl ExpandedInlineProjection {
         kinds
     }
 
+    /// Chooses Markdown or HTML script syntax matching safe serialization.
     fn script_projection_kind(
         fragments: &[InlineFragment],
         fragment_index: usize,
@@ -883,6 +921,7 @@ impl ExpandedInlineProjection {
         }
     }
 
+    /// Tests selection or nonempty IME-mark overlap, including a collapsed caret.
     fn fragment_is_touched(
         fragment_range: Range<usize>,
         clean_selected: &Range<usize>,
@@ -903,10 +942,12 @@ impl ExpandedInlineProjection {
         fragment_range.start <= cursor && cursor <= fragment_range.end
     }
 
+    /// Tests whether two nonempty half-open ranges intersect.
     fn ranges_overlap(left: &Range<usize>, right: &Range<usize>) -> bool {
         left.start < right.end && right.start < left.end
     }
 
+    /// Finds an expanded link containing the whole display range.
     pub(super) fn link_run_fully_covering_range(
         &self,
         range: &Range<usize>,
@@ -916,6 +957,7 @@ impl ExpandedInlineProjection {
         })
     }
 
+    /// Finds an expanded link by its clean label range after a rebuild.
     pub(super) fn link_run_for_clean_range(
         &self,
         clean_range: &Range<usize>,
@@ -925,6 +967,7 @@ impl ExpandedInlineProjection {
             .find(|run| run.clean_range == *clean_range)
     }
 
+    /// Finds an expanded footnote containing the whole display range.
     pub(super) fn footnote_run_fully_covering_range(
         &self,
         range: &Range<usize>,
@@ -935,6 +978,7 @@ impl ExpandedInlineProjection {
     }
 }
 
+/// Removes script styling from projected script markers themselves.
 fn marker_style_for_projection(mut style: InlineStyle, kind: ExpandedInlineKind) -> InlineStyle {
     if matches!(
         kind,

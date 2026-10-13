@@ -7,7 +7,9 @@
 use crate::fonts::FontSettings;
 use crate::theme::Theme;
 
+/// Markdown-to-HTML rendering shared by standalone and PDF export.
 mod html;
+/// Headless Chromium PDF generation.
 mod pdf;
 
 /// Export target selected from the app menu.
@@ -31,6 +33,7 @@ impl ExportFormat {
 
 pub(crate) use html::render_html_with_base_dir_and_fonts;
 
+/// Renders Markdown as PDF bytes with the selected theme and font stacks.
 pub(crate) fn render_pdf_with_fonts(
     markdown: &str,
     theme: &Theme,

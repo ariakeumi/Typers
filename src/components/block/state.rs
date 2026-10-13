@@ -31,6 +31,7 @@ pub enum CalloutVariant {
 }
 
 impl CalloutVariant {
+    /// Returns the uppercase marker used in a Markdown callout header.
     pub fn marker(self) -> &'static str {
         match self {
             Self::Note => "NOTE",
@@ -41,6 +42,7 @@ impl CalloutVariant {
         }
     }
 
+    /// Returns the human-readable default label for this variant.
     pub fn label(self) -> &'static str {
         match self {
             Self::Note => "Note",
@@ -51,6 +53,7 @@ impl CalloutVariant {
         }
     }
 
+    /// Returns the single-character icon token used by the callout UI.
     pub fn icon(self) -> &'static str {
         match self {
             Self::Note => "i",
@@ -61,6 +64,7 @@ impl CalloutVariant {
         }
     }
 
+    /// Parses a `[!TYPE]` header and returns its variant and remaining title.
     pub fn parse_header_line(line: &str) -> Option<(Self, String)> {
         let trimmed = line.trim_start();
         let rest = trimmed.strip_prefix("[!")?;
@@ -78,6 +82,7 @@ impl CalloutVariant {
         Some((variant, title))
     }
 
+    /// Formats a callout header, omitting the separating space for an empty title.
     pub fn header_markdown(self, title_markdown: &str) -> String {
         if title_markdown.trim().is_empty() {
             format!("[!{}]", self.marker())
@@ -86,6 +91,7 @@ impl CalloutVariant {
         }
     }
 
+    /// Escapes a plain quote's first line if it would parse as a callout header.
     pub fn escape_plain_quote_header(title_markdown: &str) -> String {
         let mut lines = title_markdown.splitn(2, '\n');
         let first = lines.next().unwrap_or_default();
@@ -110,12 +116,18 @@ pub enum BlockKind {
     Paragraph,
     /// Horizontal rule.
     Separator,
-    /// ATX or Setext heading with a CommonMark heading level.
-    Heading { level: u8 },
+    /// ATX or Setext heading with a level from 1 through 6.
+    Heading {
+        /// Heading depth, from 1 through 6.
+        level: u8,
+    },
     /// Unordered list item.
     BulletedListItem,
     /// Task-list item with checked state.
-    TaskListItem { checked: bool },
+    TaskListItem {
+        /// Whether the task checkbox is checked.
+        checked: bool,
+    },
     /// Ordered list item; serialization uses canonical dot markers.
     NumberedListItem,
     /// Blockquote container.
@@ -127,7 +139,10 @@ pub enum BlockKind {
     /// Native pipe-table block.
     Table,
     /// Fenced code block with optional language info string.
-    CodeBlock { language: Option<SharedString> },
+    CodeBlock {
+        /// Optional fenced-code info string used for highlighting.
+        language: Option<SharedString>,
+    },
     /// Visible HTML comment block preserved as raw comment text.
     Comment,
     /// Safe raw HTML rendered through native GPUI semantic elements.
@@ -158,6 +173,7 @@ impl BlockKind {
         self.is_list_item() || self.is_quote_container() || self.is_footnote_definition()
     }
 
+    /// Returns whether this kind uses any list-item marker.
     pub fn is_list_item(&self) -> bool {
         matches!(
             self,
@@ -165,14 +181,17 @@ impl BlockKind {
         )
     }
 
+    /// Returns whether this kind uses an ordered-list marker.
     pub fn is_numbered_list_item(&self) -> bool {
         matches!(self, Self::NumberedListItem)
     }
 
+    /// Returns whether this kind carries a task checked state.
     pub fn is_task_list_item(&self) -> bool {
         matches!(self, Self::TaskListItem { .. })
     }
 
+    /// Returns whether this kind is a fenced code block.
     pub fn is_code_block(&self) -> bool {
         matches!(self, Self::CodeBlock { .. })
     }
@@ -194,6 +213,7 @@ impl BlockKind {
         )
     }
 
+    /// Returns whether this kind is a quote or callout container.
     pub fn is_quote_container(&self) -> bool {
         matches!(self, Self::Quote | Self::Callout(_))
     }
@@ -216,6 +236,7 @@ impl BlockKind {
         )
     }
 
+    /// Returns whether this kind is a callout container.
     pub fn is_callout(&self) -> bool {
         matches!(self, Self::Callout(_))
     }
@@ -235,10 +256,12 @@ impl BlockKind {
             )
     }
 
+    /// Returns whether this kind is a footnote definition container.
     pub fn is_footnote_definition(&self) -> bool {
         matches!(self, Self::FootnoteDefinition)
     }
 
+    /// Returns the callout variant, if this kind is a callout.
     pub fn callout_variant(&self) -> Option<CalloutVariant> {
         match self {
             Self::Callout(variant) => Some(*variant),
@@ -246,10 +269,12 @@ impl BlockKind {
         }
     }
 
+    /// Returns whether this kind is a horizontal rule.
     pub fn is_separator(&self) -> bool {
         matches!(self, Self::Separator)
     }
 
+    /// Returns whether this kind can be a direct child of a list item.
     pub fn can_nest_under(&self, parent: &Self) -> bool {
         if !parent.is_list_item() {
             return false;
@@ -272,6 +297,7 @@ impl BlockKind {
             )
     }
 
+    /// Returns the kind of a new sibling created by Enter on this kind.
     pub fn newline_sibling_kind(&self) -> Self {
         if matches!(self, Self::TaskListItem { .. }) {
             Self::TaskListItem { checked: false }
@@ -319,6 +345,8 @@ impl BlockKind {
         }
     }
 
+    /// Parses an ATX heading with up to three leading spaces and a required
+    /// space after one to six opening hashes.
     pub fn parse_atx_heading_line(line: &str) -> Option<(u8, String)> {
         let trimmed_end = line.trim_end();
         let leading_spaces = trimmed_end.bytes().take_while(|b| *b == b' ').count();
@@ -346,6 +374,7 @@ impl BlockKind {
         Some((level as u8, content))
     }
 
+    /// Parses an all-`=` or all-`-` Setext underline of at least three marks.
     pub fn parse_setext_underline(line: &str) -> Option<u8> {
         let trimmed_end = line.trim_end();
         let leading_spaces = trimmed_end.bytes().take_while(|b| *b == b' ').count();
@@ -367,6 +396,7 @@ impl BlockKind {
         }
     }
 
+    /// Parses an opening backtick or tilde fence of at least three marks.
     pub fn parse_code_fence_opening(value: &str) -> Option<CodeFenceOpening> {
         let trimmed = value.trim_end();
         let ch = trimmed.chars().next()?;
@@ -396,6 +426,7 @@ impl BlockKind {
         })
     }
 
+    /// Recognizes a horizontal rule of at least three matching marks.
     pub fn parse_separator_line(value: &str) -> bool {
         let trimmed_end = value.trim_end();
         let leading_spaces = trimmed_end.bytes().take_while(|b| *b == b' ').count();
@@ -453,12 +484,14 @@ impl BlockKind {
         }
     }
 
+    /// Parses the task marker following a `- ` live-edit shortcut.
     fn parse_task_list_shortcut(value: &str) -> Option<(bool, usize)> {
         let rest = value.strip_prefix("- ")?;
         let (checked, prefix_len) = Self::parse_task_list_item_prefix(rest)?;
         Some((checked, 2 + prefix_len))
     }
 
+    /// Returns the byte length of a one- to nine-digit ordered-list shortcut.
     fn numbered_list_shortcut_prefix_len(value: &str) -> Option<usize> {
         let digit_len = value.bytes().take_while(|b| b.is_ascii_digit()).count();
         if !(1..=9).contains(&digit_len) {
@@ -479,21 +512,29 @@ impl BlockKind {
 ///
 /// Holds the block's identity, kind, inline-formatted title, and tree
 /// references (parent/children via UUID). Raw-preserved Markdown keeps its
-/// original source in `raw_fallback` so it round-trips through save/load
-/// losslessly.
+/// original source in `raw_fallback` until the title is edited.
 #[derive(Debug, Clone)]
 pub struct BlockRecord {
+    /// Stable identity used by parent and child references.
     pub id: Uuid,
+    /// Semantic block type used for rendering and serialization.
     pub kind: BlockKind,
+    /// Inline-formatted title or editable block text.
     pub title: InlineTextTree,
+    /// Native table data when this record is a table.
     pub table: Option<TableData>,
+    /// Parsed HTML document cached for an HTML block.
     pub html: Option<HtmlDocument>,
+    /// Parent block identity, if nested.
     pub parent: Option<Uuid>,
+    /// Ordered child block identities.
     pub content: Vec<Uuid>,
+    /// Current preserved source for opaque Markdown block kinds.
     pub raw_fallback: Option<String>,
 }
 
 impl BlockRecord {
+    /// Creates a record with a fresh ID and synchronizes any raw fallback.
     pub fn new(kind: BlockKind, title: InlineTextTree) -> Self {
         let mut record = Self {
             id: Uuid::new_v4(),
@@ -509,14 +550,17 @@ impl BlockRecord {
         record
     }
 
+    /// Creates a block whose title is unformatted plain text.
     pub fn with_plain_text(kind: BlockKind, text: impl Into<String>) -> Self {
         Self::new(kind, InlineTextTree::plain(text.into()))
     }
 
+    /// Creates a plain paragraph record.
     pub fn paragraph(text: impl Into<String>) -> Self {
         Self::with_plain_text(BlockKind::Paragraph, text)
     }
 
+    /// Creates an opaque Markdown record preserving its source.
     pub fn raw_markdown(markdown: impl Into<String>) -> Self {
         let markdown = markdown.into();
         let mut record = Self::with_plain_text(BlockKind::RawMarkdown, markdown.clone());
@@ -524,6 +568,7 @@ impl BlockRecord {
         record
     }
 
+    /// Creates a comment record preserving its source.
     pub fn comment(markdown: impl Into<String>) -> Self {
         let markdown = markdown.into();
         let mut record = Self::with_plain_text(BlockKind::Comment, markdown.clone());
@@ -531,6 +576,7 @@ impl BlockRecord {
         record
     }
 
+    /// Creates an HTML record with parsed content and preserved source.
     pub fn html(markdown: impl Into<String>) -> Self {
         let markdown = markdown.into();
         let html = parse_html_document(&markdown);
@@ -540,6 +586,7 @@ impl BlockRecord {
         record
     }
 
+    /// Creates a display-math record preserving its source.
     pub fn math(markdown: impl Into<String>) -> Self {
         let markdown = markdown.into();
         let mut record = Self::with_plain_text(BlockKind::MathBlock, markdown.clone());
@@ -547,6 +594,7 @@ impl BlockRecord {
         record
     }
 
+    /// Creates a Mermaid record preserving its source.
     pub fn mermaid(markdown: impl Into<String>) -> Self {
         let markdown = markdown.into();
         let mut record = Self::with_plain_text(BlockKind::MermaidBlock, markdown.clone());
@@ -554,12 +602,14 @@ impl BlockRecord {
         record
     }
 
+    /// Creates a native table record with an empty title.
     pub fn table(table: TableData) -> Self {
         let mut record = Self::new(BlockKind::Table, InlineTextTree::plain(String::new()));
         record.table = Some(table);
         record
     }
 
+    /// Replaces the title and refreshes source-dependent caches.
     pub fn set_title(&mut self, title: InlineTextTree) {
         self.title = title;
         self.sync_raw_fallback();
@@ -584,9 +634,9 @@ impl BlockRecord {
         )
     }
 
-    /// Serialize this block back to a single Markdown line, including
-    /// indentation for nested blocks and list ordinal for numbered items.
-    /// Raw-preserved blocks produce their fallback text when at depth 0.
+    /// Serializes this block's own Markdown, including nested indentation and
+    /// numbered-list ordinal. Multi-line titles may produce multiple lines;
+    /// raw-preserved blocks use their fallback source when available.
     pub fn markdown_line(&self, depth: usize, list_ordinal: Option<usize>) -> String {
         let indentation = "  ".repeat(depth);
         let title_markdown = self.title_markdown_for_output();
@@ -648,6 +698,8 @@ impl BlockRecord {
         }
     }
 
+    /// Uses visible text for a lone image when inline serialization would
+    /// reinterpret characters in its Markdown target.
     fn title_markdown_for_output(&self) -> String {
         let visible = self.title.visible_text();
         if self.can_present_title_as_standalone_image()
@@ -659,6 +711,7 @@ impl BlockRecord {
         self.title_markdown()
     }
 
+    /// Returns whether this block kind can serialize a lone image from its title.
     fn can_present_title_as_standalone_image(&self) -> bool {
         matches!(
             self.kind,
@@ -669,6 +722,7 @@ impl BlockRecord {
         )
     }
 
+    /// Refreshes raw source and parsed HTML after a title or kind change.
     fn sync_raw_fallback(&mut self) {
         if self.kind_uses_raw_fallback() {
             self.raw_fallback = Some(self.title.visible_text().to_string());
@@ -685,6 +739,7 @@ impl BlockRecord {
     }
 }
 
+/// Indents every physical line, including empty lines.
 fn indent_multiline(content: &str, indentation: &str) -> String {
     content
         .split('\n')
@@ -693,6 +748,7 @@ fn indent_multiline(content: &str, indentation: &str) -> String {
         .join("\n")
 }
 
+/// Applies a distinct prefix to the first and subsequent physical lines.
 fn prefixed_multiline(content: &str, first_prefix: &str, continuation_prefix: &str) -> String {
     let mut lines = content.split('\n');
     let mut rendered = String::new();
@@ -716,7 +772,9 @@ fn prefixed_multiline(content: &str, first_prefix: &str, continuation_prefix: &s
 /// copies from image editors or browsers arrive as encoded image bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PastedImageSource {
+    /// Encoded image bytes supplied by the clipboard.
     ClipboardImage(Image),
+    /// Existing local image file supplied by a path or file URL.
     LocalPath(PathBuf),
 }
 
@@ -728,14 +786,19 @@ pub enum PastedImageSource {
 #[derive(Debug, Clone)]
 pub enum BlockEvent {
     /// Capture the current document state before an upcoming mutation.
-    PrepareUndo { kind: UndoCaptureKind },
+    PrepareUndo {
+        /// Coalescing policy for the pending mutation.
+        kind: UndoCaptureKind,
+    },
     /// The block's content or kind changed; the editor should mark the
     /// document dirty and optionally scroll to keep the block visible.
     Changed,
     /// The user pressed Enter; a new block should be created after this
     /// one with the given trailing text.
     RequestNewline {
+        /// Text to move into the block created by the editor.
         trailing: InlineTextTree,
+        /// Whether this block has already retained its leading text.
         source_already_mutated: bool,
     },
     /// The user pressed Enter on a callout header; the editor should ensure
@@ -751,29 +814,43 @@ pub enum BlockEvent {
     RequestCalloutBreak,
     /// The user pressed Backspace at the start of this block; its entire
     /// content should be appended to the previous block.
-    RequestMergeIntoPrev { content: InlineTextTree },
+    RequestMergeIntoPrev {
+        /// Inline content to append to the previous block.
+        content: InlineTextTree,
+    },
     /// A multi-line paste was detected; the editor must split the pasted
     /// lines into separate blocks and re-attach the leading/trailing text
     /// to the correct positions.
     RequestPasteMultiline {
+        /// Content before the replaced selection.
         leading: InlineTextTree,
+        /// Normalized pasted physical lines.
         lines: Vec<String>,
+        /// Content after the replaced selection.
         trailing: InlineTextTree,
+        /// Whether to create separate blocks for those lines.
         split_physical_lines: bool,
     },
     /// An image-like clipboard payload was pasted. The editor resolves
     /// storage preferences and inserts either an image block or image text.
     RequestPasteImage {
+        /// Content before the replaced selection.
         leading: InlineTextTree,
+        /// Clipboard bitmap or local image path to insert.
         source: PastedImageSource,
+        /// Content after the replaced selection.
         trailing: InlineTextTree,
     },
     /// Replace the current editor-level cross-block selection with text
     /// submitted through the focused block input handler.
     RequestReplaceCrossBlockSelection {
+        /// Replacement text submitted from the focused block.
         text: String,
+        /// Optional selection within the inserted text.
         selected_range_relative: Option<Range<usize>>,
+        /// Whether to mark inserted text as an active composition range.
         mark_inserted_text: bool,
+        /// Coalescing policy for the replacement.
         undo_kind: UndoCaptureKind,
     },
     /// Ctrl/Cmd+A was pressed in rendered editing. The editor decides whether
@@ -793,18 +870,32 @@ pub enum BlockEvent {
     /// `prompt_target` preserves the raw syntax target shown to the user,
     /// while `open_target` is the resolved destination actually opened.
     RequestOpenLink {
+        /// Raw destination shown in the confirmation prompt.
         prompt_target: String,
+        /// Resolved destination to open.
         open_target: String,
     },
     /// Jump from a rendered footnote reference to the corresponding
     /// in-place footnote definition block.
-    RequestJumpToFootnoteDefinition { id: String },
+    RequestJumpToFootnoteDefinition {
+        /// Footnote identifier to find.
+        id: String,
+    },
     /// Jump from an in-place footnote definition back to its first reference.
-    RequestJumpToFootnoteBackref { id: String },
+    RequestJumpToFootnoteBackref {
+        /// Footnote identifier whose first reference is targeted.
+        id: String,
+    },
     /// Move focus horizontally across native table cells.
-    RequestTableCellMoveHorizontal { delta: i32 },
+    RequestTableCellMoveHorizontal {
+        /// Signed column step.
+        delta: i32,
+    },
     /// Move focus vertically across native table cells.
-    RequestTableCellMoveVertical { delta: i32 },
+    RequestTableCellMoveVertical {
+        /// Signed row step.
+        delta: i32,
+    },
     /// Append one empty column to a native table.
     RequestAppendTableColumn,
     /// Append one empty body row to a native table.
@@ -813,24 +904,41 @@ pub enum BlockEvent {
     /// `hovered` distinguishes the two so the editor can ignore a leave
     /// that arrives after an adjacent handle has already taken the preview.
     RequestTableAxisPreview {
+        /// Whether a row or column is previewed.
         kind: TableAxisKind,
+        /// Index of the previewed axis.
         index: usize,
+        /// Whether the pointer entered rather than left the handle.
         hovered: bool,
     },
     /// Select one native table row or column for batch operations.
-    RequestSelectTableAxis { kind: TableAxisKind, index: usize },
+    RequestSelectTableAxis {
+        /// Whether a row or column is selected.
+        kind: TableAxisKind,
+        /// Index of the selected axis.
+        index: usize,
+    },
     /// Open the axis context menu for a native table row or column.
     RequestOpenTableAxisMenu {
+        /// Whether the menu targets a row or column.
         kind: TableAxisKind,
+        /// Index of the targeted axis.
         index: usize,
+        /// Pointer position where the menu should open.
         position: Point<Pixels>,
     },
     /// Cursor reached the top of this block; move focus to the previous
     /// visible block, preserving the preferred horizontal position.
-    RequestFocusPrev { preferred_x: Option<f32> },
+    RequestFocusPrev {
+        /// Horizontal caret position to preserve when available.
+        preferred_x: Option<f32>,
+    },
     /// Cursor reached the bottom of this block; move focus to the next
     /// visible block, preserving the preferred horizontal position.
-    RequestFocusNext { preferred_x: Option<f32> },
+    RequestFocusNext {
+        /// Horizontal caret position to preserve when available.
+        preferred_x: Option<f32>,
+    },
     /// Move focus to the start of the previous visible block.
     RequestBlockUp,
     /// Move focus to the start of the next visible block.

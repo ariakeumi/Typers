@@ -37,7 +37,9 @@ pub enum TableAxisKind {
 /// A row or column marker inside one native table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TableAxisMarker {
+    /// Whether the marker addresses a row or column.
     pub kind: TableAxisKind,
+    /// Zero-based axis index; row zero denotes the header.
     pub index: usize,
 }
 
@@ -53,15 +55,20 @@ pub enum TableAxisHighlight {
     Selected,
 }
 
-/// Persistent cell contents for a native table block.
+/// Persistent cell contents for a native table block; body rows may be empty.
+/// Mutating helpers pad ragged vectors to a shared width of at least one column.
 #[derive(Debug, Clone)]
 pub struct TableData {
+    /// Header cells in column order.
     pub header: Vec<InlineTextTree>,
+    /// Body rows in display order, excluding the header.
     pub rows: Vec<Vec<InlineTextTree>>,
+    /// Delimiter-row alignment for each column, preserving implicit versus explicit left.
     pub alignments: Vec<TableColumnAlignment>,
 }
 
 impl PartialEq for TableData {
+    /// Compares persistent inline contents and alignment, without runtime cell entities.
     fn eq(&self, other: &Self) -> bool {
         self.header == other.header
             && self.rows == other.rows
@@ -72,8 +79,8 @@ impl PartialEq for TableData {
 impl Eq for TableData {}
 
 impl TableData {
-    /// Creates an empty table with one header row, `body_rows` body rows, and
-    /// `columns` left-aligned columns.
+    /// Creates empty cells with implicit left alignment and a header row.
+    /// Both `body_rows` and `columns` are clamped to at least one.
     pub fn new_empty(body_rows: usize, columns: usize) -> Self {
         let columns = columns.max(1);
         let header = (0..columns)
@@ -94,6 +101,7 @@ impl TableData {
         }
     }
 
+    /// Returns the widest content/alignment vector length, with a minimum of one.
     pub(crate) fn column_count(&self) -> usize {
         self.header
             .len()
@@ -102,6 +110,7 @@ impl TableData {
             .max(1)
     }
 
+    /// Pads every content/alignment vector to the widest one without adding body rows.
     fn normalize_shape(&mut self) {
         let columns = self.column_count();
         while self.header.len() < columns {
@@ -179,7 +188,7 @@ impl TableData {
         }
     }
 
-    /// Removes one body row while preserving at least one body row.
+    /// Removes a zero-based body row, allowing a header-only table; ignores invalid indices.
     pub fn remove_body_row(&mut self, row_index: usize) {
         self.normalize_shape();
         if row_index >= self.rows.len() {
@@ -191,8 +200,7 @@ impl TableData {
     }
 
     /// Removes the header row by promoting the first body row into its place.
-    /// Returns false (leaving the table unchanged) when there are no body rows,
-    /// since a pipe table must keep a header row.
+    /// Returns false when no body row exists; shape normalization still runs first.
     pub fn remove_header_row(&mut self) -> bool {
         self.normalize_shape();
         if self.rows.is_empty() {
@@ -221,10 +229,12 @@ impl TableData {
 /// Responsive width fractions shared by every row of a native table.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TableColumnLayout {
+    /// Width shares normalized across all columns, with at least one entry.
     fractions: Vec<f32>,
 }
 
 impl TableColumnLayout {
+    /// Assigns equal shares to at least one column, even if the requested count is zero.
     pub fn equal(column_count: usize) -> Self {
         let column_count = column_count.max(1);
         let fraction = 1.0 / column_count as f32;
@@ -238,6 +248,7 @@ impl TableColumnLayout {
         &self.fractions
     }
 
+    /// Returns a column's share, falling back to an equal share for an invalid index.
     pub fn fraction(&self, column: usize) -> f32 {
         self.fractions
             .get(column)
@@ -245,6 +256,7 @@ impl TableColumnLayout {
             .unwrap_or_else(|| 1.0 / self.fractions.len().max(1) as f32)
     }
 
+    /// Measures styled text and cell chrome, then distributes the available pixel width.
     pub fn measure(
         table: &TableData,
         table_width: f32,
@@ -259,6 +271,8 @@ impl TableColumnLayout {
         Self::from_preferred_widths(&preferred_widths, table_width, minimum_column_width(theme))
     }
 
+    /// Keeps equal shares when content fits, otherwise weights widths with a feasible floor.
+    /// Inputs are pixel widths; empty preferences produce one full-width column.
     pub fn from_preferred_widths(
         preferred_widths: &[f32],
         table_width: f32,
@@ -353,14 +367,17 @@ impl TableColumnLayout {
 pub struct TableCellPosition {
     /// Zero-based visual row. Header is row `0`; first body row is `1`.
     pub row: usize,
+    /// Zero-based column index within either the header or a body row.
     pub column: usize,
 }
 
 impl TableCellPosition {
+    /// Reports whether the visual row addresses the header.
     pub fn is_header(self) -> bool {
         self.row == 0
     }
 
+    /// Converts a visual row to a zero-based body index, returning `None` for the header.
     pub fn body_row_index(self) -> Option<usize> {
         self.row.checked_sub(1)
     }
@@ -369,11 +386,14 @@ impl TableCellPosition {
 /// Runtime cell editors attached to one native table block.
 #[derive(Clone)]
 pub struct TableRuntime {
+    /// Editable header entities in column order.
     pub header: Vec<Entity<Block>>,
+    /// Editable body entities indexed by body row and column.
     pub rows: Vec<Vec<Entity<Block>>>,
 }
 
 impl TableRuntime {
+    /// Clones the entity handle at a visual cell address, or returns `None` out of bounds.
     pub fn cell(&self, position: TableCellPosition) -> Option<Entity<Block>> {
         if position.is_header() {
             self.header.get(position.column).cloned()
@@ -386,6 +406,7 @@ impl TableRuntime {
     }
 }
 
+/// Measures each header-defined column by its widest header or body cell.
 fn measure_preferred_column_widths(
     table: &TableData,
     window: &mut Window,
@@ -412,6 +433,8 @@ fn measure_preferred_column_widths(
     preferred_widths
 }
 
+/// Measures the widest shaped text line plus horizontal chrome, with heavier header text.
+/// Failed shaping contributes no text width.
 fn measure_cell_preferred_width(
     cell: &InlineTextTree,
     is_header: bool,
@@ -458,6 +481,7 @@ fn measure_cell_preferred_width(
     text_width + cell_chrome_width
 }
 
+/// Partitions visible UTF-8 bytes into runs with the fonts needed for width measurement.
 fn measurement_runs(
     cache: &crate::components::InlineRenderCache,
     base_run: &TextRun,
@@ -509,19 +533,24 @@ fn measurement_runs(
     }
 }
 
+/// Returns the horizontal cell padding plus the two-pixel border allowance.
 fn cell_chrome_width(theme: &Theme) -> Pixels {
     px(theme.dimensions.table_cell_padding_x * 2.0 + 2.0)
 }
 
+/// Computes a preferred width floor from padding, four text-size units, and borders.
 fn minimum_column_width(theme: &Theme) -> f32 {
     theme.dimensions.table_cell_padding_x * 2.0 + theme.typography.text_size * 4.0 + 2.0
 }
 
+/// Removes at most three leading ASCII spaces; deeper space indentation is rejected.
 fn strip_table_indent(line: &str) -> Option<&str> {
     let indent = line.bytes().take_while(|b| *b == b' ').count();
     (indent <= 3).then_some(&line[indent..])
 }
 
+/// Splits a nonblank row with optional outer pipes, trimming cells and unescaping pipes/backslashes.
+/// Non-pipe text is accepted as one cell; delimiter context is checked by callers.
 fn split_table_cells(line: &str) -> Option<Vec<String>> {
     let rest = strip_table_indent(line)?.trim_end();
     if rest.is_empty() {
@@ -565,6 +594,7 @@ fn split_table_cells(line: &str) -> Option<Vec<String>> {
     Some(cells)
 }
 
+/// Parses at least three dashes with optional colon runs to determine column alignment.
 fn parse_alignment_cell(cell: &str) -> Option<TableColumnAlignment> {
     let trimmed = cell.trim();
     if trimmed.len() < 3 {
@@ -586,6 +616,7 @@ fn parse_alignment_cell(cell: &str) -> Option<TableColumnAlignment> {
     })
 }
 
+/// Emits the canonical delimiter spelling while preserving implicit left alignment.
 fn serialize_alignment(alignment: TableColumnAlignment) -> &'static str {
     match alignment {
         TableColumnAlignment::Default => "---",
@@ -595,6 +626,7 @@ fn serialize_alignment(alignment: TableColumnAlignment) -> &'static str {
     }
 }
 
+/// Serializes inline contents, escaping backslashes/pipes and flattening newlines for a cell.
 pub(crate) fn serialize_table_cell_markdown(tree: &InlineTextTree) -> String {
     tree.serialize_markdown()
         .replace('\\', "\\\\")
@@ -602,6 +634,7 @@ pub(crate) fn serialize_table_cell_markdown(tree: &InlineTextTree) -> String {
         .replace('\n', " ")
 }
 
+/// Serializes cells as one canonical row with outer pipes and padded separators.
 fn serialize_row<'a>(cells: impl IntoIterator<Item = &'a InlineTextTree>) -> String {
     let rendered = cells
         .into_iter()
@@ -610,8 +643,7 @@ fn serialize_row<'a>(cells: impl IntoIterator<Item = &'a InlineTextTree>) -> Str
     format!("| {} |", rendered.join(" | "))
 }
 
-/// Returns true when a line is a candidate native table row in the current
-/// container scope.
+/// Checks for a leading pipe after at most three spaces in the current container scope.
 pub fn is_table_candidate_line(line: &str) -> bool {
     strip_table_indent(line)
         .map(str::trim_end)
@@ -620,8 +652,7 @@ pub fn is_table_candidate_line(line: &str) -> bool {
 
 /// Number of pipe-separated cells in `line`, treating outer pipes as optional
 /// (GFM) so pipeless rows like `Name | Score` are recognized. Returns `None`
-/// for single-column lines so prose containing a stray `|` is not mistaken for
-/// a table row.
+/// for single-column lines; multi-column prose still needs delimiter-row validation.
 pub fn table_row_column_count(line: &str) -> Option<usize> {
     split_table_cells(line)
         .map(|cells| cells.len())
@@ -633,8 +664,8 @@ pub fn is_table_row_candidate(line: &str) -> bool {
     table_row_column_count(line).is_some()
 }
 
-/// Collects a contiguous table-candidate region in the current container
-/// scope.
+/// Returns the exclusive end of a leading-pipe run after a known candidate at `start`.
+/// The starting line is assumed valid and is not checked.
 pub fn collect_table_candidate_region(lines: &[String], start: usize) -> usize {
     let mut index = start + 1;
     while index < lines.len() && is_table_candidate_line(&lines[index]) {
@@ -643,7 +674,8 @@ pub fn collect_table_candidate_region(lines: &[String], start: usize) -> usize {
     index
 }
 
-/// Parses a pipe-table region into native table data.
+/// Parses a header and matching delimiter, with optional outer pipes on all rows.
+/// Body rows are padded or truncated to header width; zero body rows are allowed.
 pub fn parse_table_region(lines: &[String]) -> Option<TableData> {
     if lines.len() < 2 {
         return None;
@@ -699,9 +731,8 @@ fn is_delimiter_row(line: &str, columns: usize) -> bool {
 /// Detects a table that starts at `start` without requiring outer pipes,
 /// returning the region end (exclusive) when `lines[start]` is a multi-column
 /// header followed by a matching delimiter row. Body rows extend to the next
-/// blank line, matching GFM. Returns `None` for ordinary prose so a stray `|`
-/// is never mistaken for a table; single-column pipeless candidates are also
-/// rejected because they are ambiguous with setext headings.
+/// blank line, without validating their structure. Headers without a matching
+/// delimiter and single-column candidates are rejected.
 pub fn collect_pipeless_table_region(lines: &[String], start: usize) -> Option<usize> {
     let header = split_table_cells(lines.get(start)?)?;
     if header.len() < 2 {
@@ -733,9 +764,8 @@ pub fn parse_root_table_region(lines: &[String]) -> Option<TableData> {
     parse_table_region(lines)
 }
 
-/// Parses a single table body row, normalized to `columns` cells (padded when
-/// short, truncated when long). Returns `None` when the line is not a table
-/// row at all.
+/// Parses a nonblank body line, padding or truncating to `columns` cells.
+/// Accepts non-pipe text as one cell; rejects blank or deeply space-indented lines.
 pub fn parse_table_body_row(line: &str, columns: usize) -> Option<Vec<InlineTextTree>> {
     let mut cells = split_table_cells(line)?;
     cells.resize(columns, String::new());
@@ -747,7 +777,7 @@ pub fn parse_table_body_row(line: &str, columns: usize) -> Option<Vec<InlineText
     )
 }
 
-/// Serializes native table data to canonical pipe-table Markdown lines.
+/// Serializes native table data to canonical pipe-table Markdown lines without normalizing shape.
 pub fn serialize_table_markdown_lines(table: &TableData) -> Vec<String> {
     let mut lines = Vec::with_capacity(2 + table.rows.len());
     lines.push(serialize_row(table.header.iter()));

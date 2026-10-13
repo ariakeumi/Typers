@@ -7,7 +7,7 @@ use gpui::{
     VisualTestContext,
 };
 
-use super::{Editor, MountedRun, ViewMode};
+use super::{Editor, MountedRun, UndoSelectionSnapshot, ViewMode};
 use crate::components::{
     BlockKind, CloseWindow, FocusNext, ImageReferenceDefinitions, ImageResolvedSource,
     InlineTextTree, Newline, QuitApplication, SaveDocument, TableCellInlineImageSegment,
@@ -2580,6 +2580,27 @@ async fn undo_reverts_recent_rendered_typing(cx: &mut TestAppContext) {
         assert_eq!(editor.undo_history.len(), 1);
         editor.undo_document(cx);
         assert_eq!(editor.document.markdown_text(cx), "alpha");
+    });
+}
+
+#[gpui::test]
+async fn source_selection_snapshot_clips_partial_unicode_offsets(cx: &mut TestAppContext) {
+    let editor = cx.new(|cx| Editor::from_markdown(cx, "*测试".to_string(), None));
+
+    editor.update(cx, |editor, cx| {
+        editor.toggle_view_mode(cx);
+        assert!(editor.view_mode == ViewMode::Source);
+        editor.apply_selection_snapshot_in_current_mode(
+            &UndoSelectionSnapshot {
+                range: 3..6,
+                reversed: false,
+            },
+            cx,
+        );
+        let block = editor.document.first_root().expect("source block");
+        let block = block.read(cx);
+        assert_eq!(block.display_text(), "\\*测试");
+        assert_eq!(block.selected_range, 2..8);
     });
 }
 

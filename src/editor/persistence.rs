@@ -11,6 +11,7 @@ use gpui::*;
 use super::Editor;
 use crate::i18n::I18nManager;
 
+/// Counts the longest consecutive run of a marker character, or zero if absent.
 fn longest_marker_run(text: &str, marker: char) -> usize {
     let mut longest = 0usize;
     let mut current = 0usize;
@@ -27,6 +28,7 @@ fn longest_marker_run(text: &str, marker: char) -> usize {
     longest
 }
 
+/// Uses triple backticks unless content requires a longer, tilde-based fence.
 pub(super) fn safe_code_fence(content: &str) -> String {
     let longest_backticks = longest_marker_run(content, '`');
     if longest_backticks < 3 {
@@ -37,6 +39,7 @@ pub(super) fn safe_code_fence(content: &str) -> String {
     "~".repeat(longest_tildes.max(2) + 1)
 }
 
+/// Also forces a tilde fence when the info string contains a backtick.
 pub(super) fn safe_code_fence_with_info(content: &str, info: Option<&str>) -> String {
     if info.is_some_and(|info| info.contains('`')) {
         let longest_tildes = longest_marker_run(content, '~');
@@ -47,6 +50,7 @@ pub(super) fn safe_code_fence_with_info(content: &str, info: Option<&str>) -> St
 }
 
 impl Editor {
+    /// Returns literal source in source mode and canonical tree Markdown otherwise.
     pub(super) fn serialized_document_text(&self, cx: &App) -> String {
         if self.view_mode == super::ViewMode::Source {
             self.document.raw_source_text(cx)
@@ -55,6 +59,7 @@ impl Editor {
         }
     }
 
+    /// Suggests the current file's directory/name, or `untitled.md` in the working directory.
     pub(super) fn save_dialog_defaults(&self) -> (PathBuf, Option<String>) {
         if let Some(path) = self.file_path.as_ref() {
             let directory = path
@@ -73,6 +78,7 @@ impl Editor {
         }
     }
 
+    /// Records the saved path, clears dirty/close state, and refreshes workspace metadata.
     pub(super) fn apply_successful_save(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         self.file_path = Some(path);
         self.document_dirty = false;
@@ -84,6 +90,7 @@ impl Editor {
         cx.notify();
     }
 
+    /// Writes the current document synchronously; prompts on failure and returns success.
     pub(super) fn save_to_existing_path(
         &mut self,
         path: &Path,
@@ -113,6 +120,8 @@ impl Editor {
         }
     }
 
+    /// Captures document text before prompting, then writes it to the chosen path.
+    /// Cancellation or failure aborts an outstanding close-after-save request.
     fn save_document_via_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let markdown = self.serialized_document_text(cx);
         let (default_dir, suggested_name) = self.save_dialog_defaults();
@@ -202,6 +211,7 @@ impl Editor {
         .detach();
     }
 
+    /// Saves to the current path or prompts for one, honoring close-after-save state.
     pub(crate) fn save_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(path) = self.file_path.clone() {
             let should_close_after_save = self.pending_close_after_save;
@@ -218,6 +228,7 @@ impl Editor {
         self.save_document_via_prompt(window, cx);
     }
 
+    /// Prompts for a destination even when the document already has a path.
     pub(crate) fn save_document_as(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.save_document_via_prompt(window, cx);
     }
