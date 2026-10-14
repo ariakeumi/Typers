@@ -763,6 +763,7 @@ fn build_menus(
         vec![
             Menu {
                 name: "Velotype".into(),
+                disabled: false,
                 items: vec![
                     MenuItem::action(strings.menu_preferences.clone(), OpenPreferences),
                     MenuItem::separator(),
@@ -771,12 +772,14 @@ fn build_menus(
             },
             Menu {
                 name: strings.menu_file.into(),
+                disabled: false,
                 items: vec![
                     MenuItem::action(strings.menu_new_window.clone(), NewWindow),
                     MenuItem::action(strings.menu_close_window.clone(), CloseWindow),
                     MenuItem::action(strings.menu_open_file.clone(), OpenFile),
                     MenuItem::submenu(Menu {
                         name: strings.menu_open_recent_file.clone().into(),
+                        disabled: false,
                         items: recent_items,
                     }),
                     MenuItem::separator(),
@@ -791,12 +794,14 @@ fn build_menus(
     let initial_menus = {
         vec![Menu {
             name: strings.menu_file.into(),
+            disabled: false,
             items: vec![
                 MenuItem::action(strings.menu_new_window.clone(), NewWindow),
                 MenuItem::action(strings.menu_close_window.clone(), CloseWindow),
                 MenuItem::action(strings.menu_open_file.clone(), OpenFile),
                 MenuItem::submenu(Menu {
                     name: strings.menu_open_recent_file.clone().into(),
+                    disabled: false,
                     items: recent_items,
                 }),
                 MenuItem::action(strings.menu_preferences.clone(), OpenPreferences),
@@ -846,6 +851,7 @@ fn build_menus(
     menus.extend([
         Menu {
             name: strings.menu_export.into(),
+            disabled: false,
             items: vec![
                 MenuItem::action(strings.menu_export_html.clone(), ExportHtml),
                 MenuItem::action(strings.menu_export_pdf.clone(), ExportPdf),
@@ -853,14 +859,17 @@ fn build_menus(
         },
         Menu {
             name: strings.menu_language.into(),
+            disabled: false,
             items: language_items,
         },
         Menu {
             name: strings.menu_theme.into(),
+            disabled: false,
             items: theme_items,
         },
         Menu {
             name: strings.menu_workspace.into(),
+            disabled: false,
             items: vec![MenuItem::action(
                 strings.menu_toggle_workspace.clone(),
                 ToggleWorkspace,
@@ -868,6 +877,7 @@ fn build_menus(
         },
         Menu {
             name: strings.menu_help.into(),
+            disabled: false,
             items: help_items,
         },
     ]);
@@ -1061,7 +1071,7 @@ fn prompt_and_import_theme_config_with_error_window(
 }
 
 /// Quits after the final window closes, including on macOS.
-fn handle_window_closed(cx: &mut App) {
+fn handle_window_closed(cx: &mut App, _window_id: WindowId) {
     if cx.windows().is_empty() {
         cx.quit();
     }

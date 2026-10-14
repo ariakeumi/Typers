@@ -146,11 +146,6 @@ fn apply_missing_default_headers(
 }
 
 impl HttpClient for ReqwestTransportHttpClient {
-    /// Returns the diagnostic name of this GPUI transport implementation.
-    fn type_name(&self) -> &'static str {
-        "velotype_reqwest_transport_http_client"
-    }
-
     /// Exposes the user-agent configured when the bridge was created.
     fn user_agent(&self) -> Option<&HeaderValue> {
         Some(&self.user_agent)

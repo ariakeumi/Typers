@@ -1165,7 +1165,7 @@ impl PreferencesWindow {
             .expect("saved font stacks were validated");
         cx.refresh_windows();
         window.activate_window();
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         self.saved_startup_open = self.startup_open;
         self.saved_theme_id = self.selected_theme_id.clone();
         self.saved_image_paste_behavior = self.image_paste_behavior;
@@ -1672,7 +1672,7 @@ impl PreferencesWindow {
     ) {
         self.recording_shortcut = Some(command);
         self.shortcut_error = None;
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.notify();
     }
 
@@ -2339,10 +2339,10 @@ fn open_preferences_window_with_state(
         .expect("preferences window should open");
 
     handle
-        .update(cx, |preferences, window, _cx| {
+        .update(cx, |preferences, window, cx| {
             crate::ime::install_window_input_filter(window);
             window.activate_window();
-            preferences.focus_handle.focus(window);
+            preferences.focus_handle.focus(window, cx);
         })
         .expect("newly opened preferences window should be updateable");
 

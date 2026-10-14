@@ -176,7 +176,7 @@ fn main() {
     #[cfg(target_os = "macos")]
     let open_file_requested = Arc::new(AtomicBool::new(false));
 
-    let app = Application::new().with_assets(VelotypeAssets);
+    let app = gpui_platform::application().with_assets(VelotypeAssets);
 
     #[cfg(target_os = "macos")]
     {

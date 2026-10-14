@@ -6,17 +6,17 @@
 
 **使用 Rust 与 GPUI 构建的原生 Markdown 即时渲染编辑器。**
 
-[编辑器展示](./showcase/showcase.md)
+[编辑器展示](../assets/showcase/showcase.md)
 
 [English](../README.md) | [中文](README.zh-CN.md)
 
 [![Rust](https://img.shields.io/badge/Rust-2024-f74c00?logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![GPUI](https://img.shields.io/badge/GUI-GPUI%200.2-4b7bec)](https://gpui.rs/)
+[![GPUI](https://img.shields.io/badge/GUI-gpui--pre%200.3.9-4b7bec)](https://gpui.rs/)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-2ea44f)](#快速开始)
 [![Portable](https://img.shields.io/badge/app-portable%20single%20binary-8b5cf6)](#特性)
 [![Export](https://img.shields.io/badge/export-HTML%20%7C%20PDF-0ea5e9)](#特性)
 [![Release](https://img.shields.io/badge/releases-GitHub-181717?logo=github)](https://github.com/manyougz/velotype/releases)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](../LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](../LICENSE-APACHE)
 
 </div>
 
@@ -80,7 +80,7 @@ Velotype 目标支持 Windows、Linux 和 macOS。应用天然适合作为独立
 前置需求：
 
 - Git
-- 支持 Rust 2024 edition 的 Rust toolchain
+- Rust 1.92 或更新版本
 - Cargo
 - GPUI 与系统工具链所需的平台原生构建依赖
 
@@ -88,6 +88,7 @@ Velotype 目标支持 Windows、Linux 和 macOS。应用天然适合作为独立
 
 ```bash
 git clone https://github.com/manyougz/velotype.git
+cd velotype
 ```
 
 ```bash
@@ -115,8 +116,8 @@ Velotype 将视觉主题和界面语言包拆分管理。主题文件可以覆�
 
 可以从以下示例文件开始：
 
-- [自定义主题 JSONC](custom-theme.example.jsonc)
-- [自定义语言 JSONC](custom-language.example.jsonc)
+- [自定义主题 JSONC](../assets/custom-theme.example.jsonc)
+- [自定义语言 JSONC](../assets/custom-language.example.jsonc)
 
 在应用内使用 `主题 -> 添加主题配置` 或 `语言 -> 添加语言配置` 导入 `.json` / `.jsonc` 文件。JSONC 注释用于方便编写和分享示例；应用规范化保存后的配置文件会是严格 JSON。
 
@@ -149,4 +150,4 @@ Velotype 将视觉主题和界面语言包拆分管理。主题文件可以覆�
 
 ## 许可证
 
-Velotype 使用 [Apache License 2.0](../LICENSE)。
+Velotype 使用 [Apache License 2.0](../LICENSE-APACHE)。

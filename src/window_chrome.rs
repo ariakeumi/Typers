@@ -1,12 +1,11 @@
 //! Shared window chrome helpers for themed client-side title bars.
 
-use std::sync::OnceLock;
-
 use gpui::prelude::*;
 use gpui::{
     AnyElement, Bounds, ClickEvent, Context, Decorations, Hsla, MouseButton, Pixels, SharedString,
-    TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
-    WindowDecorations, WindowOptions, div, point, px, rgba, svg,
+    TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowButton,
+    WindowButtonLayout, WindowControlArea, WindowDecorations, WindowOptions, div, point, px, rgba,
+    svg,
 };
 
 use crate::app_identity::VELOTYPE_APP_ID;
@@ -56,116 +55,16 @@ pub(crate) enum TitlebarDragStrategy {
     ExplicitMoveRequest,
 }
 
-/// A window control button kind recognised in desktop button-layout settings.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TitlebarButtonKind {
-    /// Requests closing through the owning view's callback.
-    Close,
-    /// Minimizes the window.
-    Minimize,
-    /// Toggles the window's zoom state.
-    Maximize,
-}
-
-/// Parsed desktop window button layout: which buttons appear on each side.
-///
-/// GNOME `org.gnome.desktop.wm.preferences button-layout` uses the format
-/// `btn1,btn2:btn3,btn4` where the colon separates left-side from right-side
-/// buttons.  Example: `close,minimize:maximize` puts close+minimize on the
-/// left and maximize on the right.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct TitlebarButtonLayout {
-    /// Controls before the title, ordered from left to right.
-    pub(crate) left: Vec<TitlebarButtonKind>,
-    /// Controls after the title, ordered from left to right.
-    pub(crate) right: Vec<TitlebarButtonKind>,
-}
-
-impl TitlebarButtonLayout {
-    /// Parses a GNOME layout, ignoring unknown names and defaulting if empty.
-    fn parse(s: &str) -> Self {
-        let (left_part, right_part) = match s.split_once(':') {
-            Some((l, r)) => (l, r),
-            None => (s, ""),
-        };
-
-        let parse_side = |part: &str| -> Vec<TitlebarButtonKind> {
-            part.split(',')
-                .filter_map(|name| match name.trim() {
-                    "close" => Some(TitlebarButtonKind::Close),
-                    "minimize" => Some(TitlebarButtonKind::Minimize),
-                    "maximize" => Some(TitlebarButtonKind::Maximize),
-                    _ => None,
-                })
-                .collect()
-        };
-
-        let left = parse_side(left_part);
-        let right = parse_side(right_part);
-
-        if left.is_empty() && right.is_empty() {
-            return Self::default();
-        }
-
-        TitlebarButtonLayout { left, right }
-    }
-}
-
-impl Default for TitlebarButtonLayout {
-    /// Places minimize, maximize, and close on the right, in that order.
-    fn default() -> Self {
-        TitlebarButtonLayout {
-            left: Vec::new(),
-            right: vec![
-                TitlebarButtonKind::Minimize,
-                TitlebarButtonKind::Maximize,
-                TitlebarButtonKind::Close,
-            ],
-        }
-    }
-}
-
-/// Cached result of reading the desktop's window button layout.
-static LINUX_BUTTON_LAYOUT: OnceLock<TitlebarButtonLayout> = OnceLock::new();
-
-/// Returns the window button layout for the current Linux/FreeBSD desktop.
-///
-/// Reads `org.gnome.desktop.wm.preferences button-layout` via `gsettings` on
-/// first use, then caches the result.  Falls back to all-buttons-on-right when
-/// `gsettings` is unavailable or the value is invalid.
-fn cached_linux_button_layout() -> TitlebarButtonLayout {
-    LINUX_BUTTON_LAYOUT
-        .get_or_init(|| {
-            let output = std::process::Command::new("gsettings")
-                .args(["get", "org.gnome.desktop.wm.preferences", "button-layout"])
-                .output()
-                .ok()
-                .and_then(|o| {
-                    if o.status.success() {
-                        String::from_utf8(o.stdout).ok()
-                    } else {
-                        None
-                    }
-                });
-
-            match output {
-                Some(raw) => {
-                    // gsettings wraps the value in single quotes: "'close,minimize:maximize'"
-                    let trimmed = raw.trim().trim_matches('\'');
-                    TitlebarButtonLayout::parse(trimmed)
-                }
-                None => TitlebarButtonLayout::default(),
-            }
-        })
-        .clone()
-}
-
-/// Returns the button layout appropriate for `target_os`.
-fn button_layout_for_target_os(target_os: &str) -> TitlebarButtonLayout {
-    match target_os {
-        "linux" | "freebsd" => cached_linux_button_layout(),
-        _ => TitlebarButtonLayout::default(),
-    }
+/// Keeps the existing right-side order when the platform does not supply a layout.
+fn titlebar_button_layout(platform_layout: Option<WindowButtonLayout>) -> WindowButtonLayout {
+    platform_layout.unwrap_or(WindowButtonLayout {
+        left: [None; 3],
+        right: [
+            Some(WindowButton::Minimize),
+            Some(WindowButton::Maximize),
+            Some(WindowButton::Close),
+        ],
+    })
 }
 
 /// Sets the native title, transparency, and macOS traffic-light position.
@@ -389,7 +288,7 @@ pub(crate) fn render_custom_titlebar<T: 'static>(
             .child(div().w(px(MAC_TRAFFIC_LIGHT_RESERVED_WIDTH)).h_full()),
         TitlebarControlMode::AppControls => {
             let close_entity = entity.clone();
-            let layout_buttons = button_layout_for_target_os(std::env::consts::OS);
+            let layout_buttons = titlebar_button_layout(cx.button_layout());
 
             // Build each button once as an owned element, then place it
             // according to the desktop layout.
@@ -482,11 +381,11 @@ pub(crate) fn render_custom_titlebar<T: 'static>(
             );
 
             let mut left_row = div().h_full().flex().items_center().flex_shrink_0();
-            for kind in &layout_buttons.left {
+            for kind in layout_buttons.left.into_iter().flatten() {
                 let btn = match kind {
-                    TitlebarButtonKind::Minimize => minimize_btn.take(),
-                    TitlebarButtonKind::Maximize => maximize_btn.take(),
-                    TitlebarButtonKind::Close => close_btn.take(),
+                    WindowButton::Minimize => minimize_btn.take(),
+                    WindowButton::Maximize => maximize_btn.take(),
+                    WindowButton::Close => close_btn.take(),
                 };
                 if let Some(b) = btn {
                     left_row = left_row.child(b);
@@ -494,11 +393,11 @@ pub(crate) fn render_custom_titlebar<T: 'static>(
             }
 
             let mut right_row = div().h_full().flex().items_center().flex_shrink_0();
-            for kind in &layout_buttons.right {
+            for kind in layout_buttons.right.into_iter().flatten() {
                 let btn = match kind {
-                    TitlebarButtonKind::Minimize => minimize_btn.take(),
-                    TitlebarButtonKind::Maximize => maximize_btn.take(),
-                    TitlebarButtonKind::Close => close_btn.take(),
+                    WindowButton::Minimize => minimize_btn.take(),
+                    WindowButton::Maximize => maximize_btn.take(),
+                    WindowButton::Close => close_btn.take(),
                 };
                 if let Some(b) = btn {
                     right_row = right_row.child(b);
@@ -626,81 +525,31 @@ mod tests {
     }
 
     #[test]
-    fn button_layout_parses_gnome_left_side_format() {
-        // macOS-style: all buttons on the left
-        let layout = TitlebarButtonLayout::parse("close,minimize,maximize:");
+    fn button_layout_preserves_platform_order() {
+        let platform_layout = WindowButtonLayout {
+            left: [Some(WindowButton::Close), None, None],
+            right: [
+                Some(WindowButton::Minimize),
+                Some(WindowButton::Maximize),
+                None,
+            ],
+        };
         assert_eq!(
-            layout.left,
-            vec![
-                TitlebarButtonKind::Close,
-                TitlebarButtonKind::Minimize,
-                TitlebarButtonKind::Maximize,
-            ]
+            titlebar_button_layout(Some(platform_layout)),
+            platform_layout
         );
-        assert!(layout.right.is_empty());
     }
 
     #[test]
-    fn button_layout_parses_gnome_right_side_format() {
-        // Traditional GNOME: all buttons on the right
-        let layout = TitlebarButtonLayout::parse(":minimize,maximize,close");
-        assert!(layout.left.is_empty());
+    fn button_layout_without_platform_setting_falls_back_to_all_right() {
+        let layout = titlebar_button_layout(None);
+        assert!(layout.left.iter().all(Option::is_none));
         assert_eq!(
             layout.right,
-            vec![
-                TitlebarButtonKind::Minimize,
-                TitlebarButtonKind::Maximize,
-                TitlebarButtonKind::Close,
-            ]
-        );
-    }
-
-    #[test]
-    fn button_layout_parses_split_format() {
-        // Mixed: close on left, minimize+maximize on right
-        let layout = TitlebarButtonLayout::parse("close:minimize,maximize");
-        assert_eq!(layout.left, vec![TitlebarButtonKind::Close]);
-        assert_eq!(
-            layout.right,
-            vec![TitlebarButtonKind::Minimize, TitlebarButtonKind::Maximize]
-        );
-    }
-
-    #[test]
-    fn button_layout_parses_no_colon_as_left_side() {
-        // No colon — everything goes to the left side
-        let layout = TitlebarButtonLayout::parse("close,minimize");
-        assert_eq!(
-            layout.left,
-            vec![TitlebarButtonKind::Close, TitlebarButtonKind::Minimize]
-        );
-        assert!(layout.right.is_empty());
-    }
-
-    #[test]
-    fn button_layout_ignores_unknown_button_names() {
-        let layout = TitlebarButtonLayout::parse("close,menu:minimize,spacer");
-        assert_eq!(layout.left, vec![TitlebarButtonKind::Close]);
-        assert_eq!(layout.right, vec![TitlebarButtonKind::Minimize]);
-    }
-
-    #[test]
-    fn button_layout_invalid_value_falls_back_to_default() {
-        // No recognised button names at all
-        let layout = TitlebarButtonLayout::parse("foo,bar");
-        assert_eq!(layout, TitlebarButtonLayout::default());
-    }
-
-    #[test]
-    fn button_layout_default_is_all_right() {
-        let layout = TitlebarButtonLayout::default();
-        assert!(layout.left.is_empty());
-        assert_eq!(
-            layout.right,
-            vec![
-                TitlebarButtonKind::Minimize,
-                TitlebarButtonKind::Maximize,
-                TitlebarButtonKind::Close,
+            [
+                Some(WindowButton::Minimize),
+                Some(WindowButton::Maximize),
+                Some(WindowButton::Close),
             ]
         );
     }

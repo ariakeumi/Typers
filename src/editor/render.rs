@@ -429,7 +429,8 @@ impl Editor {
         if let Some(entity_id) = self.pending_focus.take()
             && let Some(block) = self.focusable_entity_by_id(entity_id)
         {
-            block.read(cx).focus_handle.focus(window);
+            let focus_handle = block.read(cx).focus_handle.clone();
+            focus_handle.focus(window, cx);
         }
     }
 
@@ -460,7 +461,7 @@ impl Editor {
         }
 
         if changed {
-            let max_offset_y = self.scroll_handle.max_offset().height.max(px(0.0));
+            let max_offset_y = self.scroll_handle.max_offset().y.max(px(0.0));
             offset.y = offset.y.min(px(0.0)).max(-max_offset_y);
             self.scroll_handle.set_offset(offset);
         }
@@ -1540,7 +1541,7 @@ impl Render for Editor {
         let menu_bar_height =
             in_window_menu_bar_height_for_target_os(std::env::consts::OS, has_menus, d);
         let scroll_trigger_padding = (d.block_min_height * 0.75).max(16.0);
-        let max_scroll_y = f32::from(self.scroll_handle.max_offset().height.max(px(0.0)));
+        let max_scroll_y = f32::from(self.scroll_handle.max_offset().y.max(px(0.0)));
         let viewport_height = f32::from(viewport_bounds.size.height.max(px(1.0)));
         // Extra room below the last block so the lowest line can be scrolled up
         // to the viewport center instead of being pinned to the bottom edge.
@@ -1925,7 +1926,7 @@ impl Render for Editor {
             .id("editor-scroll-inner")
             .flex()
             .flex_col()
-            .flex_grow()
+            .flex_grow(1.0)
             .h_full()
             .items_center()
             .bg(theme.colors.editor_background)
@@ -2191,6 +2192,8 @@ mod tests {
             name: name.into(),
             action: Box::new(NoRecentFiles),
             os_action: None,
+            checked: false,
+            disabled: true,
         }
     }
 
@@ -2199,6 +2202,8 @@ mod tests {
             name: "Add Theme Config".into(),
             action: Box::new(AddThemeConfig),
             os_action: None,
+            checked: false,
+            disabled: false,
         }
     }
 
@@ -2207,6 +2212,8 @@ mod tests {
             name: "Add Language Config".into(),
             action: Box::new(AddLanguageConfig),
             os_action: None,
+            checked: false,
+            disabled: false,
         }
     }
 
@@ -2492,10 +2499,13 @@ mod tests {
             OwnedMenuItem::Separator,
             OwnedMenuItem::Submenu(OwnedMenu {
                 name: "Recent".into(),
+                disabled: false,
                 items: vec![OwnedMenuItem::Action {
                     name: r"C:\Users\someone\Documents\notes.md".into(),
                     action: Box::new(NoRecentFiles),
                     os_action: None,
+                    checked: false,
+                    disabled: false,
                 }],
             }),
         ];
@@ -2530,10 +2540,13 @@ mod tests {
         let labels = vec!["File".to_string()];
         let items = vec![OwnedMenuItem::Submenu(OwnedMenu {
             name: "Open Recently Used Markdown File".into(),
+            disabled: false,
             items: vec![OwnedMenuItem::Action {
                 name: r"C:\Users\someone\Documents\Very Long Folder\notes.md".into(),
                 action: Box::new(NoRecentFiles),
                 os_action: None,
+                checked: false,
+                disabled: false,
             }],
         })];
         let submenu_labels = match &items[0] {

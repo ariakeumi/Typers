@@ -26,6 +26,12 @@ impl Block {
     fn pasted_image_source_from_clipboard(item: &ClipboardItem) -> Option<PastedImageSource> {
         item.entries().iter().find_map(|entry| match entry {
             ClipboardEntry::Image(image) => Some(PastedImageSource::ClipboardImage(image.clone())),
+            ClipboardEntry::ExternalPaths(paths) => match paths.paths() {
+                [path] if Self::is_supported_local_image_path(path) => {
+                    Some(PastedImageSource::LocalPath(path.clone()))
+                }
+                _ => None,
+            },
             ClipboardEntry::String(_) => None,
         })
     }
@@ -720,7 +726,7 @@ impl Block {
             // language field rather than leaving the block, so the language is
             // reachable by keyboard. A further Down there exits the block.
             if self.kind().is_code_block() && !self.code_language_focus_handle.is_focused(window) {
-                self.code_language_focus_handle.focus(window);
+                self.code_language_focus_handle.focus(window, cx);
                 cx.notify();
                 return;
             }
@@ -1042,7 +1048,7 @@ impl Block {
             return;
         }
         cx.stop_propagation();
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -1057,7 +1063,7 @@ impl Block {
             return;
         }
         cx.stop_propagation();
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -1304,7 +1310,7 @@ impl Block {
             return;
         }
         cx.stop_propagation();
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -1358,7 +1364,7 @@ impl Block {
     ) {
         cx.stop_propagation();
         self.code_language_is_selecting = true;
-        self.code_language_focus_handle.focus(window);
+        self.code_language_focus_handle.focus(window, cx);
         let offset = self.code_language_index_for_mouse_position(event.position);
         if event.modifiers.shift {
             self.select_code_language_to(offset, cx);
@@ -1800,7 +1806,7 @@ impl Block {
 mod tests {
     use super::Block;
     use crate::components::{BlockKind, BlockRecord, InlineTextTree, PastedImageSource};
-    use gpui::{AppContext, TestAppContext};
+    use gpui::{AppContext, ClipboardEntry, ClipboardItem, ExternalPaths, TestAppContext};
     use std::fs;
 
     fn temp_image_path(name: &str) -> std::path::PathBuf {
@@ -1852,6 +1858,22 @@ mod tests {
         let source = Block::pasted_image_source_from_text(&text);
 
         assert_eq!(source, Some(PastedImageSource::LocalPath(path.clone())));
+        remove_temp_image(&path);
+    }
+
+    #[test]
+    fn paste_image_external_path_uses_existing_local_image_route() {
+        let path = temp_image_path("copied.png");
+        let item = ClipboardItem {
+            entries: vec![ClipboardEntry::ExternalPaths(ExternalPaths(
+                vec![path.clone()].into(),
+            ))],
+        };
+
+        assert_eq!(
+            Block::pasted_image_source_from_clipboard(&item),
+            Some(PastedImageSource::LocalPath(path.clone()))
+        );
         remove_temp_image(&path);
     }
 

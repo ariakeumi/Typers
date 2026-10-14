@@ -189,7 +189,7 @@ impl SingleLineInput {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.focus.focus(window);
+        self.focus.focus(window, cx);
         self.is_selecting = true;
         let index = self.index_at(event.position);
         if event.modifiers.shift {
@@ -739,6 +739,8 @@ impl Element for InputTextElement {
                 .paint(
                     point(state.paint_origin_x, bounds.top()),
                     bounds.size.height,
+                    TextAlign::Left,
+                    None,
                     window,
                     cx,
                 )
