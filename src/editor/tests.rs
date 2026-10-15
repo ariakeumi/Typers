@@ -46,6 +46,27 @@ fn redraw(cx: &mut gpui::VisualTestContext) {
     cx.run_until_parked();
 }
 
+#[gpui::test]
+async fn picgo_failure_prompt_uses_the_editor_window(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let (editor, cx) =
+        cx.add_window_view(|_window, cx| Editor::from_markdown(cx, String::new(), None));
+    editor.update(cx, |editor, cx| {
+        editor
+            .pending_image_paste_prompts
+            .push_back(super::ImagePastePrompt::PicGoFallback(
+                "upload failed".into(),
+            ));
+        cx.notify();
+        assert_eq!(editor.pending_image_paste_prompts.len(), 1);
+    });
+
+    redraw(cx);
+    editor.read_with(cx, |editor, _cx| {
+        assert!(editor.pending_image_paste_prompts.is_empty());
+    });
+}
+
 fn activate_visual_window(cx: &mut VisualTestContext) -> AnyWindowHandle {
     cx.update(|window, _cx| window.activate_window());
     cx.run_until_parked();

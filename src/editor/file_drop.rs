@@ -99,6 +99,9 @@ impl Editor {
         }
 
         self.file_path = file_path;
+        self.unsaved_image_assets_dir = None;
+        self.pending_picgo_uploads.clear();
+        self.pending_image_paste_prompts.clear();
         self.view_mode = ViewMode::Rendered;
         self.document.replace_roots(roots, cx);
         self.table_cells.clear();

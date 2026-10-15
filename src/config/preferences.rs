@@ -2,6 +2,10 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::thread;
+use std::time::Duration;
+
+use futures::channel::oneshot;
 
 use anyhow::Context as _;
 use gpui::prelude::FluentBuilder;
@@ -107,6 +111,8 @@ pub(crate) enum ImagePasteBehavior {
     CopyToAssetsFolder,
     /// Copy into `<document-stem>.assets`, choosing an unused `untitle` name if unsaved.
     CopyToNamedAssetsFolder,
+    /// Upload through the configured local PicGo server.
+    UsePicGo,
 }
 
 impl ImagePasteBehavior {
@@ -117,6 +123,7 @@ impl ImagePasteBehavior {
             Self::CopyToDocumentFolder => "copy_to_document_folder",
             Self::CopyToAssetsFolder => "copy_to_assets_folder",
             Self::CopyToNamedAssetsFolder => "copy_to_named_assets_folder",
+            Self::UsePicGo => "use_picgo",
         }
     }
 
@@ -126,10 +133,23 @@ impl ImagePasteBehavior {
             "copy_to_document_folder" => Self::CopyToDocumentFolder,
             "copy_to_assets_folder" => Self::CopyToAssetsFolder,
             "copy_to_named_assets_folder" => Self::CopyToNamedAssetsFolder,
+            "use_picgo" => Self::UsePicGo,
             _ => Self::None,
         }
     }
+
+    /// A failed upload must fall back to a local policy, never retry PicGo.
+    fn local_only(self) -> Self {
+        if self == Self::UsePicGo {
+            Self::None
+        } else {
+            self
+        }
+    }
 }
+
+/// The default loopback endpoint of PicGo's built-in server.
+pub(crate) const DEFAULT_PICGO_SERVER_URL: &str = "http://127.0.0.1:36677";
 
 /// User preferences persisted under the app config directory.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -144,6 +164,10 @@ pub(crate) struct AppPreferences {
     pub(crate) show_table_headers: bool,
     /// Storage policy for images inserted from the clipboard.
     pub(crate) image_paste_behavior: ImagePasteBehavior,
+    /// Last chosen local policy used when a PicGo upload fails.
+    pub(crate) image_paste_fallback: ImagePasteBehavior,
+    /// User-supplied loopback PicGo Server address.
+    pub(crate) picgo_server_url: String,
     /// Command identifiers mapped to user-supplied shortcut lists.
     pub(crate) keybindings: BTreeMap<String, Vec<String>>,
     /// Status bar visibility, built-in items, and stored custom buttons.
@@ -161,6 +185,8 @@ impl Default for AppPreferences {
             default_theme_id: DEFAULT_THEME_ID.into(),
             show_table_headers: true,
             image_paste_behavior: ImagePasteBehavior::None,
+            image_paste_fallback: ImagePasteBehavior::None,
+            picgo_server_url: DEFAULT_PICGO_SERVER_URL.into(),
             keybindings: BTreeMap::new(),
             status_bar: StatusBarPreferences::default(),
             fonts: FontPreferences::default(),
@@ -321,6 +347,10 @@ struct EditorPreferencesFile {
     show_table_headers: bool,
     /// Serialized clipboard image storage policy.
     image_paste_behavior: String,
+    /// Persisted local fallback policy for PicGo failures.
+    image_paste_fallback: String,
+    /// PicGo's local HTTP server URL.
+    picgo_server_url: String,
 }
 
 /// Persisted default UI language selection.
@@ -385,6 +415,8 @@ impl From<&AppPreferences> for PreferencesFile {
             editor: EditorPreferencesFile {
                 show_table_headers: value.show_table_headers,
                 image_paste_behavior: value.image_paste_behavior.as_str().into(),
+                image_paste_fallback: value.image_paste_fallback.local_only().as_str().into(),
+                picgo_server_url: value.picgo_server_url.clone(),
             },
             status_bar: StatusBarPreferencesFile::from(&value.status_bar),
             keybindings: normalize_shortcut_config(&value.keybindings),
@@ -482,6 +514,20 @@ fn app_preferences_from_toml_value(
         .and_then(|value| value.as_str())
         .map(ImagePasteBehavior::from_str)
         .unwrap_or(ImagePasteBehavior::None);
+    let image_paste_fallback = value
+        .get("editor")
+        .and_then(|editor| editor.get("image_paste_fallback"))
+        .and_then(|value| value.as_str())
+        .map(ImagePasteBehavior::from_str)
+        .unwrap_or(image_paste_behavior)
+        .local_only();
+    let picgo_server_url = value
+        .get("editor")
+        .and_then(|editor| editor.get("picgo_server_url"))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(DEFAULT_PICGO_SERVER_URL)
+        .to_string();
 
     let status_bar = value
         .get("status_bar")
@@ -560,6 +606,8 @@ fn app_preferences_from_toml_value(
         default_theme_id,
         show_table_headers,
         image_paste_behavior,
+        image_paste_fallback,
+        picgo_server_url,
         keybindings,
         status_bar,
         fonts,
@@ -700,6 +748,8 @@ pub(crate) fn save_preferences_from_window(
     startup_open: StartupOpenPreference,
     default_theme_id: &str,
     image_paste_behavior: ImagePasteBehavior,
+    image_paste_fallback: ImagePasteBehavior,
+    picgo_server_url: &str,
     keybindings: BTreeMap<String, Vec<String>>,
     status_bar: &StatusBarPreferences,
     fonts: &FontPreferences,
@@ -709,6 +759,8 @@ pub(crate) fn save_preferences_from_window(
         startup_open,
         default_theme_id,
         image_paste_behavior,
+        image_paste_fallback,
+        picgo_server_url,
         keybindings,
         status_bar,
         fonts,
@@ -721,6 +773,8 @@ fn save_preferences_from_window_with_dirs(
     startup_open: StartupOpenPreference,
     default_theme_id: &str,
     image_paste_behavior: ImagePasteBehavior,
+    image_paste_fallback: ImagePasteBehavior,
+    picgo_server_url: &str,
     keybindings: BTreeMap<String, Vec<String>>,
     status_bar: &StatusBarPreferences,
     fonts: &FontPreferences,
@@ -731,6 +785,8 @@ fn save_preferences_from_window_with_dirs(
     preferences.startup_open = startup_open;
     preferences.default_theme_id = default_theme_id.into();
     preferences.image_paste_behavior = image_paste_behavior;
+    preferences.image_paste_fallback = image_paste_fallback.local_only();
+    preferences.picgo_server_url = picgo_server_url.to_string();
     preferences.keybindings = normalize_shortcut_config(&keybindings);
     preferences.status_bar = status_bar.clone();
     preferences.fonts = fonts.clone();
@@ -763,6 +819,15 @@ enum PreferencesNav {
     StatusBar,
 }
 
+/// Non-uploading connectivity check for the configured local PicGo Server.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PicGoStatus {
+    Checking,
+    Available,
+    Legacy,
+    Unavailable,
+}
+
 /// Checks body, code, and UI availability; syntax errors are handled separately.
 fn font_uses_system_default(fonts: &FontPreferences, catalog: &FontCatalog) -> [bool; 3] {
     [
@@ -785,6 +850,10 @@ pub(crate) struct PreferencesWindow {
     selected_theme_id: String,
     /// Draft clipboard image storage policy.
     image_paste_behavior: ImagePasteBehavior,
+    /// Local policy to use if PicGo cannot upload a batch.
+    image_paste_fallback: ImagePasteBehavior,
+    /// Draft PicGo Server URL, edited in a separate input.
+    picgo_server_url: String,
     /// Draft shortcut overrides.
     keybindings: BTreeMap<String, Vec<String>>,
     /// Startup policy at the last successful save.
@@ -793,6 +862,15 @@ pub(crate) struct PreferencesWindow {
     saved_theme_id: String,
     /// Image policy at the last successful save.
     saved_image_paste_behavior: ImagePasteBehavior,
+    /// Saved fallback and server address for dirty-state comparison.
+    saved_image_paste_fallback: ImagePasteBehavior,
+    saved_picgo_server_url: String,
+    /// Result of the latest local PicGo Server probe.
+    picgo_status: PicGoStatus,
+    /// Discards results from checks started before the latest URL change.
+    picgo_check_generation: u64,
+    /// Cancels superseded checks while the address field is being edited.
+    picgo_check_task: Option<Task<()>>,
     /// Shortcut overrides used as the dirty-state baseline.
     saved_keybindings: BTreeMap<String, Vec<String>>,
     /// Theme catalog snapshot captured when this window opens.
@@ -843,6 +921,8 @@ pub(crate) struct PreferencesWindow {
     code_font_input: Entity<SingleLineInput>,
     /// Editable application UI font family list.
     ui_font_input: Entity<SingleLineInput>,
+    /// Editable PicGo Server URL.
+    picgo_server_input: Entity<SingleLineInput>,
 }
 
 impl PreferencesWindow {
@@ -862,6 +942,12 @@ impl PreferencesWindow {
         };
         let startup_open = preferences.startup_open;
         let image_paste_behavior = preferences.image_paste_behavior;
+        let image_paste_fallback = if image_paste_behavior == ImagePasteBehavior::UsePicGo {
+            preferences.image_paste_fallback.local_only()
+        } else {
+            image_paste_behavior
+        };
+        let picgo_server_url = preferences.picgo_server_url.clone();
         let keybindings = preferences.keybindings;
         let fonts = preferences.fonts.clone();
         let font_catalog = FontCatalog::current(cx);
@@ -878,6 +964,18 @@ impl PreferencesWindow {
             SingleLineInput::new(fonts.ui_stack.clone(), "e.g. .SystemUIFont", cx)
                 .with_overflow(SingleLineOverflow::Ellipsis)
         });
+        let picgo_server_input = cx.new(|cx| {
+            SingleLineInput::new(picgo_server_url.clone(), DEFAULT_PICGO_SERVER_URL, cx)
+                .with_overflow(SingleLineOverflow::Ellipsis)
+        });
+        cx.subscribe(&picgo_server_input, |this, input, _: &InputChanged, cx| {
+            this.picgo_server_url = input.read(cx).value().to_string();
+            if this.image_paste_behavior == ImagePasteBehavior::UsePicGo {
+                this.check_picgo_server(cx);
+            }
+            cx.notify();
+        })
+        .detach();
         cx.subscribe(&body_font_input, |this, input, _: &InputChanged, cx| {
             this.fonts.body_stack = input.read(cx).value().to_string();
             this.refresh_font_availability(0);
@@ -901,10 +999,17 @@ impl PreferencesWindow {
             startup_open,
             selected_theme_id: selected_theme_id.clone(),
             image_paste_behavior,
+            image_paste_fallback,
+            picgo_server_url: picgo_server_url.clone(),
             keybindings: keybindings.clone(),
             saved_startup_open: startup_open,
             saved_theme_id: selected_theme_id,
             saved_image_paste_behavior: image_paste_behavior,
+            saved_image_paste_fallback: image_paste_fallback,
+            saved_picgo_server_url: picgo_server_url,
+            picgo_status: PicGoStatus::Checking,
+            picgo_check_generation: 0,
+            picgo_check_task: None,
             saved_keybindings: keybindings,
             theme_options,
             focus_handle: cx.focus_handle(),
@@ -930,6 +1035,7 @@ impl PreferencesWindow {
             body_font_input,
             code_font_input,
             ui_font_input,
+            picgo_server_input,
         }
     }
 
@@ -984,6 +1090,8 @@ impl PreferencesWindow {
         self.startup_open != self.saved_startup_open
             || self.selected_theme_id != self.saved_theme_id
             || self.image_paste_behavior != self.saved_image_paste_behavior
+            || self.image_paste_fallback != self.saved_image_paste_fallback
+            || self.picgo_server_url != self.saved_picgo_server_url
             || normalize_shortcut_config(&self.keybindings)
                 != normalize_shortcut_config(&self.saved_keybindings)
             || self.status_bar_enabled != self.saved_status_bar_enabled
@@ -1021,7 +1129,42 @@ impl PreferencesWindow {
         self.theme_dropdown_open = false;
         self.image_dropdown_open = false;
         self.recording_shortcut = None;
+        if self.image_paste_behavior == ImagePasteBehavior::UsePicGo {
+            self.check_picgo_server(cx);
+        }
         cx.notify();
+    }
+
+    /// Probes the configured loopback server without uploading clipboard data.
+    fn check_picgo_server(&mut self, cx: &mut Context<Self>) {
+        self.picgo_check_generation = self.picgo_check_generation.wrapping_add(1);
+        let generation = self.picgo_check_generation;
+        let url = self.picgo_server_url.clone();
+        self.picgo_status = PicGoStatus::Checking;
+        self.picgo_check_task = Some(cx.spawn(
+            async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(300))
+                    .await;
+                let (sender, receiver) = oneshot::channel();
+                thread::spawn(move || {
+                    let result = crate::editor::picgo::probe_server(&url);
+                    let _ = sender.send(result);
+                });
+                let result = receiver.await.unwrap_or(Ok(false));
+                let _ = this.update(cx, |this, cx| {
+                    if this.picgo_check_generation != generation {
+                        return;
+                    }
+                    this.picgo_status = match result {
+                        Ok(true) => PicGoStatus::Available,
+                        Ok(false) => PicGoStatus::Legacy,
+                        Err(_) => PicGoStatus::Unavailable,
+                    };
+                    cx.notify();
+                });
+            },
+        ));
     }
 
     /// Shows shortcut settings, closes dropdowns, and clears the recording error.
@@ -1101,6 +1244,8 @@ impl PreferencesWindow {
             self.startup_open,
             &self.selected_theme_id,
             self.image_paste_behavior,
+            self.image_paste_fallback,
+            &self.picgo_server_url,
             self.keybindings.clone(),
             &StatusBarPreferences {
                 enabled: self.status_bar_enabled,
@@ -1169,6 +1314,8 @@ impl PreferencesWindow {
         self.saved_startup_open = self.startup_open;
         self.saved_theme_id = self.selected_theme_id.clone();
         self.saved_image_paste_behavior = self.image_paste_behavior;
+        self.saved_image_paste_fallback = self.image_paste_fallback;
+        self.saved_picgo_server_url = self.picgo_server_url.clone();
         self.saved_keybindings = normalize_shortcut_config(&self.keybindings);
         self.saved_status_bar_enabled = self.status_bar_enabled;
         self.saved_status_bar_show_word_count = self.status_bar_show_word_count;
@@ -1514,6 +1661,7 @@ impl PreferencesWindow {
             ImagePasteBehavior::CopyToNamedAssetsFolder => strings
                 .preferences_image_paste_copy_to_named_assets_folder
                 .clone(),
+            ImagePasteBehavior::UsePicGo => strings.preferences_image_paste_picgo.clone(),
         }
     }
 
@@ -1529,6 +1677,7 @@ impl PreferencesWindow {
             ImagePasteBehavior::CopyToDocumentFolder,
             ImagePasteBehavior::CopyToAssetsFolder,
             ImagePasteBehavior::CopyToNamedAssetsFolder,
+            ImagePasteBehavior::UsePicGo,
         ];
         let mut dropdown = div()
             .w_full()
@@ -1553,15 +1702,47 @@ impl PreferencesWindow {
                     selected,
                     theme,
                     move |this, _, _, cx| {
+                        if behavior != ImagePasteBehavior::UsePicGo {
+                            this.image_paste_fallback = behavior;
+                        }
                         this.image_paste_behavior = behavior;
                         this.image_dropdown_open = false;
+                        if behavior == ImagePasteBehavior::UsePicGo {
+                            this.check_picgo_server(cx);
+                        }
                         cx.notify();
                     },
                     cx,
                 ));
             }
         }
-        self.labeled_row(&strings.preferences_image_insert_behavior, dropdown, theme)
+        let mut content = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(14.0))
+            .child(self.labeled_row(&strings.preferences_image_insert_behavior, dropdown, theme));
+        if self.image_paste_behavior == ImagePasteBehavior::UsePicGo {
+            let status = match self.picgo_status {
+                PicGoStatus::Checking => &strings.preferences_picgo_checking,
+                PicGoStatus::Available => &strings.preferences_picgo_available,
+                PicGoStatus::Legacy => &strings.preferences_picgo_legacy,
+                PicGoStatus::Unavailable => &strings.preferences_picgo_unavailable,
+            };
+            content = content
+                .child(self.labeled_row(
+                    &strings.preferences_picgo_server_url,
+                    self.picgo_server_input.clone(),
+                    theme,
+                ))
+                .child(
+                    div()
+                        .text_size(px(theme.typography.dialog_body_size))
+                        .text_color(theme.colors.dialog_muted)
+                        .child(status.clone()),
+                );
+        }
+        content
     }
 
     /// Resolves the localized heading for a shortcut category.
@@ -2370,10 +2551,11 @@ pub(crate) fn open_preferences_window(cx: &mut App) -> WindowHandle<PreferencesW
 #[cfg(test)]
 mod tests {
     use super::{
-        AppPreferences, EditorSettings, ImagePasteBehavior, StartupOpenPreference,
-        StatusBarPreferences, load_or_create_app_preferences_with_dirs_and_locales,
-        open_preferences_window_with_state, read_app_preferences_with_dirs,
-        save_app_preferences_with_dirs, save_preferences_from_window_with_dirs,
+        AppPreferences, DEFAULT_PICGO_SERVER_URL, EditorSettings, ImagePasteBehavior,
+        StartupOpenPreference, StatusBarPreferences,
+        load_or_create_app_preferences_with_dirs_and_locales, open_preferences_window_with_state,
+        read_app_preferences_with_dirs, save_app_preferences_with_dirs,
+        save_preferences_from_window_with_dirs,
     };
     use crate::config::VelotypeConfigDirs;
     use crate::fonts::FontPreferences;
@@ -2492,6 +2674,35 @@ mod tests {
     }
 
     #[test]
+    fn picgo_settings_round_trip_and_never_use_picgo_as_fallback() {
+        let root = std::env::temp_dir().join(format!(
+            "velotype-preferences-picgo-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let dirs = VelotypeConfigDirs::from_root(&root);
+        let preferences = AppPreferences {
+            image_paste_behavior: ImagePasteBehavior::UsePicGo,
+            image_paste_fallback: ImagePasteBehavior::CopyToAssetsFolder,
+            picgo_server_url: "http://localhost:4444".into(),
+            ..AppPreferences::default()
+        };
+        save_app_preferences_with_dirs(&preferences, &dirs).unwrap();
+        assert_eq!(read_app_preferences_with_dirs(&dirs).unwrap(), preferences);
+        let text = std::fs::read_to_string(dirs.app_config_file()).unwrap();
+        assert!(text.contains("image_paste_behavior = \"use_picgo\""));
+        assert!(text.contains("image_paste_fallback = \"copy_to_assets_folder\""));
+        assert!(text.contains("picgo_server_url = \"http://localhost:4444\""));
+        std::fs::write(dirs.app_config_file(), "[editor]\nimage_paste_behavior = \"use_picgo\"\nimage_paste_fallback = \"use_picgo\"\n").unwrap();
+        assert_eq!(
+            read_app_preferences_with_dirs(&dirs)
+                .unwrap()
+                .image_paste_fallback,
+            ImagePasteBehavior::None
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn damaged_preferences_file_returns_defaults() {
         let root = std::env::temp_dir().join(format!(
             "velotype-preferences-damaged-{}",
@@ -2521,6 +2732,8 @@ mod tests {
             default_theme_id: "velotype-light".into(),
             show_table_headers: false,
             image_paste_behavior: ImagePasteBehavior::CopyToAssetsFolder,
+            image_paste_fallback: ImagePasteBehavior::CopyToAssetsFolder,
+            picgo_server_url: DEFAULT_PICGO_SERVER_URL.into(),
             keybindings: BTreeMap::new(),
             status_bar: StatusBarPreferences::default(),
             fonts: FontPreferences {
@@ -2612,6 +2825,8 @@ mod tests {
             default_theme_id: "velotype".into(),
             show_table_headers: true,
             image_paste_behavior: ImagePasteBehavior::None,
+            image_paste_fallback: ImagePasteBehavior::None,
+            picgo_server_url: DEFAULT_PICGO_SERVER_URL.into(),
             keybindings: BTreeMap::new(),
             status_bar: StatusBarPreferences::default(),
             fonts: FontPreferences::default(),
@@ -2623,6 +2838,8 @@ mod tests {
             StartupOpenPreference::LastOpenedFile,
             "velotype-light",
             ImagePasteBehavior::CopyToNamedAssetsFolder,
+            ImagePasteBehavior::CopyToNamedAssetsFolder,
+            DEFAULT_PICGO_SERVER_URL,
             BTreeMap::from([("save_document".to_string(), vec!["ctrl-alt-s".to_string()])]),
             &StatusBarPreferences::default(),
             &FontPreferences::default(),
@@ -2699,6 +2916,14 @@ mod tests {
                 preferences.image_paste_behavior = ImagePasteBehavior::CopyToAssetsFolder;
                 assert!(preferences.has_unsaved_changes());
                 preferences.image_paste_behavior = ImagePasteBehavior::None;
+                assert!(!preferences.has_unsaved_changes());
+
+                preferences.image_paste_behavior = ImagePasteBehavior::UsePicGo;
+                assert!(preferences.has_unsaved_changes());
+                preferences.image_paste_behavior = ImagePasteBehavior::None;
+                preferences.picgo_server_url = "http://localhost:40000".into();
+                assert!(preferences.has_unsaved_changes());
+                preferences.picgo_server_url = DEFAULT_PICGO_SERVER_URL.into();
                 assert!(!preferences.has_unsaved_changes());
 
                 preferences

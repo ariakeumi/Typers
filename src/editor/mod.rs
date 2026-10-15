@@ -5,7 +5,7 @@
 //! [`DocumentTree`], which centralizes structural mutations and cached visible
 //! order metadata.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -31,6 +31,7 @@ mod export;
 mod file_drop;
 mod history;
 mod persistence;
+pub(crate) mod picgo;
 mod render;
 mod runtime_context;
 mod selection;
@@ -54,6 +55,12 @@ pub(crate) struct PendingOpenLink {
     pub(crate) prompt_target: String,
     /// Resolved URL passed to the platform opener after confirmation.
     pub(crate) open_target: String,
+}
+
+/// Native image-paste prompt deferred until this editor's window renders.
+pub(super) enum ImagePastePrompt {
+    Storage(String),
+    PicGoFallback(String),
 }
 
 /// Top-level controller that owns editor-wide state and delegates tree
@@ -84,6 +91,14 @@ pub struct Editor {
     pending_save_as: bool,
     /// Link confirmation deferred until a render pass has a window.
     pending_open_link: Option<PendingOpenLink>,
+    /// Failed paste batches awaiting a prompt in this editor's own window.
+    pending_image_paste_prompts: VecDeque<ImagePastePrompt>,
+    /// Prevents overlapping native prompts while earlier failures await dismissal.
+    image_paste_prompt_active: bool,
+    /// Number of in-flight PicGo batches anchored to each block.
+    pending_picgo_uploads: HashMap<EntityId, usize>,
+    /// Asset folder chosen for this unsaved document's image pastes.
+    unsaved_image_assets_dir: Option<PathBuf>,
     /// Desired native edited indicator, applied when a window is available.
     pending_window_edited: bool,
     /// Whether the native title needs rebuilding from path and dirty state.
@@ -419,6 +434,10 @@ impl Editor {
             pending_save: false,
             pending_save_as: false,
             pending_open_link: None,
+            pending_image_paste_prompts: VecDeque::new(),
+            image_paste_prompt_active: false,
+            pending_picgo_uploads: HashMap::new(),
+            unsaved_image_assets_dir: None,
             pending_window_edited: false,
             pending_window_title_refresh: false,
             document_dirty: false,

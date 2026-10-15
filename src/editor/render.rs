@@ -6,7 +6,10 @@ use std::time::{Duration, Instant};
 
 use gpui::*;
 
-use super::{Editor, InfoDialogKind, MountedRun, workspace::workspace_panel_width_for_viewport};
+use super::{
+    Editor, ImagePastePrompt, InfoDialogKind, MountedRun,
+    workspace::workspace_panel_width_for_viewport,
+};
 use crate::app_menu::dispatch_menu_action_for_editor;
 use crate::components::CalloutVariant;
 use crate::components::{AddLanguageConfig, AddThemeConfig, Block, NoRecentFiles};
@@ -556,6 +559,53 @@ impl Editor {
             }
         })
         .detach();
+    }
+
+    /// Shows one queued paste failure in this editor's window, then advances the queue.
+    fn sync_pending_image_paste_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.image_paste_prompt_active {
+            return;
+        }
+        let Some(pending) = self.pending_image_paste_prompts.pop_front() else {
+            return;
+        };
+        let strings = cx.global::<I18nManager>().strings_arc();
+        let (title, detail) = match pending {
+            ImagePastePrompt::Storage(detail) => (&strings.image_paste_failed_title, detail),
+            ImagePastePrompt::PicGoFallback(detail) => {
+                (&strings.image_paste_picgo_failed_title, detail)
+            }
+        };
+        let buttons = [strings.info_dialog_ok.as_str()];
+        let prompt = window.prompt(PromptLevel::Critical, title, Some(&detail), &buttons, cx);
+        self.image_paste_prompt_active = true;
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let _ = prompt.await;
+            let _ = this.update(cx, |editor, cx| {
+                editor.image_paste_prompt_active = false;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Keeps upload progress visible without adding temporary text to the document.
+    fn render_pending_picgo_upload(
+        &self,
+        block_id: EntityId,
+        theme: &Theme,
+        strings: &I18nStrings,
+    ) -> Option<AnyElement> {
+        self.pending_picgo_uploads.contains_key(&block_id).then(|| {
+            div()
+                .w_full()
+                .flex_shrink_0()
+                .pl(px(theme.dimensions.block_padding_x))
+                .text_size(px(theme.typography.text_size))
+                .text_color(theme.colors.dialog_muted)
+                .child(strings.image_paste_picgo_waiting.clone())
+                .into_any_element()
+        })
     }
 
     /// Applies a pending native window edited-state update.
@@ -1520,6 +1570,7 @@ impl Render for Editor {
         self.sync_pending_save(window, cx);
         self.sync_pending_save_as(window, cx);
         self.sync_pending_open_link(window, cx);
+        self.sync_pending_image_paste_prompt(window, cx);
         self.sync_window_edited_state(window);
 
         let viewport_bounds = self.scroll_handle.bounds();
@@ -1606,9 +1657,16 @@ impl Render for Editor {
                             let entity = visible_blocks[footnote_end].entity.clone();
                             let row = div()
                                 .w_full()
+                                .flex()
+                                .flex_col()
                                 .flex_shrink_0()
                                 .mt(px(footnote_row_top_gap(previous_footnote_row, d.block_gap)))
-                                .child(entity.clone());
+                                .child(entity.clone())
+                                .children(self.render_pending_picgo_upload(
+                                    entity.entity_id(),
+                                    &theme,
+                                    &strings,
+                                ));
                             let row = if self.view_mode == super::ViewMode::Rendered {
                                 let row_editor = editor.clone();
                                 let entity_id = entity.entity_id();
@@ -1647,13 +1705,20 @@ impl Render for Editor {
                     let entity = visible_blocks[group_end].entity.clone();
                     let row = div()
                         .w_full()
+                        .flex()
+                        .flex_col()
                         .flex_shrink_0()
                         .mt(px(callout_row_top_gap(
                             previous_callout_row,
                             row_spacing,
                             d,
                         )))
-                        .child(entity.clone());
+                        .child(entity.clone())
+                        .children(self.render_pending_picgo_upload(
+                            entity.entity_id(),
+                            &theme,
+                            &strings,
+                        ));
                     let row = if self.view_mode == super::ViewMode::Rendered {
                         let row_editor = editor.clone();
                         let entity_id = entity.entity_id();
@@ -1708,9 +1773,16 @@ impl Render for Editor {
                     let entity = visible_blocks[group_end].entity.clone();
                     let row = div()
                         .w_full()
+                        .flex()
+                        .flex_col()
                         .flex_shrink_0()
                         .mt(px(footnote_row_top_gap(previous_footnote_row, d.block_gap)))
-                        .child(entity.clone());
+                        .child(entity.clone())
+                        .children(self.render_pending_picgo_upload(
+                            entity.entity_id(),
+                            &theme,
+                            &strings,
+                        ));
                     let row = if self.view_mode == super::ViewMode::Rendered {
                         let row_editor = editor.clone();
                         let entity_id = entity.entity_id();
@@ -1748,9 +1820,12 @@ impl Render for Editor {
             let row = div()
                 .w(px(centered_width))
                 .max_w(relative(1.0))
+                .flex()
+                .flex_col()
                 .flex_shrink_0()
                 .mt(px(top_gap))
-                .child(entity.clone());
+                .child(entity.clone())
+                .children(self.render_pending_picgo_upload(entity.entity_id(), &theme, &strings));
             let row = if self.view_mode == super::ViewMode::Rendered {
                 let row_editor = editor.clone();
                 let entity_id = entity.entity_id();

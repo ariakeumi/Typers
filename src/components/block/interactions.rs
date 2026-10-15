@@ -22,17 +22,39 @@ use crate::components::{
 };
 
 impl Block {
-    /// Extracts the first image payload from clipboard entries.
-    fn pasted_image_source_from_clipboard(item: &ClipboardItem) -> Option<PastedImageSource> {
-        item.entries().iter().find_map(|entry| match entry {
-            ClipboardEntry::Image(image) => Some(PastedImageSource::ClipboardImage(image.clone())),
-            ClipboardEntry::ExternalPaths(paths) => match paths.paths() {
-                [path] if Self::is_supported_local_image_path(path) => {
-                    Some(PastedImageSource::LocalPath(path.clone()))
+    /// Extracts a complete image batch without mixing duplicate clipboard formats.
+    fn pasted_image_sources_from_clipboard(item: &ClipboardItem) -> Option<Vec<PastedImageSource>> {
+        let images = item
+            .entries()
+            .iter()
+            .filter_map(|entry| match entry {
+                ClipboardEntry::Image(image) => {
+                    Some(PastedImageSource::ClipboardImage(image.clone()))
                 }
                 _ => None,
-            },
-            ClipboardEntry::String(_) => None,
+            })
+            .collect::<Vec<_>>();
+        if !images.is_empty() {
+            return Some(images);
+        }
+        item.entries().iter().find_map(|entry| match entry {
+            ClipboardEntry::ExternalPaths(paths)
+                if !paths.paths().is_empty()
+                    && paths
+                        .paths()
+                        .iter()
+                        .all(|path| Self::is_supported_local_image_path(path)) =>
+            {
+                Some(
+                    paths
+                        .paths()
+                        .iter()
+                        .cloned()
+                        .map(PastedImageSource::LocalPath)
+                        .collect(),
+                )
+            }
+            _ => None,
         })
     }
 
@@ -89,7 +111,7 @@ impl Block {
     }
 
     /// Splits the title around the clean selection for image insertion.
-    fn paste_image_split(&self) -> (InlineTextTree, InlineTextTree) {
+    pub(crate) fn paste_image_split(&self) -> (InlineTextTree, InlineTextTree) {
         let clean_selected = self.selection_clean_range();
         let (leading, tail) = self.record.title.split_at(clean_selected.start);
         let (_, trailing) = tail.split_at(clean_selected.end.saturating_sub(clean_selected.start));
@@ -958,11 +980,11 @@ impl Block {
         }
 
         if let Some(item) = cx.read_from_clipboard() {
-            if let Some(source) = Self::pasted_image_source_from_clipboard(&item) {
+            if let Some(sources) = Self::pasted_image_sources_from_clipboard(&item) {
                 let (leading, trailing) = self.paste_image_split();
                 cx.emit(BlockEvent::RequestPasteImage {
                     leading,
-                    source,
+                    sources,
                     trailing,
                 });
                 return;
@@ -975,7 +997,7 @@ impl Block {
                 let (leading, trailing) = self.paste_image_split();
                 cx.emit(BlockEvent::RequestPasteImage {
                     leading,
-                    source,
+                    sources: vec![source],
                     trailing,
                 });
                 return;
@@ -1806,7 +1828,10 @@ impl Block {
 mod tests {
     use super::Block;
     use crate::components::{BlockKind, BlockRecord, InlineTextTree, PastedImageSource};
-    use gpui::{AppContext, ClipboardEntry, ClipboardItem, ExternalPaths, TestAppContext};
+    use gpui::{
+        AppContext, ClipboardEntry, ClipboardItem, ExternalPaths, Image, ImageFormat,
+        TestAppContext,
+    };
     use std::fs;
 
     fn temp_image_path(name: &str) -> std::path::PathBuf {
@@ -1871,10 +1896,53 @@ mod tests {
         };
 
         assert_eq!(
-            Block::pasted_image_source_from_clipboard(&item),
-            Some(PastedImageSource::LocalPath(path.clone()))
+            Block::pasted_image_sources_from_clipboard(&item),
+            Some(vec![PastedImageSource::LocalPath(path.clone())])
         );
         remove_temp_image(&path);
+    }
+
+    #[test]
+    fn paste_multiple_local_images_is_one_batch() {
+        let first = temp_image_path("first.png");
+        let second = temp_image_path("second.jpg");
+        let item = ClipboardItem {
+            entries: vec![ClipboardEntry::ExternalPaths(ExternalPaths(
+                vec![first.clone(), second.clone()].into(),
+            ))],
+        };
+        assert_eq!(
+            Block::pasted_image_sources_from_clipboard(&item),
+            Some(vec![
+                PastedImageSource::LocalPath(first.clone()),
+                PastedImageSource::LocalPath(second.clone()),
+            ])
+        );
+        remove_temp_image(&first);
+        remove_temp_image(&second);
+    }
+
+    #[test]
+    fn paste_multiple_clipboard_bitmaps_is_one_batch() {
+        let images = (0..2)
+            .map(|id| Image {
+                format: ImageFormat::Png,
+                bytes: vec![id as u8].into(),
+                id,
+            })
+            .collect::<Vec<_>>();
+        let item = ClipboardItem {
+            entries: images.iter().cloned().map(ClipboardEntry::Image).collect(),
+        };
+        assert_eq!(
+            Block::pasted_image_sources_from_clipboard(&item),
+            Some(
+                images
+                    .into_iter()
+                    .map(PastedImageSource::ClipboardImage)
+                    .collect()
+            )
+        );
     }
 
     #[test]

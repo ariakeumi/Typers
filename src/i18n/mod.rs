@@ -139,6 +139,12 @@ pub struct I18nStrings {
     pub export_failed_title: String,
     /// Title of the image-paste failure prompt.
     pub image_paste_failed_title: String,
+    /// Title for one PicGo failure notice per paste batch.
+    pub image_paste_picgo_failed_title: String,
+    /// Message shown after the entire batch uses the saved local policy.
+    pub image_paste_picgo_fallback_message: String,
+    /// Temporary status while an image batch is uploading to PicGo.
+    pub image_paste_picgo_waiting: String,
     /// Title of the custom configuration import failure prompt.
     pub config_import_failed_title: String,
     /// Preferences window title.
@@ -183,6 +189,15 @@ pub struct I18nStrings {
     pub preferences_image_paste_copy_to_assets_folder: String,
     /// Image policy label for a document-named assets directory.
     pub preferences_image_paste_copy_to_named_assets_folder: String,
+    /// Upload images with the local PicGo Server.
+    pub preferences_image_paste_picgo: String,
+    /// PicGo Server URL field label.
+    pub preferences_picgo_server_url: String,
+    /// Non-uploading local server check states.
+    pub preferences_picgo_checking: String,
+    pub preferences_picgo_available: String,
+    pub preferences_picgo_legacy: String,
+    pub preferences_picgo_unavailable: String,
     /// Save button label in the preferences window.
     pub preferences_save: String,
     /// Cancel button label in the preferences window.
@@ -523,6 +538,9 @@ struct I18nStringsDe {
     export_failed_title: Option<String>,
     /// Optional image-paste failure title.
     image_paste_failed_title: Option<String>,
+    image_paste_picgo_failed_title: Option<String>,
+    image_paste_picgo_fallback_message: Option<String>,
+    image_paste_picgo_waiting: Option<String>,
     /// Optional pack-import failure title.
     config_import_failed_title: Option<String>,
     /// Optional preferences window title.
@@ -567,6 +585,12 @@ struct I18nStringsDe {
     preferences_image_paste_copy_to_assets_folder: Option<String>,
     /// Optional copy-to-named-assets policy label.
     preferences_image_paste_copy_to_named_assets_folder: Option<String>,
+    preferences_image_paste_picgo: Option<String>,
+    preferences_picgo_server_url: Option<String>,
+    preferences_picgo_checking: Option<String>,
+    preferences_picgo_available: Option<String>,
+    preferences_picgo_legacy: Option<String>,
+    preferences_picgo_unavailable: Option<String>,
     /// Optional preferences save label.
     preferences_save: Option<String>,
     /// Optional preferences cancel label.
@@ -845,6 +869,9 @@ const I18N_STRING_KEYS: &[&str] = &[
     "save_failed_title",
     "export_failed_title",
     "image_paste_failed_title",
+    "image_paste_picgo_failed_title",
+    "image_paste_picgo_fallback_message",
+    "image_paste_picgo_waiting",
     "config_import_failed_title",
     "preferences_window_title",
     "preferences_nav_file",
@@ -867,6 +894,12 @@ const I18N_STRING_KEYS: &[&str] = &[
     "preferences_image_paste_copy_to_document_folder",
     "preferences_image_paste_copy_to_assets_folder",
     "preferences_image_paste_copy_to_named_assets_folder",
+    "preferences_image_paste_picgo",
+    "preferences_picgo_server_url",
+    "preferences_picgo_checking",
+    "preferences_picgo_available",
+    "preferences_picgo_legacy",
+    "preferences_picgo_unavailable",
     "preferences_save",
     "preferences_cancel",
     "preferences_save_failed_title",
@@ -1118,6 +1151,15 @@ impl I18nStringsDe {
             image_paste_failed_title: self
                 .image_paste_failed_title
                 .unwrap_or(defaults.image_paste_failed_title),
+            image_paste_picgo_failed_title: self
+                .image_paste_picgo_failed_title
+                .unwrap_or(defaults.image_paste_picgo_failed_title),
+            image_paste_picgo_fallback_message: self
+                .image_paste_picgo_fallback_message
+                .unwrap_or(defaults.image_paste_picgo_fallback_message),
+            image_paste_picgo_waiting: self
+                .image_paste_picgo_waiting
+                .unwrap_or(defaults.image_paste_picgo_waiting),
             config_import_failed_title: self
                 .config_import_failed_title
                 .unwrap_or(defaults.config_import_failed_title),
@@ -1184,6 +1226,24 @@ impl I18nStringsDe {
             preferences_image_paste_copy_to_named_assets_folder: self
                 .preferences_image_paste_copy_to_named_assets_folder
                 .unwrap_or(defaults.preferences_image_paste_copy_to_named_assets_folder),
+            preferences_image_paste_picgo: self
+                .preferences_image_paste_picgo
+                .unwrap_or(defaults.preferences_image_paste_picgo),
+            preferences_picgo_server_url: self
+                .preferences_picgo_server_url
+                .unwrap_or(defaults.preferences_picgo_server_url),
+            preferences_picgo_checking: self
+                .preferences_picgo_checking
+                .unwrap_or(defaults.preferences_picgo_checking),
+            preferences_picgo_available: self
+                .preferences_picgo_available
+                .unwrap_or(defaults.preferences_picgo_available),
+            preferences_picgo_legacy: self
+                .preferences_picgo_legacy
+                .unwrap_or(defaults.preferences_picgo_legacy),
+            preferences_picgo_unavailable: self
+                .preferences_picgo_unavailable
+                .unwrap_or(defaults.preferences_picgo_unavailable),
             preferences_save: self.preferences_save.unwrap_or(defaults.preferences_save),
             preferences_cancel: self
                 .preferences_cancel
@@ -1692,6 +1752,9 @@ impl I18nStrings {
             ..Self::en_us()
         };
         strings.image_paste_failed_title = "图片粘贴失败".into();
+        strings.image_paste_picgo_failed_title = "PicGo 上传失败".into();
+        strings.image_paste_picgo_fallback_message = "已按上次的本地图片策略插入本批图片。".into();
+        strings.image_paste_picgo_waiting = "等待图床链接返回...".into();
         strings.preferences_nav_image = "图像".into();
         strings.preferences_nav_status_bar = "状态栏".into();
         strings.preferences_status_bar_enabled = "显示状态栏".into();
@@ -1705,6 +1768,13 @@ impl I18nStrings {
         strings.preferences_image_paste_copy_to_assets_folder = "复制图片到 ./assets 文件夹".into();
         strings.preferences_image_paste_copy_to_named_assets_folder =
             "复制图片到 ./${filename}.assets 文件夹".into();
+        strings.preferences_image_paste_picgo = "使用 PicGo".into();
+        strings.preferences_picgo_server_url = "PicGo Server 地址".into();
+        strings.preferences_picgo_checking = "正在检查 PicGo Server...".into();
+        strings.preferences_picgo_available = "PicGo Server 可用".into();
+        strings.preferences_picgo_legacy = "本地服务可连接；粘贴时将验证上传接口".into();
+        strings.preferences_picgo_unavailable =
+            "PicGo Server 不可用；粘贴时将使用上次的本地策略".into();
         strings
     }
 
@@ -1782,6 +1852,9 @@ impl I18nStrings {
             save_failed_title: "Save Failed".into(),
             export_failed_title: "Export Failed".into(),
             image_paste_failed_title: "Image Paste Failed".into(),
+            image_paste_picgo_failed_title: "PicGo Upload Failed".into(),
+            image_paste_picgo_fallback_message: "This paste batch was inserted using the previous local image policy.".into(),
+            image_paste_picgo_waiting: "Waiting for image links...".into(),
             config_import_failed_title: "Config Import Failed".into(),
             preferences_window_title: "Preferences".into(),
             preferences_nav_file: "File".into(),
@@ -1807,6 +1880,12 @@ impl I18nStrings {
                 "Copy image to ./assets folder".into(),
             preferences_image_paste_copy_to_named_assets_folder:
                 "Copy image to ./${filename}.assets folder".into(),
+            preferences_image_paste_picgo: "Use PicGo".into(),
+            preferences_picgo_server_url: "PicGo Server address".into(),
+            preferences_picgo_checking: "Checking PicGo Server...".into(),
+            preferences_picgo_available: "PicGo Server is available".into(),
+            preferences_picgo_legacy: "Local server reachable; upload support will be checked on paste".into(),
+            preferences_picgo_unavailable: "PicGo Server unavailable; pastes will use the previous local policy".into(),
             preferences_save: "Save".into(),
             preferences_cancel: "Cancel".into(),
             preferences_save_failed_title: "Save Preferences Failed".into(),
@@ -2374,6 +2453,9 @@ mod tests {
         assert_eq!(strings.context_menu_insert, "插入");
         assert_eq!(strings.table_insert_title, "插入表格");
         assert_eq!(strings.image_loading_without_alt, "正在加载图片...");
+        assert_eq!(strings.preferences_image_paste_picgo, "使用 PicGo");
+        assert_eq!(strings.image_paste_picgo_waiting, "等待图床链接返回...");
+        assert_eq!(strings.preferences_picgo_available, "PicGo Server 可用");
         assert_eq!(
             strings.help_check_updates_message,
             "正在检查 Velotype 的最新版本..."
@@ -2544,6 +2626,11 @@ mod tests {
         .expect("language pack should load");
 
         assert_eq!(pack.id, "zh-CN");
+        assert_eq!(pack.strings.preferences_image_paste_picgo, "使用 PicGo");
+        assert_eq!(
+            pack.strings.image_paste_picgo_waiting,
+            "等待图床链接返回..."
+        );
         assert_eq!(pack.name, "简体中文");
         assert_eq!(pack.strings.menu_file, "文件菜单");
         assert_eq!(pack.strings.menu_export, "导出");
