@@ -1415,6 +1415,7 @@ impl Editor {
         theme: &Theme,
         strings: &I18nStrings,
         kind: InfoDialogKind,
+        cx: &App,
     ) -> AnyElement {
         let c = &theme.colors;
         let d = &theme.dimensions;
@@ -1431,13 +1432,12 @@ impl Editor {
                 .flex()
                 .flex_col()
                 .gap(px(d.dialog_gap * 0.5))
-                .child(
-                    body_style(div()).children(
-                        self.info_dialog_body(strings, kind)
-                            .lines()
-                            .map(|line| div().child(line.to_string())),
-                    ),
-                )
+                .child(body_style(div()).child(match crate::updater::phase(cx) {
+                    crate::updater::UpdatePhase::Downloading(version) => {
+                        strings.update_downloading.replace("{version}", &version)
+                    }
+                    _ => self.info_dialog_body(strings, kind),
+                }))
                 .into_any_element(),
             InfoDialogKind::About => div()
                 .flex()
@@ -1529,7 +1529,7 @@ impl Editor {
                                     .text_color(c.dialog_title)
                                     .child(self.info_dialog_title(strings, kind).to_string()),
                             )
-                            .child(self.render_info_dialog_body(theme, strings, kind))
+                            .child(self.render_info_dialog_body(theme, strings, kind, cx))
                             .child(
                                 div()
                                     .flex()
@@ -1572,6 +1572,12 @@ impl Render for Editor {
         self.sync_pending_open_link(window, cx);
         self.sync_pending_image_paste_prompt(window, cx);
         self.sync_window_edited_state(window);
+        crate::updater::show_startup_error(window, cx);
+        if self.info_dialog == Some(InfoDialogKind::CheckForUpdates)
+            && !crate::updater::phase(cx).is_busy()
+        {
+            self.hide_info_dialog(cx);
+        }
 
         let viewport_bounds = self.scroll_handle.bounds();
         let viewport_size = viewport_bounds.size;

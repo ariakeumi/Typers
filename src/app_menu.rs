@@ -505,28 +505,43 @@ fn request_close_current_editor_window(cx: &mut App) {
 ///
 /// Stops at the first declined or failed guard; non-editor windows are skipped.
 pub(crate) fn request_quit_application(cx: &mut App) {
-    let candidates = current_window_candidates(cx);
-    if candidates.is_empty() {
+    if editors_allow_exit_except(None, cx) {
         cx.quit();
-        return;
     }
+}
 
+/// Checks close guards without quitting; callers check their already-borrowed window separately.
+pub(crate) fn editors_allow_exit_except(except: Option<AnyWindowHandle>, cx: &mut App) -> bool {
+    editors_allow_operation_except(except, Editor::on_window_should_close, cx)
+}
+
+/// Update guards save without closing windows, so the prepared update remains reachable.
+pub(crate) fn editors_allow_update_except(except: Option<AnyWindowHandle>, cx: &mut App) -> bool {
+    editors_allow_operation_except(except, Editor::allow_update_restart, cx)
+}
+
+fn editors_allow_operation_except(
+    except: Option<AnyWindowHandle>,
+    guard: fn(&mut Editor, &mut Window, &mut Context<Editor>) -> bool,
+    cx: &mut App,
+) -> bool {
+    let candidates = current_window_candidates(cx);
     for window in candidates {
+        if except.is_some_and(|except| except.window_id() == window.window_id()) {
+            continue;
+        }
         let Some(window) = window.downcast::<Editor>() else {
             continue;
         };
 
         let should_close = window
-            .update(cx, |editor, window, cx| {
-                editor.on_window_should_close(window, cx)
-            })
+            .update(cx, |editor, window, cx| guard(editor, window, cx))
             .unwrap_or(false);
         if !should_close {
-            return;
+            return false;
         }
     }
-
-    cx.quit();
+    true
 }
 
 /// Executes one of the app-menu actions against the current application state.

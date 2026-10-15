@@ -65,6 +65,21 @@ pub struct I18nStrings {
     pub update_open_release: String,
     /// Button label for dismissing an available-update prompt.
     pub update_later: String,
+    /// Download progress, with a `{version}` placeholder.
+    pub update_downloading: String,
+    /// Prepared-update explanation, with a `{version}` placeholder.
+    pub update_ready_message: String,
+    /// Explicit installation confirmation button.
+    pub update_restart: String,
+    /// Status-bar installation button, with a `{version}` placeholder.
+    pub update_status_ready: String,
+    /// Explains why installation is paused until documents have been saved.
+    pub update_save_first_message: String,
+    /// General application settings page.
+    pub preferences_nav_settings: String,
+    /// Opt-in automatic download switch label and explanation.
+    pub preferences_updates_auto_download: String,
+    pub preferences_updates_auto_download_hint: String,
     /// Title of the About dialog.
     pub help_about_title: String,
     /// Supplemental About dialog text shown below the app name and version.
@@ -464,6 +479,14 @@ struct I18nStringsDe {
     update_open_release: Option<String>,
     /// Optional update postponement label.
     update_later: Option<String>,
+    update_downloading: Option<String>,
+    update_ready_message: Option<String>,
+    update_restart: Option<String>,
+    update_status_ready: Option<String>,
+    update_save_first_message: Option<String>,
+    preferences_nav_settings: Option<String>,
+    preferences_updates_auto_download: Option<String>,
+    preferences_updates_auto_download_hint: Option<String>,
     /// Optional About dialog title.
     help_about_title: Option<String>,
     /// Optional supplemental About text.
@@ -832,6 +855,14 @@ const I18N_STRING_KEYS: &[&str] = &[
     "update_failed_message_template",
     "update_open_release",
     "update_later",
+    "update_downloading",
+    "update_ready_message",
+    "update_restart",
+    "update_status_ready",
+    "update_save_first_message",
+    "preferences_nav_settings",
+    "preferences_updates_auto_download",
+    "preferences_updates_auto_download_hint",
     "help_about_title",
     "help_about_message",
     "help_about_github_label",
@@ -1078,6 +1109,28 @@ impl I18nStringsDe {
                 .update_open_release
                 .unwrap_or(defaults.update_open_release),
             update_later: self.update_later.unwrap_or(defaults.update_later),
+            update_downloading: self
+                .update_downloading
+                .unwrap_or(defaults.update_downloading),
+            update_ready_message: self
+                .update_ready_message
+                .unwrap_or(defaults.update_ready_message),
+            update_restart: self.update_restart.unwrap_or(defaults.update_restart),
+            update_status_ready: self
+                .update_status_ready
+                .unwrap_or(defaults.update_status_ready),
+            update_save_first_message: self
+                .update_save_first_message
+                .unwrap_or(defaults.update_save_first_message),
+            preferences_nav_settings: self
+                .preferences_nav_settings
+                .unwrap_or(defaults.preferences_nav_settings),
+            preferences_updates_auto_download: self
+                .preferences_updates_auto_download
+                .unwrap_or(defaults.preferences_updates_auto_download),
+            preferences_updates_auto_download_hint: self
+                .preferences_updates_auto_download_hint
+                .unwrap_or(defaults.preferences_updates_auto_download_hint),
             help_about_title: self.help_about_title.unwrap_or(defaults.help_about_title),
             help_about_message: self
                 .help_about_message
@@ -1589,8 +1642,8 @@ impl I18nStrings {
                 "当前版本：{current}\n最新版本：{latest}\n是否前往 GitHub Releases 下载？".into(),
             update_up_to_date_title: "已是最新版本".into(),
             update_up_to_date_message_template: "当前版本：{current}\n远程版本：{latest}".into(),
-            update_failed_title: "检查更新失败".into(),
-            update_failed_message_template: "无法完成在线更新检查：{error}".into(),
+            update_failed_title: "更新失败".into(),
+            update_failed_message_template: "无法完成更新：{error}".into(),
             update_open_release: "前往下载".into(),
             update_later: "稍后".into(),
             help_about_title: "关于 Velotype".into(),
@@ -1752,6 +1805,15 @@ impl I18nStrings {
             ..Self::en_us()
         };
         strings.image_paste_failed_title = "图片粘贴失败".into();
+        strings.update_downloading = "正在下载并验证 Velotype {version}...".into();
+        strings.update_ready_message = "Velotype {version} 已下载并验证，可以安装并重启。".into();
+        strings.update_restart = "更新并重启".into();
+        strings.update_status_ready = "更新至 {version} 并重启".into();
+        strings.update_save_first_message =
+            "请先保存此窗口的修改，再次点击“更新并重启”。保存后窗口会保持打开。".into();
+        strings.preferences_nav_settings = "设置".into();
+        strings.preferences_updates_auto_download = "自动下载更新".into();
+        strings.preferences_updates_auto_download_hint = "启动时自动检查并下载最新正式版".into();
         strings.image_paste_picgo_failed_title = "PicGo 上传失败".into();
         strings.image_paste_picgo_fallback_message = "已按上次的本地图片策略插入本批图片。".into();
         strings.image_paste_picgo_waiting = "等待图床链接返回...".into();
@@ -1808,11 +1870,19 @@ impl I18nStrings {
             update_up_to_date_title: "You're Up to Date".into(),
             update_up_to_date_message_template:
                 "Current version: {current}\nRemote version: {latest}".into(),
-            update_failed_title: "Update Check Failed".into(),
-            update_failed_message_template: "Unable to complete the online update check: {error}"
+            update_failed_title: "Update Failed".into(),
+            update_failed_message_template: "Unable to complete the update: {error}"
                 .into(),
             update_open_release: "Open Releases".into(),
             update_later: "Later".into(),
+            update_downloading: "Downloading and verifying Velotype {version}...".into(),
+            update_ready_message: "Velotype {version} has been downloaded and verified. Install it and restart now?".into(),
+            update_restart: "Update and Restart".into(),
+            update_status_ready: "Update to {version} and Restart".into(),
+            update_save_first_message: "Save this window's changes, then click Update and Restart again. Saving will keep the window open.".into(),
+            preferences_nav_settings: "Settings".into(),
+            preferences_updates_auto_download: "Automatically Download Updates".into(),
+            preferences_updates_auto_download_hint: "Automatically check for and download the latest stable version on startup.".into(),
             help_about_title: "About Velotype".into(),
             help_about_message: "Author: All project contributors".into(),
             help_about_github_label: "GitHub".into(),
@@ -2474,6 +2544,11 @@ mod tests {
         assert_eq!(manager.current_language_id(), "en-US");
         assert_eq!(manager.strings().menu_file, "File");
         assert_eq!(manager.strings().menu_export, "Export");
+        assert_eq!(manager.strings().preferences_nav_settings, "Settings");
+        assert_eq!(
+            manager.strings().update_status_ready,
+            "Update to {version} and Restart"
+        );
 
         assert!(manager.set_language_by_id("zh-CN"));
         assert_eq!(manager.current_language_id(), "zh-CN");
@@ -2635,6 +2710,8 @@ mod tests {
         assert_eq!(pack.strings.menu_file, "文件菜单");
         assert_eq!(pack.strings.menu_export, "导出");
         assert_eq!(pack.strings.info_dialog_ok, "确定");
+        assert_eq!(pack.strings.preferences_nav_settings, "设置");
+        assert_eq!(pack.strings.update_status_ready, "更新至 {version} 并重启");
         assert_eq!(pack.strings.update_open_release, "前往下载");
         assert_eq!(pack.strings.help_about_github_label, "GitHub");
         assert_eq!(

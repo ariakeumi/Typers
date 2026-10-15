@@ -32,6 +32,7 @@ mod ime;
 mod net;
 mod text_offsets;
 mod theme;
+mod updater;
 mod window_chrome;
 
 use app_menu::{init as init_app_menu, open_editor_window};
@@ -100,7 +101,38 @@ impl AssetSource for VelotypeAssets {
 
 /// Parses CLI options, initializes app services, and opens startup documents.
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    let mut args: Vec<String> = std::env::args().collect();
+    if args
+        .get(1)
+        .is_some_and(|arg| arg == updater::install::HELPER_FLAG)
+    {
+        let result = if args.len() == 4 {
+            updater::install::run_helper(std::path::Path::new(&args[2]), &args[3])
+        } else {
+            Err(anyhow::anyhow!("invalid updater arguments"))
+        };
+        if let Err(error) = result {
+            println!("ERROR {error:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    let startup_update_error = if args
+        .get(1)
+        .is_some_and(|arg| arg == updater::install::FINISH_FLAG)
+    {
+        if args.len() < 4 {
+            return;
+        }
+        let result = updater::install::finish(std::path::Path::new(&args[2]), &args[3]);
+        args.drain(1..4);
+        match result {
+            Ok(error) => error,
+            Err(error) => Some(error.to_string()),
+        }
+    } else {
+        None
+    };
 
     // Parse command-line arguments
     let mut detach = false;
@@ -109,6 +141,10 @@ fn main() {
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
+            "--" => {
+                input_paths.extend(args[i + 1..].iter().map(PathBuf::from));
+                break;
+            }
             "--version" | "-v" => {
                 println!("velotype {}", env!("CARGO_PKG_VERSION"));
                 return;
@@ -204,6 +240,7 @@ fn main() {
         net::install_http_client(cx);
         init_editor(cx, &preferences.keybindings);
         init_app_menu(cx);
+        updater::init(cx, preferences.auto_download_updates, startup_update_error);
 
         #[cfg(target_os = "macos")]
         cx.spawn(async move |cx| {

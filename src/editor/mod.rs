@@ -128,6 +128,8 @@ pub struct Editor {
     close_guard_installed: bool,
     /// Whether the guarded-close confirmation is visible.
     show_unsaved_changes_dialog: bool,
+    /// Suppresses duplicate save-first prompts while a prepared update waits.
+    update_save_prompt_active: bool,
     /// When true, the window will close after the next successful save.
     pending_close_after_save: bool,
     /// Focus target to restore when the close dialog is dismissed.
@@ -142,8 +144,6 @@ pub struct Editor {
     drop_replace_restore_focus: Option<EntityId>,
     /// Optional informational dialog shown from the Help menu.
     info_dialog: Option<InfoDialogKind>,
-    /// True while an online update check is running in the background.
-    update_check_in_progress: bool,
     /// Cached file tree and document outline for the workspace drawer.
     workspace: WorkspaceState,
     /// Hover state for status-bar controls.
@@ -399,6 +399,11 @@ pub(crate) enum InfoDialogKind {
 }
 
 impl Editor {
+    /// Supplies saved document paths when the update helper restarts the application.
+    pub(crate) fn restart_file_path(&self) -> Option<PathBuf> {
+        self.file_path.clone()
+    }
+
     /// Maximum number of retained undo entries.
     const HISTORY_LIMIT: usize = 200;
     /// Maximum gap between compatible typing edits that can share one undo entry.
@@ -450,6 +455,7 @@ impl Editor {
             prev_mounted_run: None,
             close_guard_installed: false,
             show_unsaved_changes_dialog: false,
+            update_save_prompt_active: false,
             pending_close_after_save: false,
             close_dialog_restore_focus: None,
             pending_drop_replace_path: None,
@@ -457,7 +463,6 @@ impl Editor {
             pending_drop_replace_after_save: false,
             drop_replace_restore_focus: None,
             info_dialog: None,
-            update_check_in_progress: false,
             workspace: WorkspaceState::default(),
             status_bar: StatusBarState::default(),
             context_menu: None,

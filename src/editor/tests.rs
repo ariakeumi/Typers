@@ -47,6 +47,62 @@ fn redraw(cx: &mut gpui::VisualTestContext) {
 }
 
 #[gpui::test]
+async fn html_badges_keep_loaded_images_across_source_focus_round_trips(cx: &mut TestAppContext) {
+    use gpui::http_client::{AsyncBody, FakeHttpClient, Response};
+    use std::sync::{Arc, Mutex};
+
+    init_editor_test_app(cx);
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    cx.update(|cx| {
+        let requests = requests.clone();
+        cx.set_http_client(FakeHttpClient::create(move |request| {
+            requests.lock().unwrap().push(request.uri().to_string());
+            async move {
+                Ok(Response::builder().status(200).body(AsyncBody::from(
+                    "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"20\"><rect width=\"80\" height=\"20\"/></svg>"
+                ))?)
+            }
+        }));
+    });
+    let markdown = "<div align=\"center\">\n[![GPUI](https://test.example/GPUI%200.2.svg?logo=rust&color=white)](https://gpui.rs)\n[![Portable](https://test.example/portable.svg)](#features)\n</div>\n\noutside";
+    let (editor, cx) = cx.add_window_view(|_, cx| Editor::from_markdown(cx, markdown.into(), None));
+    let (html, outside) = editor.read_with(cx, |editor, _| {
+        (
+            editor.document.root_blocks()[0].clone(),
+            editor.document.root_blocks()[1].clone(),
+        )
+    });
+    for block in [&outside, &html, &outside, &html, &outside] {
+        editor.update(cx, |editor, cx| {
+            editor.pending_focus = Some(block.entity_id());
+            cx.notify();
+        });
+        redraw(cx);
+        redraw(cx);
+    }
+    html.read_with(cx, |block, _| {
+        assert_eq!(
+            block.record.raw_fallback.as_deref(),
+            Some(markdown.split("\n\noutside").next().unwrap())
+        );
+    });
+    let requests = requests.lock().unwrap();
+    assert_eq!(
+        requests.len(),
+        2,
+        "unchanged badge URLs must not be downloaded again"
+    );
+    cx.update(|_, cx| {
+        for uri in requests.iter() {
+            assert!(matches!(
+                cx.fetch_asset::<gpui::ImgResourceLoader>(&gpui::Resource::Uri(uri.clone().into())),
+                Some(Ok(_))
+            ));
+        }
+    });
+}
+
+#[gpui::test]
 async fn picgo_failure_prompt_uses_the_editor_window(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
     let (editor, cx) =
@@ -980,6 +1036,46 @@ async fn quit_application_allows_clean_editor_windows_to_quit(cx: &mut TestAppCo
     second_editor.read_with(cx, |editor, _cx| {
         assert!(!editor.show_unsaved_changes_dialog);
     });
+}
+
+#[gpui::test]
+async fn updater_save_guard_keeps_dirty_window_open_after_saving(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("unsaved.md");
+    let (editor, cx) = cx.add_window_view(|_, cx| {
+        Editor::from_markdown(cx, "keep these changes".into(), Some(path.clone()))
+    });
+    let (save, cancel) = cx.update(|_, cx| {
+        let strings = cx.global::<I18nManager>().strings_arc();
+        (
+            strings.menu_save.clone(),
+            strings.unsaved_changes_cancel.clone(),
+        )
+    });
+    editor.update_in(cx, |editor, window, cx| {
+        editor.mark_dirty(cx);
+        assert!(!editor.allow_update_restart(window, cx));
+        assert!(editor.update_save_prompt_active);
+        assert!(!editor.pending_close_after_save);
+        assert!(!editor.show_unsaved_changes_dialog);
+    });
+    cx.cx.simulate_prompt_answer(&cancel);
+    cx.run_until_parked();
+    editor.update_in(cx, |editor, window, cx| {
+        assert!(editor.document_dirty);
+        assert!(!editor.update_save_prompt_active);
+        assert!(!editor.allow_update_restart(window, cx));
+    });
+    cx.cx.simulate_prompt_answer(&save);
+    cx.run_until_parked();
+    editor.update_in(cx, |editor, window, cx| {
+        assert!(!editor.document_dirty);
+        assert!(!editor.pending_close_after_save);
+        assert!(editor.allow_update_restart(window, cx));
+    });
+    assert_eq!(cx.cx.windows().len(), 1);
+    assert_eq!(fs::read_to_string(path).unwrap(), "keep these changes");
 }
 
 #[gpui::test]

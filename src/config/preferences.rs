@@ -168,6 +168,8 @@ pub(crate) struct AppPreferences {
     pub(crate) image_paste_fallback: ImagePasteBehavior,
     /// User-supplied loopback PicGo Server address.
     pub(crate) picgo_server_url: String,
+    /// Whether new stable releases may be downloaded automatically after startup checks.
+    pub(crate) auto_download_updates: bool,
     /// Command identifiers mapped to user-supplied shortcut lists.
     pub(crate) keybindings: BTreeMap<String, Vec<String>>,
     /// Status bar visibility, built-in items, and stored custom buttons.
@@ -187,6 +189,7 @@ impl Default for AppPreferences {
             image_paste_behavior: ImagePasteBehavior::None,
             image_paste_fallback: ImagePasteBehavior::None,
             picgo_server_url: DEFAULT_PICGO_SERVER_URL.into(),
+            auto_download_updates: false,
             keybindings: BTreeMap::new(),
             status_bar: StatusBarPreferences::default(),
             fonts: FontPreferences::default(),
@@ -303,12 +306,20 @@ struct PreferencesFile {
     theme: ThemePreferencesFile,
     /// Editor behavior table.
     editor: EditorPreferencesFile,
+    /// Optional background update download policy.
+    updates: UpdatePreferencesFile,
     /// Status bar configuration table.
     status_bar: StatusBarPreferencesFile,
     /// Normalized user shortcut overrides.
     keybindings: BTreeMap<String, Vec<String>>,
     /// Font family lists table.
     fonts: FontPreferencesFile,
+}
+
+/// Persisted update policy; installation always requires an explicit click.
+#[derive(Serialize)]
+struct UpdatePreferencesFile {
+    auto_download: bool,
 }
 
 /// Persisted font family lists, kept as user-editable strings.
@@ -419,6 +430,9 @@ impl From<&AppPreferences> for PreferencesFile {
                 picgo_server_url: value.picgo_server_url.clone(),
             },
             status_bar: StatusBarPreferencesFile::from(&value.status_bar),
+            updates: UpdatePreferencesFile {
+                auto_download: value.auto_download_updates,
+            },
             keybindings: normalize_shortcut_config(&value.keybindings),
             fonts: FontPreferencesFile::from(&value.fonts),
         }
@@ -608,6 +622,11 @@ fn app_preferences_from_toml_value(
         image_paste_behavior,
         image_paste_fallback,
         picgo_server_url,
+        auto_download_updates: value
+            .get("updates")
+            .and_then(|updates| updates.get("auto_download"))
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(false),
         keybindings,
         status_bar,
         fonts,
@@ -750,6 +769,7 @@ pub(crate) fn save_preferences_from_window(
     image_paste_behavior: ImagePasteBehavior,
     image_paste_fallback: ImagePasteBehavior,
     picgo_server_url: &str,
+    auto_download_updates: bool,
     keybindings: BTreeMap<String, Vec<String>>,
     status_bar: &StatusBarPreferences,
     fonts: &FontPreferences,
@@ -761,6 +781,7 @@ pub(crate) fn save_preferences_from_window(
         image_paste_behavior,
         image_paste_fallback,
         picgo_server_url,
+        auto_download_updates,
         keybindings,
         status_bar,
         fonts,
@@ -775,6 +796,7 @@ fn save_preferences_from_window_with_dirs(
     image_paste_behavior: ImagePasteBehavior,
     image_paste_fallback: ImagePasteBehavior,
     picgo_server_url: &str,
+    auto_download_updates: bool,
     keybindings: BTreeMap<String, Vec<String>>,
     status_bar: &StatusBarPreferences,
     fonts: &FontPreferences,
@@ -787,6 +809,7 @@ fn save_preferences_from_window_with_dirs(
     preferences.image_paste_behavior = image_paste_behavior;
     preferences.image_paste_fallback = image_paste_fallback.local_only();
     preferences.picgo_server_url = picgo_server_url.to_string();
+    preferences.auto_download_updates = auto_download_updates;
     preferences.keybindings = normalize_shortcut_config(&keybindings);
     preferences.status_bar = status_bar.clone();
     preferences.fonts = fonts.clone();
@@ -807,6 +830,8 @@ fn update_app_preferences(
 /// Preferences page currently displayed in the navigation pane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PreferencesNav {
+    /// Application update download policy.
+    Settings,
     /// Startup document selection.
     File,
     /// Theme selection and font family lists.
@@ -854,6 +879,9 @@ pub(crate) struct PreferencesWindow {
     image_paste_fallback: ImagePasteBehavior,
     /// Draft PicGo Server URL, edited in a separate input.
     picgo_server_url: String,
+    /// Draft automatic download policy and its last saved value.
+    auto_download_updates: bool,
+    saved_auto_download_updates: bool,
     /// Draft shortcut overrides.
     keybindings: BTreeMap<String, Vec<String>>,
     /// Startup policy at the last successful save.
@@ -995,7 +1023,7 @@ impl PreferencesWindow {
         })
         .detach();
         Self {
-            nav: PreferencesNav::File,
+            nav: PreferencesNav::Settings,
             startup_open,
             selected_theme_id: selected_theme_id.clone(),
             image_paste_behavior,
@@ -1007,6 +1035,8 @@ impl PreferencesWindow {
             saved_image_paste_behavior: image_paste_behavior,
             saved_image_paste_fallback: image_paste_fallback,
             saved_picgo_server_url: picgo_server_url,
+            auto_download_updates: preferences.auto_download_updates,
+            saved_auto_download_updates: preferences.auto_download_updates,
             picgo_status: PicGoStatus::Checking,
             picgo_check_generation: 0,
             picgo_check_task: None,
@@ -1092,6 +1122,7 @@ impl PreferencesWindow {
             || self.image_paste_behavior != self.saved_image_paste_behavior
             || self.image_paste_fallback != self.saved_image_paste_fallback
             || self.picgo_server_url != self.saved_picgo_server_url
+            || self.auto_download_updates != self.saved_auto_download_updates
             || normalize_shortcut_config(&self.keybindings)
                 != normalize_shortcut_config(&self.saved_keybindings)
             || self.status_bar_enabled != self.saved_status_bar_enabled
@@ -1100,6 +1131,16 @@ impl PreferencesWindow {
             || self.status_bar_show_sidebar_toggle != self.saved_status_bar_show_sidebar_toggle
             || self.status_bar_show_mode_switch != self.saved_status_bar_show_mode_switch
             || self.fonts != self.saved_fonts
+    }
+
+    /// Shows general settings while dismissing page-local editing controls.
+    fn set_nav_settings(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.nav = PreferencesNav::Settings;
+        self.startup_dropdown_open = false;
+        self.theme_dropdown_open = false;
+        self.image_dropdown_open = false;
+        self.recording_shortcut = None;
+        cx.notify();
     }
 
     /// Shows startup settings and closes dropdowns and shortcut recording.
@@ -1246,6 +1287,7 @@ impl PreferencesWindow {
             self.image_paste_behavior,
             self.image_paste_fallback,
             &self.picgo_server_url,
+            self.auto_download_updates,
             self.keybindings.clone(),
             &StatusBarPreferences {
                 enabled: self.status_bar_enabled,
@@ -1316,6 +1358,8 @@ impl PreferencesWindow {
         self.saved_image_paste_behavior = self.image_paste_behavior;
         self.saved_image_paste_fallback = self.image_paste_fallback;
         self.saved_picgo_server_url = self.picgo_server_url.clone();
+        self.saved_auto_download_updates = self.auto_download_updates;
+        crate::updater::set_auto_download(cx, preferences.auto_download_updates);
         self.saved_keybindings = normalize_shortcut_config(&self.keybindings);
         self.saved_status_bar_enabled = self.status_bar_enabled;
         self.saved_status_bar_show_word_count = self.status_bar_show_word_count;
@@ -2151,6 +2195,49 @@ impl PreferencesWindow {
         page.child(content)
     }
 
+    /// Uses the existing controlled switch for the opt-in download setting.
+    fn render_settings_page(
+        &self,
+        theme: &Theme,
+        strings: &crate::i18n::I18nStrings,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .child(
+                div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap(px(16.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_size(px(theme.typography.dialog_body_size))
+                            .text_color(theme.colors.dialog_body)
+                            .child(strings.preferences_updates_auto_download.clone()),
+                    )
+                    .child(
+                        Switch::new("preferences-auto-download-updates")
+                            .checked(self.auto_download_updates)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.auto_download_updates = !this.auto_download_updates;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(theme.typography.dialog_body_size))
+                    .text_color(theme.colors.dialog_muted)
+                    .child(strings.preferences_updates_auto_download_hint.clone()),
+            )
+    }
+
     /// Renders the draft status bar and built-in item visibility switches.
     fn render_status_bar_page(
         &self,
@@ -2286,6 +2373,14 @@ impl Render for PreferencesWindow {
                             .flex_col()
                             .gap(px(8.0))
                             .child(self.nav_button(
+                                "preferences-nav-settings",
+                                strings.preferences_nav_settings.clone(),
+                                self.nav == PreferencesNav::Settings,
+                                &theme,
+                                Self::set_nav_settings,
+                                cx,
+                            ))
+                            .child(self.nav_button(
                                 "preferences-nav-file",
                                 strings.preferences_nav_file.clone(),
                                 self.nav == PreferencesNav::File,
@@ -2351,6 +2446,9 @@ impl Render for PreferencesWindow {
                                     .font_weight(t.dialog_title_weight.to_font_weight())
                                     .text_color(c.dialog_title)
                                     .child(match self.nav {
+                                        PreferencesNav::Settings => {
+                                            strings.preferences_nav_settings.clone()
+                                        }
                                         PreferencesNav::File => {
                                             strings.preferences_nav_file.clone()
                                         }
@@ -2369,6 +2467,14 @@ impl Render for PreferencesWindow {
                                     }),
                             )
                             .child(match self.nav {
+                                PreferencesNav::Settings => div()
+                                    .id("preferences-settings-scroll")
+                                    .w_full()
+                                    .flex_1()
+                                    .min_h(px(0.0))
+                                    .overflow_y_scroll()
+                                    .child(self.render_settings_page(&theme, &strings, cx))
+                                    .into_any_element(),
                                 PreferencesNav::File => div()
                                     .id("preferences-file-scroll")
                                     .w_full()
@@ -2594,6 +2700,23 @@ mod tests {
     }
 
     #[test]
+    fn updater_preferences_are_opt_in_and_invalid_values_remain_disabled() {
+        for text in [
+            "",
+            "[updates]\nauto_download = 'yes'",
+            "[updates]\nauto_download = false",
+        ] {
+            let value: toml::Value = toml::from_str(text).unwrap();
+            assert!(!super::app_preferences_from_toml_value(&value, "en-US").auto_download_updates);
+        }
+        let value: toml::Value = toml::from_str("[updates]\nauto_download = true").unwrap();
+        let preferences = super::app_preferences_from_toml_value(&value, "en-US");
+        assert!(preferences.auto_download_updates);
+        let text = toml::to_string(&super::PreferencesFile::from(&preferences)).unwrap();
+        assert!(text.contains("[updates]\nauto_download = true"));
+    }
+
+    #[test]
     fn partial_or_invalid_preferences_fall_back_by_field() {
         let root = std::env::temp_dir().join(format!(
             "velotype-preferences-partial-{}",
@@ -2734,6 +2857,7 @@ mod tests {
             image_paste_behavior: ImagePasteBehavior::CopyToAssetsFolder,
             image_paste_fallback: ImagePasteBehavior::CopyToAssetsFolder,
             picgo_server_url: DEFAULT_PICGO_SERVER_URL.into(),
+            auto_download_updates: true,
             keybindings: BTreeMap::new(),
             status_bar: StatusBarPreferences::default(),
             fonts: FontPreferences {
@@ -2827,6 +2951,7 @@ mod tests {
             image_paste_behavior: ImagePasteBehavior::None,
             image_paste_fallback: ImagePasteBehavior::None,
             picgo_server_url: DEFAULT_PICGO_SERVER_URL.into(),
+            auto_download_updates: false,
             keybindings: BTreeMap::new(),
             status_bar: StatusBarPreferences::default(),
             fonts: FontPreferences::default(),
@@ -2840,6 +2965,7 @@ mod tests {
             ImagePasteBehavior::CopyToNamedAssetsFolder,
             ImagePasteBehavior::CopyToNamedAssetsFolder,
             DEFAULT_PICGO_SERVER_URL,
+            true,
             BTreeMap::from([("save_document".to_string(), vec!["ctrl-alt-s".to_string()])]),
             &StatusBarPreferences::default(),
             &FontPreferences::default(),
@@ -2876,6 +3002,11 @@ mod tests {
 
         let active_window = cx.update(|cx| cx.active_window().expect("window should be active"));
         assert_eq!(active_window.window_id(), handle.window_id());
+        handle
+            .update(cx, |preferences, _window, _cx| {
+                assert_eq!(preferences.nav, super::PreferencesNav::Settings);
+            })
+            .expect("preferences window should be updateable");
         assert!(
             handle
                 .update(cx, |preferences, window, _cx| preferences
@@ -2924,6 +3055,11 @@ mod tests {
                 preferences.picgo_server_url = "http://localhost:40000".into();
                 assert!(preferences.has_unsaved_changes());
                 preferences.picgo_server_url = DEFAULT_PICGO_SERVER_URL.into();
+                assert!(!preferences.has_unsaved_changes());
+
+                preferences.auto_download_updates = true;
+                assert!(preferences.has_unsaved_changes());
+                preferences.auto_download_updates = false;
                 assert!(!preferences.has_unsaved_changes());
 
                 preferences

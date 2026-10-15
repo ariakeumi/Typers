@@ -539,7 +539,7 @@ impl Block {
 
         let image = match source {
             ImageResolvedSource::Local(path) => img(path),
-            ImageResolvedSource::Remote(uri) => img(uri),
+            ImageResolvedSource::Remote(uri) => crate::net::remote_image(uri),
         }
         .max_w(max_width)
         .max_h(max_height)
@@ -1103,7 +1103,7 @@ impl Block {
 
         let mut image = match source {
             ImageResolvedSource::Local(path) => img(path),
-            ImageResolvedSource::Remote(uri) => img(uri),
+            ImageResolvedSource::Remote(uri) => crate::net::remote_image(uri),
         }
         .max_w(max_width)
         .max_h(max_height)
