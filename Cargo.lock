@@ -7134,7 +7134,7 @@ dependencies = [
 
 [[package]]
 name = "velotype"
-version = "0.7.5"
+version = "0.7.8"
 dependencies = [
  "adot-tree-sitter-toml",
  "anyhow",
