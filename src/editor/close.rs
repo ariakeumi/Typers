@@ -10,6 +10,47 @@ use gpui::*;
 use super::Editor;
 
 impl Editor {
+    /// Offers the normal save flow while keeping this window available for a later update click.
+    pub(crate) fn allow_update_restart(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.document_dirty {
+            return true;
+        }
+        if self.update_save_prompt_active {
+            return false;
+        }
+        self.update_save_prompt_active = true;
+        let strings = cx.global::<crate::i18n::I18nManager>().strings_arc();
+        let prompt = window.prompt(
+            PromptLevel::Info,
+            &strings.unsaved_changes_title,
+            Some(&strings.update_save_first_message),
+            &[
+                strings.menu_save.as_str(),
+                strings.unsaved_changes_cancel.as_str(),
+            ],
+            cx,
+        );
+        let handle = window.window_handle();
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let save = prompt.await == Ok(0);
+            let _ = cx.update_window(handle, |_, window, cx| {
+                let _ = this.update(cx, |editor, cx| {
+                    editor.update_save_prompt_active = false;
+                    if save {
+                        editor.pending_close_after_save = false;
+                        editor.save_document(window, cx);
+                    }
+                });
+            });
+        })
+        .detach();
+        false
+    }
+
     /// Closes a clean window immediately, or opens the unsaved-changes dialog.
     pub(crate) fn request_close_current_window(
         &mut self,
@@ -71,7 +112,7 @@ impl Editor {
         if !self.show_unsaved_changes_dialog {
             self.close_dialog_restore_focus = self.document.focused_block_entity_id(window, cx);
             self.show_unsaved_changes_dialog = true;
-            window.blur();
+            window.blur(cx);
             cx.notify();
         }
 

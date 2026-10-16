@@ -66,7 +66,7 @@
 
 ![14](14.png)
 
-- Strikethrought:
+- Strikethrough:
 
 ![15](15.png)
 

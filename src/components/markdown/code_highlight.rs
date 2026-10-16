@@ -616,7 +616,7 @@ pub(crate) fn highlight_code_block(
     #[cfg(feature = "code-highlight-core")]
     if let Some(config) = CODE_HIGHLIGHT_REGISTRY.config_for(key) {
         let mut highlighter = Highlighter::new();
-        let events = match highlighter.highlight(config, source.as_bytes(), None, |_| None) {
+        let events = match highlighter.highlight(config, source.as_bytes(), None, None, |_| None) {
             Ok(events) => events,
             Err(_) => {
                 return Some(CodeHighlightResult {

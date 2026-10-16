@@ -5,7 +5,7 @@
 //! [`DocumentTree`], which centralizes structural mutations and cached visible
 //! order metadata.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -31,6 +31,7 @@ mod export;
 mod file_drop;
 mod history;
 mod persistence;
+pub(crate) mod picgo;
 mod render;
 mod runtime_context;
 mod selection;
@@ -54,6 +55,12 @@ pub(crate) struct PendingOpenLink {
     pub(crate) prompt_target: String,
     /// Resolved URL passed to the platform opener after confirmation.
     pub(crate) open_target: String,
+}
+
+/// Native image-paste prompt deferred until this editor's window renders.
+pub(super) enum ImagePastePrompt {
+    Storage(String),
+    PicGoFallback(String),
 }
 
 /// Top-level controller that owns editor-wide state and delegates tree
@@ -84,6 +91,14 @@ pub struct Editor {
     pending_save_as: bool,
     /// Link confirmation deferred until a render pass has a window.
     pending_open_link: Option<PendingOpenLink>,
+    /// Failed paste batches awaiting a prompt in this editor's own window.
+    pending_image_paste_prompts: VecDeque<ImagePastePrompt>,
+    /// Prevents overlapping native prompts while earlier failures await dismissal.
+    image_paste_prompt_active: bool,
+    /// Number of in-flight PicGo batches anchored to each block.
+    pending_picgo_uploads: HashMap<EntityId, usize>,
+    /// Asset folder chosen for this unsaved document's image pastes.
+    unsaved_image_assets_dir: Option<PathBuf>,
     /// Desired native edited indicator, applied when a window is available.
     pending_window_edited: bool,
     /// Whether the native title needs rebuilding from path and dirty state.
@@ -113,6 +128,8 @@ pub struct Editor {
     close_guard_installed: bool,
     /// Whether the guarded-close confirmation is visible.
     show_unsaved_changes_dialog: bool,
+    /// Suppresses duplicate save-first prompts while a prepared update waits.
+    update_save_prompt_active: bool,
     /// When true, the window will close after the next successful save.
     pending_close_after_save: bool,
     /// Focus target to restore when the close dialog is dismissed.
@@ -127,8 +144,6 @@ pub struct Editor {
     drop_replace_restore_focus: Option<EntityId>,
     /// Optional informational dialog shown from the Help menu.
     info_dialog: Option<InfoDialogKind>,
-    /// True while an online update check is running in the background.
-    update_check_in_progress: bool,
     /// Cached file tree and document outline for the workspace drawer.
     workspace: WorkspaceState,
     /// Hover state for status-bar controls.
@@ -384,6 +399,11 @@ pub(crate) enum InfoDialogKind {
 }
 
 impl Editor {
+    /// Supplies saved document paths when the update helper restarts the application.
+    pub(crate) fn restart_file_path(&self) -> Option<PathBuf> {
+        self.file_path.clone()
+    }
+
     /// Maximum number of retained undo entries.
     const HISTORY_LIMIT: usize = 200;
     /// Maximum gap between compatible typing edits that can share one undo entry.
@@ -419,6 +439,10 @@ impl Editor {
             pending_save: false,
             pending_save_as: false,
             pending_open_link: None,
+            pending_image_paste_prompts: VecDeque::new(),
+            image_paste_prompt_active: false,
+            pending_picgo_uploads: HashMap::new(),
+            unsaved_image_assets_dir: None,
             pending_window_edited: false,
             pending_window_title_refresh: false,
             document_dirty: false,
@@ -431,6 +455,7 @@ impl Editor {
             prev_mounted_run: None,
             close_guard_installed: false,
             show_unsaved_changes_dialog: false,
+            update_save_prompt_active: false,
             pending_close_after_save: false,
             close_dialog_restore_focus: None,
             pending_drop_replace_path: None,
@@ -438,7 +463,6 @@ impl Editor {
             pending_drop_replace_after_save: false,
             drop_replace_restore_focus: None,
             info_dialog: None,
-            update_check_in_progress: false,
             workspace: WorkspaceState::default(),
             status_bar: StatusBarState::default(),
             context_menu: None,

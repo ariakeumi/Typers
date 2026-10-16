@@ -20,6 +20,24 @@ pub(super) struct StatusBarState {
     custom_button_hovered: Option<String>,
 }
 
+/// A ready update gets a minimal bar even when normal status items are hidden.
+fn effective_preferences(
+    mut prefs: StatusBarPreferences,
+    update_ready: bool,
+) -> Option<StatusBarPreferences> {
+    if !prefs.enabled {
+        if !update_ready {
+            return None;
+        }
+        prefs.show_sidebar_toggle = false;
+        prefs.show_mode_switch = false;
+        prefs.show_cursor_position = false;
+        prefs.show_word_count = false;
+        prefs.custom_buttons.clear();
+    }
+    Some(prefs)
+}
+
 impl Editor {
     /// Builds the enabled status bar from current preferences and document state.
     pub(super) fn render_status_bar(
@@ -29,15 +47,33 @@ impl Editor {
         _window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let prefs = self.status_bar_preferences(cx);
-        if !prefs.enabled {
-            return None;
-        }
+        let ready = crate::updater::ready_version(cx);
+        let prefs = effective_preferences(self.status_bar_preferences(cx), ready.is_some())?;
 
         let c = &theme.colors;
         let d = &theme.dimensions;
 
         let mut left_items: Vec<AnyElement> = Vec::new();
+        if let Some(version) = ready {
+            left_items.push(
+                div()
+                    .id("status-bar-install-update")
+                    .h(px(d.status_bar_height - 4.0))
+                    .px(px(6.0))
+                    .flex()
+                    .items_center()
+                    .rounded(px(4.0))
+                    .text_size(px(d.status_bar_text_size))
+                    .text_color(c.status_bar_text)
+                    .hover(|style| style.bg(c.status_bar_button_hover))
+                    .cursor_pointer()
+                    .child(strings.update_status_ready.replace("{version}", &version))
+                    .on_click(
+                        cx.listener(|_, _, window, cx| crate::updater::request_install(window, cx)),
+                    )
+                    .into_any_element(),
+            );
+        }
 
         if prefs.show_sidebar_toggle {
             left_items.push(render_sidebar_toggle(
@@ -379,7 +415,21 @@ fn is_cjk_char(ch: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::count_words;
+    use super::{count_words, effective_preferences};
+    use crate::config::preferences::StatusBarPreferences;
+
+    #[test]
+    fn updater_ready_button_overrides_hidden_bar_without_enabling_other_items() {
+        let prefs = StatusBarPreferences {
+            enabled: false,
+            ..Default::default()
+        };
+        assert!(effective_preferences(prefs.clone(), false).is_none());
+        let temporary = effective_preferences(prefs.clone(), true).unwrap();
+        assert!(!temporary.show_sidebar_toggle && !temporary.show_mode_switch);
+        assert!(!temporary.show_word_count && !temporary.show_cursor_position);
+        assert!(!prefs.enabled);
+    }
 
     #[test]
     fn empty_text_has_zero_words() {

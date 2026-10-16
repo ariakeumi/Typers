@@ -16,8 +16,6 @@ pub(crate) const GITHUB_CARGO_TOML_URL: &str =
 /// Mirror manifest queried only after the primary request times out.
 pub(crate) const GITEE_CARGO_TOML_URL: &str =
     "https://raw.giteeusercontent.com/manyougz/velotype/raw/main/Cargo.toml";
-/// Releases page opened by the editor when an update is available.
-pub(crate) const RELEASES_URL: &str = "https://github.com/manyougz/velotype/releases";
 
 /// Maximum time to establish the manifest request's connection.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);

@@ -1,6 +1,6 @@
 [package]
 name = "velotype"
-version = "0.7.5"
+version = "0.7.8"
 edition = "2024"
 repository = "https://github.com/manyougz/velotype"
 license = "Apache-2.0"
@@ -57,28 +57,34 @@ code-highlight-config = [
 anyhow = "1"
 base64 = "0.23"
 uuid = "1.23"
-gpui = { version = "0.2", features = ["runtime_shaders"] }
+gpui = { package = "gpui-pre", version = "=0.3.9" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 unicode-segmentation = "1.13"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = "1"
 futures = "0.3"
 semver = "1"
+tempfile = "3.27"
+zip = { version = "9.0", default-features = false, features = ["deflate-flate2"] }
+tar = { version = "0.4.46", default-features = false }
+flate2 = "1.1"
+sha2 = "0.11"
 toml = "1"
 chromiumoxide = { version = "0.9.1", default-features = false, features = ["bytes"] }
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 url = "2"
 pulldown-cmark = "0.13"
-cssparser = "0.37"
+cssparser = "0.38"
 directories = "6"
 ratex-layout = "0.1.9"
 ratex-parser = "0.1.9"
 ratex-svg = { version = "0.1.9", features = ["embed-fonts", "standalone"] }
 mermaid-rs-renderer = { version = "0.3.0", default-features = false }
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "default-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "default-tls", "gzip"] }
 sys-locale = "0.3"
-tree-sitter = { version = "0.26.9", optional = true }
-tree-sitter-highlight = { version = "0.26.9", optional = true }
+tree-sitter = { version = "0.27.1", optional = true }
+tree-sitter-highlight = { version = "0.27.1", optional = true }
 tree-sitter-rust = { version = "0.24", optional = true }
 tree-sitter-javascript = { version = "0.25", optional = true }
 tree-sitter-typescript = { version = "0.23", optional = true }
@@ -92,20 +98,20 @@ tree-sitter-css = { version = "0.25", optional = true }
 tree-sitter-go = { version = "0.25", optional = true }
 tree-sitter-html = { version = "0.23", optional = true }
 tree-sitter-java = { version = "0.23", optional = true }
-tree-sitter-php = { version = "0.24", optional = true }
+tree-sitter-php = { version = "0.25", optional = true }
 tree-sitter-python = { version = "0.25", optional = true }
 tree-sitter-ruby = { version = "0.23", optional = true }
 tree-sitter-yaml = { version = "0.7", optional = true }
 tree-sitter-toml = { package = "adot-tree-sitter-toml", version = "0.1", optional = true }
 
 [dev-dependencies]
-gpui = { version = "0.2", features = ["test-support"] }
-criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support", "html_reports"] }
+gpui = { package = "gpui-pre", version = "=0.3.9", features = ["test-support"] }
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support", "html_reports"] }
 unicode-segmentation = "1.13"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 raw-window-handle = "0.6"
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Controls", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Controls", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 # Cargo auto-discovers each *.rs file in benches/ as its own bench binary.
 # Every Criterion bench needs `harness = false` so Cargo doesn't inject the
@@ -216,16 +222,20 @@ strip = true
 # render goes through gpui/taffy/text-shaping; without these overrides each
 # block in a long document costs hundreds of µs/frame purely from O0 code.
 [profile.dev.package]
-gpui = { opt-level = 3 }
-gpui-macros = { opt-level = 3 }
-gpui_http_client = { opt-level = 3 }
-gpui_sum_tree = { opt-level = 3 }
-gpui_util = { opt-level = 3 }
-gpui_util_macros = { opt-level = 3 }
-gpui_collections = { opt-level = 3 }
-gpui_media = { opt-level = 3 }
-gpui_refineable = { opt-level = 3 }
-gpui_semantic_version = { opt-level = 3 }
+gpui-pre = { opt-level = 3 }
+gpui-pre-platform = { opt-level = 3 }
+gpui-pre-windows = { opt-level = 3 }
+gpui-pre-linux = { opt-level = 3 }
+gpui-pre-macos = { opt-level = 3 }
+gpui-pre-apple = { opt-level = 3 }
+gpui-pre-wgpu = { opt-level = 3 }
+gpui-pre-scheduler = { opt-level = 3 }
+gpui-pre-macros = { opt-level = 3 }
+gpui-pre-http-client = { opt-level = 3 }
+gpui-pre-sum-tree = { opt-level = 3 }
+gpui-pre-util = { opt-level = 3 }
+gpui-pre-collections = { opt-level = 3 }
+gpui-pre-refineable = { opt-level = 3 }
 taffy = { opt-level = 3 }
 cosmic-text = { opt-level = 3 }
 rustybuzz = { opt-level = 3 }

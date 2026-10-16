@@ -6,7 +6,10 @@ use std::time::{Duration, Instant};
 
 use gpui::*;
 
-use super::{Editor, InfoDialogKind, MountedRun, workspace::workspace_panel_width_for_viewport};
+use super::{
+    Editor, ImagePastePrompt, InfoDialogKind, MountedRun,
+    workspace::workspace_panel_width_for_viewport,
+};
 use crate::app_menu::dispatch_menu_action_for_editor;
 use crate::components::CalloutVariant;
 use crate::components::{AddLanguageConfig, AddThemeConfig, Block, NoRecentFiles};
@@ -429,7 +432,8 @@ impl Editor {
         if let Some(entity_id) = self.pending_focus.take()
             && let Some(block) = self.focusable_entity_by_id(entity_id)
         {
-            block.read(cx).focus_handle.focus(window);
+            let focus_handle = block.read(cx).focus_handle.clone();
+            focus_handle.focus(window, cx);
         }
     }
 
@@ -460,7 +464,7 @@ impl Editor {
         }
 
         if changed {
-            let max_offset_y = self.scroll_handle.max_offset().height.max(px(0.0));
+            let max_offset_y = self.scroll_handle.max_offset().y.max(px(0.0));
             offset.y = offset.y.min(px(0.0)).max(-max_offset_y);
             self.scroll_handle.set_offset(offset);
         }
@@ -555,6 +559,53 @@ impl Editor {
             }
         })
         .detach();
+    }
+
+    /// Shows one queued paste failure in this editor's window, then advances the queue.
+    fn sync_pending_image_paste_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.image_paste_prompt_active {
+            return;
+        }
+        let Some(pending) = self.pending_image_paste_prompts.pop_front() else {
+            return;
+        };
+        let strings = cx.global::<I18nManager>().strings_arc();
+        let (title, detail) = match pending {
+            ImagePastePrompt::Storage(detail) => (&strings.image_paste_failed_title, detail),
+            ImagePastePrompt::PicGoFallback(detail) => {
+                (&strings.image_paste_picgo_failed_title, detail)
+            }
+        };
+        let buttons = [strings.info_dialog_ok.as_str()];
+        let prompt = window.prompt(PromptLevel::Critical, title, Some(&detail), &buttons, cx);
+        self.image_paste_prompt_active = true;
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let _ = prompt.await;
+            let _ = this.update(cx, |editor, cx| {
+                editor.image_paste_prompt_active = false;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Keeps upload progress visible without adding temporary text to the document.
+    fn render_pending_picgo_upload(
+        &self,
+        block_id: EntityId,
+        theme: &Theme,
+        strings: &I18nStrings,
+    ) -> Option<AnyElement> {
+        self.pending_picgo_uploads.contains_key(&block_id).then(|| {
+            div()
+                .w_full()
+                .flex_shrink_0()
+                .pl(px(theme.dimensions.block_padding_x))
+                .text_size(px(theme.typography.text_size))
+                .text_color(theme.colors.dialog_muted)
+                .child(strings.image_paste_picgo_waiting.clone())
+                .into_any_element()
+        })
     }
 
     /// Applies a pending native window edited-state update.
@@ -1364,6 +1415,7 @@ impl Editor {
         theme: &Theme,
         strings: &I18nStrings,
         kind: InfoDialogKind,
+        cx: &App,
     ) -> AnyElement {
         let c = &theme.colors;
         let d = &theme.dimensions;
@@ -1380,13 +1432,12 @@ impl Editor {
                 .flex()
                 .flex_col()
                 .gap(px(d.dialog_gap * 0.5))
-                .child(
-                    body_style(div()).children(
-                        self.info_dialog_body(strings, kind)
-                            .lines()
-                            .map(|line| div().child(line.to_string())),
-                    ),
-                )
+                .child(body_style(div()).child(match crate::updater::phase(cx) {
+                    crate::updater::UpdatePhase::Downloading(version) => {
+                        strings.update_downloading.replace("{version}", &version)
+                    }
+                    _ => self.info_dialog_body(strings, kind),
+                }))
                 .into_any_element(),
             InfoDialogKind::About => div()
                 .flex()
@@ -1478,7 +1529,7 @@ impl Editor {
                                     .text_color(c.dialog_title)
                                     .child(self.info_dialog_title(strings, kind).to_string()),
                             )
-                            .child(self.render_info_dialog_body(theme, strings, kind))
+                            .child(self.render_info_dialog_body(theme, strings, kind, cx))
                             .child(
                                 div()
                                     .flex()
@@ -1519,7 +1570,14 @@ impl Render for Editor {
         self.sync_pending_save(window, cx);
         self.sync_pending_save_as(window, cx);
         self.sync_pending_open_link(window, cx);
+        self.sync_pending_image_paste_prompt(window, cx);
         self.sync_window_edited_state(window);
+        crate::updater::show_startup_error(window, cx);
+        if self.info_dialog == Some(InfoDialogKind::CheckForUpdates)
+            && !crate::updater::phase(cx).is_busy()
+        {
+            self.hide_info_dialog(cx);
+        }
 
         let viewport_bounds = self.scroll_handle.bounds();
         let viewport_size = viewport_bounds.size;
@@ -1540,7 +1598,7 @@ impl Render for Editor {
         let menu_bar_height =
             in_window_menu_bar_height_for_target_os(std::env::consts::OS, has_menus, d);
         let scroll_trigger_padding = (d.block_min_height * 0.75).max(16.0);
-        let max_scroll_y = f32::from(self.scroll_handle.max_offset().height.max(px(0.0)));
+        let max_scroll_y = f32::from(self.scroll_handle.max_offset().y.max(px(0.0)));
         let viewport_height = f32::from(viewport_bounds.size.height.max(px(1.0)));
         // Extra room below the last block so the lowest line can be scrolled up
         // to the viewport center instead of being pinned to the bottom edge.
@@ -1605,9 +1663,16 @@ impl Render for Editor {
                             let entity = visible_blocks[footnote_end].entity.clone();
                             let row = div()
                                 .w_full()
+                                .flex()
+                                .flex_col()
                                 .flex_shrink_0()
                                 .mt(px(footnote_row_top_gap(previous_footnote_row, d.block_gap)))
-                                .child(entity.clone());
+                                .child(entity.clone())
+                                .children(self.render_pending_picgo_upload(
+                                    entity.entity_id(),
+                                    &theme,
+                                    &strings,
+                                ));
                             let row = if self.view_mode == super::ViewMode::Rendered {
                                 let row_editor = editor.clone();
                                 let entity_id = entity.entity_id();
@@ -1646,13 +1711,20 @@ impl Render for Editor {
                     let entity = visible_blocks[group_end].entity.clone();
                     let row = div()
                         .w_full()
+                        .flex()
+                        .flex_col()
                         .flex_shrink_0()
                         .mt(px(callout_row_top_gap(
                             previous_callout_row,
                             row_spacing,
                             d,
                         )))
-                        .child(entity.clone());
+                        .child(entity.clone())
+                        .children(self.render_pending_picgo_upload(
+                            entity.entity_id(),
+                            &theme,
+                            &strings,
+                        ));
                     let row = if self.view_mode == super::ViewMode::Rendered {
                         let row_editor = editor.clone();
                         let entity_id = entity.entity_id();
@@ -1707,9 +1779,16 @@ impl Render for Editor {
                     let entity = visible_blocks[group_end].entity.clone();
                     let row = div()
                         .w_full()
+                        .flex()
+                        .flex_col()
                         .flex_shrink_0()
                         .mt(px(footnote_row_top_gap(previous_footnote_row, d.block_gap)))
-                        .child(entity.clone());
+                        .child(entity.clone())
+                        .children(self.render_pending_picgo_upload(
+                            entity.entity_id(),
+                            &theme,
+                            &strings,
+                        ));
                     let row = if self.view_mode == super::ViewMode::Rendered {
                         let row_editor = editor.clone();
                         let entity_id = entity.entity_id();
@@ -1747,9 +1826,12 @@ impl Render for Editor {
             let row = div()
                 .w(px(centered_width))
                 .max_w(relative(1.0))
+                .flex()
+                .flex_col()
                 .flex_shrink_0()
                 .mt(px(top_gap))
-                .child(entity.clone());
+                .child(entity.clone())
+                .children(self.render_pending_picgo_upload(entity.entity_id(), &theme, &strings));
             let row = if self.view_mode == super::ViewMode::Rendered {
                 let row_editor = editor.clone();
                 let entity_id = entity.entity_id();
@@ -1925,7 +2007,7 @@ impl Render for Editor {
             .id("editor-scroll-inner")
             .flex()
             .flex_col()
-            .flex_grow()
+            .flex_grow(1.0)
             .h_full()
             .items_center()
             .bg(theme.colors.editor_background)
@@ -2191,6 +2273,8 @@ mod tests {
             name: name.into(),
             action: Box::new(NoRecentFiles),
             os_action: None,
+            checked: false,
+            disabled: true,
         }
     }
 
@@ -2199,6 +2283,8 @@ mod tests {
             name: "Add Theme Config".into(),
             action: Box::new(AddThemeConfig),
             os_action: None,
+            checked: false,
+            disabled: false,
         }
     }
 
@@ -2207,6 +2293,8 @@ mod tests {
             name: "Add Language Config".into(),
             action: Box::new(AddLanguageConfig),
             os_action: None,
+            checked: false,
+            disabled: false,
         }
     }
 
@@ -2492,10 +2580,13 @@ mod tests {
             OwnedMenuItem::Separator,
             OwnedMenuItem::Submenu(OwnedMenu {
                 name: "Recent".into(),
+                disabled: false,
                 items: vec![OwnedMenuItem::Action {
                     name: r"C:\Users\someone\Documents\notes.md".into(),
                     action: Box::new(NoRecentFiles),
                     os_action: None,
+                    checked: false,
+                    disabled: false,
                 }],
             }),
         ];
@@ -2530,10 +2621,13 @@ mod tests {
         let labels = vec!["File".to_string()];
         let items = vec![OwnedMenuItem::Submenu(OwnedMenu {
             name: "Open Recently Used Markdown File".into(),
+            disabled: false,
             items: vec![OwnedMenuItem::Action {
                 name: r"C:\Users\someone\Documents\Very Long Folder\notes.md".into(),
                 action: Box::new(NoRecentFiles),
                 os_action: None,
+                checked: false,
+                disabled: false,
             }],
         })];
         let submenu_labels = match &items[0] {

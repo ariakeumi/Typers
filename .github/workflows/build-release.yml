@@ -66,6 +66,17 @@ jobs:
           rustup update stable
           rustup default stable
 
+      - name: Validate release version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          VERSION="$(cargo metadata --locked --format-version 1 --no-deps | node -e 'const fs = require("fs"); const metadata = JSON.parse(fs.readFileSync(0, "utf8")); process.stdout.write(metadata.packages.find(pkg => pkg.name === "velotype").version);')"
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]] || [[ "$RELEASE_TAG" != "v$VERSION" ]]; then
+            echo "release_tag must match Cargo.toml package.version"
+            exit 1
+          fi
+
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
@@ -80,6 +91,9 @@ jobs:
 
       - name: Build release binary
         run: cargo build --release --locked
+
+      - name: Verify native updater
+        run: cargo test updater --locked
 
       - name: Package Windows
         if: runner.os == 'Windows'
@@ -121,6 +135,9 @@ jobs:
           mkdir -p "dist/Velotype.app/Contents/Resources"
           cp target/release/velotype "dist/Velotype.app/Contents/MacOS/velotype"
           cp resources/macos/Info.plist "dist/Velotype.app/Contents/Info.plist"
+          VERSION="${RELEASE_TAG#v}"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION%%[-+]*}" "dist/Velotype.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION%%[-+]*}" "dist/Velotype.app/Contents/Info.plist"
           cp resources/macos/velotype.icns "dist/Velotype.app/Contents/Resources/velotype.icns"
           chmod +x "dist/Velotype.app/Contents/MacOS/velotype"
           archive="velotype-${RELEASE_TAG}-${{ matrix.archive_suffix }}"

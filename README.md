@@ -11,12 +11,12 @@
 [English](README.md) | [中文](docs/README.zh-CN.md)
 
 [![Rust](https://img.shields.io/badge/Rust-2024-f74c00?logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![GPUI](https://img.shields.io/badge/GUI-GPUI%200.2-4b7bec)](https://gpui.rs/)
+[![GPUI](https://img.shields.io/badge/GUI-gpui--pre%200.3.9-4b7bec)](https://gpui.rs/)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-2ea44f)](#quick-start)
 [![Portable](https://img.shields.io/badge/app-portable%20single%20binary-8b5cf6)](#features)
 [![Export](https://img.shields.io/badge/export-HTML%20%7C%20PDF-0ea5e9)](#features)
 [![Release](https://img.shields.io/badge/releases-GitHub-181717?logo=github)](https://github.com/manyougz/velotype/releases)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE-APACHE)
 
 </div>
 
@@ -81,7 +81,7 @@ Two installation options are available:
 Prerequisites:
 
 - Git
-- A Rust toolchain with Rust 2024 edition support
+- Rust 1.92 or newer
 - Cargo
 - Platform-native build dependencies required by GPUI and the system toolchain
 
@@ -89,6 +89,7 @@ Build Velotype locally:
 
 ```bash
 git clone https://github.com/manyougz/velotype.git
+cd velotype
 ```
 
 ```bash
@@ -105,7 +106,7 @@ Syntax support will continue to improve. Planned work includes:
 
 - [x] ~~Optimize the parsing and rendering capabilities for extremely large Markdown documents~~
 - [x] ~~Workspace Mode and Outline Parsing~~
-- [ ] Built-in image hosting
+- [x] ~~Built-in image hosting~~
 - [ ] More complete IME behavior
 
 ## Theme Customization & Translation
@@ -150,4 +151,4 @@ Welcome all users and project contributors to join the Velotype channel for bett
 
 ## License
 
-Velotype is licensed under the [Apache License 2.0](LICENSE).
+Velotype is licensed under the [Apache License 2.0](LICENSE-APACHE).

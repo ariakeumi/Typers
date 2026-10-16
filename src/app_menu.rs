@@ -505,28 +505,43 @@ fn request_close_current_editor_window(cx: &mut App) {
 ///
 /// Stops at the first declined or failed guard; non-editor windows are skipped.
 pub(crate) fn request_quit_application(cx: &mut App) {
-    let candidates = current_window_candidates(cx);
-    if candidates.is_empty() {
+    if editors_allow_exit_except(None, cx) {
         cx.quit();
-        return;
     }
+}
 
+/// Checks close guards without quitting; callers check their already-borrowed window separately.
+pub(crate) fn editors_allow_exit_except(except: Option<AnyWindowHandle>, cx: &mut App) -> bool {
+    editors_allow_operation_except(except, Editor::on_window_should_close, cx)
+}
+
+/// Update guards save without closing windows, so the prepared update remains reachable.
+pub(crate) fn editors_allow_update_except(except: Option<AnyWindowHandle>, cx: &mut App) -> bool {
+    editors_allow_operation_except(except, Editor::allow_update_restart, cx)
+}
+
+fn editors_allow_operation_except(
+    except: Option<AnyWindowHandle>,
+    guard: fn(&mut Editor, &mut Window, &mut Context<Editor>) -> bool,
+    cx: &mut App,
+) -> bool {
+    let candidates = current_window_candidates(cx);
     for window in candidates {
+        if except.is_some_and(|except| except.window_id() == window.window_id()) {
+            continue;
+        }
         let Some(window) = window.downcast::<Editor>() else {
             continue;
         };
 
         let should_close = window
-            .update(cx, |editor, window, cx| {
-                editor.on_window_should_close(window, cx)
-            })
+            .update(cx, |editor, window, cx| guard(editor, window, cx))
             .unwrap_or(false);
         if !should_close {
-            return;
+            return false;
         }
     }
-
-    cx.quit();
+    true
 }
 
 /// Executes one of the app-menu actions against the current application state.
@@ -763,6 +778,7 @@ fn build_menus(
         vec![
             Menu {
                 name: "Velotype".into(),
+                disabled: false,
                 items: vec![
                     MenuItem::action(strings.menu_preferences.clone(), OpenPreferences),
                     MenuItem::separator(),
@@ -771,12 +787,14 @@ fn build_menus(
             },
             Menu {
                 name: strings.menu_file.into(),
+                disabled: false,
                 items: vec![
                     MenuItem::action(strings.menu_new_window.clone(), NewWindow),
                     MenuItem::action(strings.menu_close_window.clone(), CloseWindow),
                     MenuItem::action(strings.menu_open_file.clone(), OpenFile),
                     MenuItem::submenu(Menu {
                         name: strings.menu_open_recent_file.clone().into(),
+                        disabled: false,
                         items: recent_items,
                     }),
                     MenuItem::separator(),
@@ -791,12 +809,14 @@ fn build_menus(
     let initial_menus = {
         vec![Menu {
             name: strings.menu_file.into(),
+            disabled: false,
             items: vec![
                 MenuItem::action(strings.menu_new_window.clone(), NewWindow),
                 MenuItem::action(strings.menu_close_window.clone(), CloseWindow),
                 MenuItem::action(strings.menu_open_file.clone(), OpenFile),
                 MenuItem::submenu(Menu {
                     name: strings.menu_open_recent_file.clone().into(),
+                    disabled: false,
                     items: recent_items,
                 }),
                 MenuItem::action(strings.menu_preferences.clone(), OpenPreferences),
@@ -846,6 +866,7 @@ fn build_menus(
     menus.extend([
         Menu {
             name: strings.menu_export.into(),
+            disabled: false,
             items: vec![
                 MenuItem::action(strings.menu_export_html.clone(), ExportHtml),
                 MenuItem::action(strings.menu_export_pdf.clone(), ExportPdf),
@@ -853,14 +874,17 @@ fn build_menus(
         },
         Menu {
             name: strings.menu_language.into(),
+            disabled: false,
             items: language_items,
         },
         Menu {
             name: strings.menu_theme.into(),
+            disabled: false,
             items: theme_items,
         },
         Menu {
             name: strings.menu_workspace.into(),
+            disabled: false,
             items: vec![MenuItem::action(
                 strings.menu_toggle_workspace.clone(),
                 ToggleWorkspace,
@@ -868,6 +892,7 @@ fn build_menus(
         },
         Menu {
             name: strings.menu_help.into(),
+            disabled: false,
             items: help_items,
         },
     ]);
@@ -1061,7 +1086,7 @@ fn prompt_and_import_theme_config_with_error_window(
 }
 
 /// Quits after the final window closes, including on macOS.
-fn handle_window_closed(cx: &mut App) {
+fn handle_window_closed(cx: &mut App, _window_id: WindowId) {
     if cx.windows().is_empty() {
         cx.quit();
     }

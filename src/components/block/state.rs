@@ -836,8 +836,8 @@ pub enum BlockEvent {
     RequestPasteImage {
         /// Content before the replaced selection.
         leading: InlineTextTree,
-        /// Clipboard bitmap or local image path to insert.
-        source: PastedImageSource,
+        /// One paste batch of clipboard bitmaps or local image paths.
+        sources: Vec<PastedImageSource>,
         /// Content after the replaced selection.
         trailing: InlineTextTree,
     },
