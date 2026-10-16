@@ -24,6 +24,7 @@ mod components;
 mod config;
 mod editor;
 mod export;
+mod file_associations;
 #[cfg(any(target_os = "macos", test))]
 mod file_url;
 mod fonts;

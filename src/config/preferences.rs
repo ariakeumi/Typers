@@ -882,6 +882,10 @@ pub(crate) struct PreferencesWindow {
     /// Draft automatic download policy and its last saved value.
     auto_download_updates: bool,
     saved_auto_download_updates: bool,
+    /// Effective OS association state, independent of the unsaved preference draft.
+    file_associations: FileAssociationStatus,
+    /// Keeps the current check alive without doing OS work during rendering.
+    file_association_task: Option<Task<()>>,
     /// Draft shortcut overrides.
     keybindings: BTreeMap<String, Vec<String>>,
     /// Startup policy at the last successful save.
@@ -951,6 +955,29 @@ pub(crate) struct PreferencesWindow {
     ui_font_input: Entity<SingleLineInput>,
     /// Editable PicGo Server URL.
     picgo_server_input: Entity<SingleLineInput>,
+}
+
+/// File association is an immediate OS action, not a persisted application preference.
+#[derive(Debug, PartialEq, Eq)]
+enum FileAssociationStatus {
+    Checking,
+    Associating,
+    Associated,
+    NotAssociated,
+    NeedsConfirmation,
+    Failed(String),
+}
+
+impl FileAssociationStatus {
+    fn can_associate(&self) -> bool {
+        matches!(
+            self,
+            Self::NotAssociated | Self::NeedsConfirmation | Self::Failed(_)
+        )
+    }
+    fn is_busy(&self) -> bool {
+        matches!(self, Self::Checking | Self::Associating)
+    }
 }
 
 impl PreferencesWindow {
@@ -1037,6 +1064,8 @@ impl PreferencesWindow {
             saved_picgo_server_url: picgo_server_url,
             auto_download_updates: preferences.auto_download_updates,
             saved_auto_download_updates: preferences.auto_download_updates,
+            file_associations: FileAssociationStatus::Checking,
+            file_association_task: None,
             picgo_status: PicGoStatus::Checking,
             picgo_check_generation: 0,
             picgo_check_task: None,
@@ -1141,6 +1170,88 @@ impl PreferencesWindow {
         self.image_dropdown_open = false;
         self.recording_shortcut = None;
         cx.notify();
+    }
+
+    /// Serializes background checks/actions and refreshes after the system default-app UI returns.
+    fn update_file_associations(
+        &mut self,
+        associate: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.file_associations.is_busy() && self.file_association_task.is_some() {
+            return;
+        }
+        self.file_associations = if associate {
+            FileAssociationStatus::Associating
+        } else {
+            FileAssociationStatus::Checking
+        };
+        let handle = window.window_handle();
+        let task = cx.background_executor().spawn(async move {
+            let settings = if associate {
+                crate::file_associations::associate()?
+            } else {
+                None
+            };
+            // User confirmation comes before rechecking; a failed query must not block Settings.
+            if settings.is_some() {
+                return anyhow::Ok((false, settings));
+            }
+            let associated = crate::file_associations::is_associated()?;
+            anyhow::ensure!(
+                !associate || associated,
+                "the system did not apply the Markdown file associations"
+            );
+            anyhow::Ok((associated, settings))
+        });
+        self.file_association_task = Some(cx.spawn(
+            async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let result = task.await;
+                let _ = cx.update_window(handle, |_, window, cx| {
+                    let _ = this.update(cx, |this, cx| {
+                        this.file_associations = match result {
+                            Ok((true, _)) => FileAssociationStatus::Associated,
+                            Ok((false, Some(url))) => {
+                                cx.open_url(url);
+                                FileAssociationStatus::NeedsConfirmation
+                            }
+                            Ok((false, None)) => FileAssociationStatus::NotAssociated,
+                            Err(error) => {
+                                let strings = cx.global::<I18nManager>().strings_arc();
+                                let message = strings
+                                    .preferences_file_associations_failed
+                                    .replace("{error}", &format!("{error:#}"));
+                                if associate {
+                                    let _ = window.prompt(
+                                        PromptLevel::Critical,
+                                        &strings.preferences_file_associations,
+                                        Some(&message),
+                                        &[strings.info_dialog_ok.as_str()],
+                                        cx,
+                                    );
+                                }
+                                FileAssociationStatus::Failed(message)
+                            }
+                        };
+                        cx.notify();
+                    });
+                });
+            },
+        ));
+        cx.notify();
+    }
+
+    /// Leaves already-associated and in-flight states inert even if invoked outside the button.
+    fn associate_file_formats(
+        &mut self,
+        _: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.file_associations.can_associate() {
+            self.update_file_associations(true, window, cx);
+        }
     }
 
     /// Shows startup settings and closes dropdowns and shortcut recording.
@@ -2236,6 +2347,73 @@ impl PreferencesWindow {
                     .text_color(theme.colors.dialog_muted)
                     .child(strings.preferences_updates_auto_download_hint.clone()),
             )
+            .child({
+                let enabled = self.file_associations.can_associate();
+                div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap(px(16.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_size(px(theme.typography.dialog_body_size))
+                            .text_color(theme.colors.dialog_body)
+                            .child(strings.preferences_file_associations.clone()),
+                    )
+                    .child(
+                        div()
+                            .id("preferences-associate-formats")
+                            .h(px(theme.dimensions.dialog_button_height))
+                            .px(px(theme.dimensions.dialog_button_padding_x))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px((theme.dimensions.dialog_radius - 4.0).max(0.0)))
+                            .border(px(theme.dimensions.dialog_border_width))
+                            .border_color(theme.colors.dialog_border)
+                            .bg(theme.colors.dialog_secondary_button_bg)
+                            .text_size(px(theme.typography.dialog_button_size))
+                            .font_weight(theme.typography.dialog_button_weight.to_font_weight())
+                            .text_color(if enabled {
+                                theme.colors.dialog_secondary_button_text
+                            } else {
+                                theme.colors.dialog_muted
+                            })
+                            .when(enabled, |button| {
+                                button
+                                    .cursor_pointer()
+                                    .hover(|style| {
+                                        style.bg(theme.colors.dialog_secondary_button_hover)
+                                    })
+                                    .on_click(cx.listener(Self::associate_file_formats))
+                            })
+                            .child(strings.preferences_associate_formats.clone()),
+                    )
+            })
+            .children(
+                match &self.file_associations {
+                    FileAssociationStatus::Checking | FileAssociationStatus::Associating => {
+                        Some(strings.preferences_file_associations_checking.clone())
+                    }
+                    FileAssociationStatus::Associated => {
+                        Some(strings.preferences_file_associations_associated.clone())
+                    }
+                    FileAssociationStatus::NeedsConfirmation => {
+                        Some(strings.preferences_file_associations_pending.clone())
+                    }
+                    FileAssociationStatus::Failed(error) => Some(error.clone()),
+                    FileAssociationStatus::NotAssociated => None,
+                }
+                .map(|message| {
+                    div()
+                        .text_size(px(theme.typography.dialog_body_size))
+                        .text_color(theme.colors.dialog_muted)
+                        .child(message)
+                }),
+            )
     }
 
     /// Renders the draft status bar and built-in item visibility switches.
@@ -2630,6 +2808,13 @@ fn open_preferences_window_with_state(
             crate::ime::install_window_input_filter(window);
             window.activate_window();
             preferences.focus_handle.focus(window, cx);
+            cx.observe_window_activation(window, |preferences, window, cx| {
+                if window.is_window_active() {
+                    preferences.update_file_associations(false, window, cx);
+                }
+            })
+            .detach();
+            preferences.update_file_associations(false, window, cx);
         })
         .expect("newly opened preferences window should be updateable");
 
@@ -2684,6 +2869,25 @@ mod tests {
             id: "velotype".into(),
             name: "Velotype".into(),
         }]
+    }
+
+    #[test]
+    fn file_association_button_is_disabled_when_associated_or_busy() {
+        use super::FileAssociationStatus::*;
+        for state in [Checking, Associating, Associated] {
+            assert!(!state.can_associate());
+        }
+        for state in [
+            NotAssociated,
+            NeedsConfirmation,
+            Failed("unavailable".into()),
+        ] {
+            assert!(state.can_associate());
+            assert!(!state.is_busy());
+        }
+        assert!(!Associated.is_busy());
+        assert!(Checking.is_busy());
+        assert!(Associating.is_busy());
     }
 
     #[test]
@@ -3022,6 +3226,35 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "windows")]
+    #[gpui::test]
+    async fn preferences_file_association_check_completes_in_background(cx: &mut TestAppContext) {
+        init_preferences_test_app(cx);
+        let handle = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+        handle
+            .update(cx, |preferences, _window, _cx| {
+                assert!(
+                    matches!(
+                        preferences.file_associations,
+                        super::FileAssociationStatus::Associated
+                            | super::FileAssociationStatus::NotAssociated
+                    ),
+                    "unexpected association check result: {:?}",
+                    preferences.file_associations
+                );
+                assert!(!preferences.has_unsaved_changes());
+            })
+            .unwrap();
+    }
+
     #[gpui::test]
     async fn preferences_dirty_state_tracks_draft_changes(cx: &mut TestAppContext) {
         init_preferences_test_app(cx);
@@ -3038,6 +3271,10 @@ mod tests {
 
         handle
             .update(cx, |preferences, _window, _cx| {
+                assert!(!preferences.has_unsaved_changes());
+                preferences.file_associations = super::FileAssociationStatus::Associated;
+                assert!(!preferences.has_unsaved_changes());
+                preferences.file_associations = super::FileAssociationStatus::NotAssociated;
                 assert!(!preferences.has_unsaved_changes());
                 preferences.startup_open = StartupOpenPreference::LastOpenedFile;
                 assert!(preferences.has_unsaved_changes());

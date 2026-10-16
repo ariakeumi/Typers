@@ -80,6 +80,14 @@ pub struct I18nStrings {
     /// Opt-in automatic download switch label and explanation.
     pub preferences_updates_auto_download: String,
     pub preferences_updates_auto_download_hint: String,
+    /// System Markdown association controls and read-only status messages.
+    pub preferences_file_associations: String,
+    pub preferences_associate_formats: String,
+    pub preferences_file_associations_checking: String,
+    pub preferences_file_associations_associated: String,
+    pub preferences_file_associations_pending: String,
+    /// Supports `{error}` for native diagnostics.
+    pub preferences_file_associations_failed: String,
     /// Title of the About dialog.
     pub help_about_title: String,
     /// Supplemental About dialog text shown below the app name and version.
@@ -487,6 +495,12 @@ struct I18nStringsDe {
     preferences_nav_settings: Option<String>,
     preferences_updates_auto_download: Option<String>,
     preferences_updates_auto_download_hint: Option<String>,
+    preferences_file_associations: Option<String>,
+    preferences_associate_formats: Option<String>,
+    preferences_file_associations_checking: Option<String>,
+    preferences_file_associations_associated: Option<String>,
+    preferences_file_associations_pending: Option<String>,
+    preferences_file_associations_failed: Option<String>,
     /// Optional About dialog title.
     help_about_title: Option<String>,
     /// Optional supplemental About text.
@@ -863,6 +877,12 @@ const I18N_STRING_KEYS: &[&str] = &[
     "preferences_nav_settings",
     "preferences_updates_auto_download",
     "preferences_updates_auto_download_hint",
+    "preferences_file_associations",
+    "preferences_associate_formats",
+    "preferences_file_associations_checking",
+    "preferences_file_associations_associated",
+    "preferences_file_associations_pending",
+    "preferences_file_associations_failed",
     "help_about_title",
     "help_about_message",
     "help_about_github_label",
@@ -1131,6 +1151,24 @@ impl I18nStringsDe {
             preferences_updates_auto_download_hint: self
                 .preferences_updates_auto_download_hint
                 .unwrap_or(defaults.preferences_updates_auto_download_hint),
+            preferences_file_associations: self
+                .preferences_file_associations
+                .unwrap_or(defaults.preferences_file_associations),
+            preferences_associate_formats: self
+                .preferences_associate_formats
+                .unwrap_or(defaults.preferences_associate_formats),
+            preferences_file_associations_checking: self
+                .preferences_file_associations_checking
+                .unwrap_or(defaults.preferences_file_associations_checking),
+            preferences_file_associations_associated: self
+                .preferences_file_associations_associated
+                .unwrap_or(defaults.preferences_file_associations_associated),
+            preferences_file_associations_pending: self
+                .preferences_file_associations_pending
+                .unwrap_or(defaults.preferences_file_associations_pending),
+            preferences_file_associations_failed: self
+                .preferences_file_associations_failed
+                .unwrap_or(defaults.preferences_file_associations_failed),
             help_about_title: self.help_about_title.unwrap_or(defaults.help_about_title),
             help_about_message: self
                 .help_about_message
@@ -1812,6 +1850,13 @@ impl I18nStrings {
         strings.update_save_first_message =
             "请先保存此窗口的修改，再次点击“更新并重启”。保存后窗口会保持打开。".into();
         strings.preferences_nav_settings = "设置".into();
+        strings.preferences_file_associations = "Markdown 文件关联（.md）".into();
+        strings.preferences_associate_formats = "关联格式".into();
+        strings.preferences_file_associations_checking = "正在检查文件关联...".into();
+        strings.preferences_file_associations_associated = "已关联到 Velotype。".into();
+        strings.preferences_file_associations_pending =
+            "请在系统默认应用设置中确认选择 Velotype。".into();
+        strings.preferences_file_associations_failed = "无法检查或更新文件关联：{error}".into();
         strings.preferences_updates_auto_download = "自动下载更新".into();
         strings.preferences_updates_auto_download_hint = "启动时自动检查并下载最新正式版".into();
         strings.image_paste_picgo_failed_title = "PicGo 上传失败".into();
@@ -1881,6 +1926,12 @@ impl I18nStrings {
             update_status_ready: "Update to {version} and Restart".into(),
             update_save_first_message: "Save this window's changes, then click Update and Restart again. Saving will keep the window open.".into(),
             preferences_nav_settings: "Settings".into(),
+            preferences_file_associations: "Markdown File Association (.md)".into(),
+            preferences_associate_formats: "Associate Formats".into(),
+            preferences_file_associations_checking: "Checking file associations...".into(),
+            preferences_file_associations_associated: "Associated with Velotype.".into(),
+            preferences_file_associations_pending: "Confirm Velotype in your system's default-app settings.".into(),
+            preferences_file_associations_failed: "Could not check or update file associations: {error}".into(),
             preferences_updates_auto_download: "Automatically Download Updates".into(),
             preferences_updates_auto_download_hint: "Automatically check for and download the latest stable version on startup.".into(),
             help_about_title: "About Velotype".into(),
@@ -2526,6 +2577,15 @@ mod tests {
         assert_eq!(strings.preferences_image_paste_picgo, "使用 PicGo");
         assert_eq!(strings.image_paste_picgo_waiting, "等待图床链接返回...");
         assert_eq!(strings.preferences_picgo_available, "PicGo Server 可用");
+        assert_eq!(strings.preferences_associate_formats, "关联格式");
+        assert_eq!(
+            strings.preferences_file_associations,
+            "Markdown 文件关联（.md）"
+        );
+        assert_eq!(
+            strings.preferences_file_associations_associated,
+            "已关联到 Velotype。"
+        );
         assert_eq!(
             strings.help_check_updates_message,
             "正在检查 Velotype 的最新版本..."
@@ -2545,6 +2605,14 @@ mod tests {
         assert_eq!(manager.strings().menu_file, "File");
         assert_eq!(manager.strings().menu_export, "Export");
         assert_eq!(manager.strings().preferences_nav_settings, "Settings");
+        assert_eq!(
+            manager.strings().preferences_associate_formats,
+            "Associate Formats"
+        );
+        assert_eq!(
+            manager.strings().preferences_file_associations,
+            "Markdown File Association (.md)"
+        );
         assert_eq!(
             manager.strings().update_status_ready,
             "Update to {version} and Restart"
@@ -2711,6 +2779,7 @@ mod tests {
         assert_eq!(pack.strings.menu_export, "导出");
         assert_eq!(pack.strings.info_dialog_ok, "确定");
         assert_eq!(pack.strings.preferences_nav_settings, "设置");
+        assert_eq!(pack.strings.preferences_associate_formats, "关联格式");
         assert_eq!(pack.strings.update_status_ready, "更新至 {version} 并重启");
         assert_eq!(pack.strings.update_open_release, "前往下载");
         assert_eq!(pack.strings.help_about_github_label, "GitHub");
@@ -2735,6 +2804,10 @@ mod tests {
         assert_eq!(pack.id, "fr-FR");
         assert_eq!(pack.name, "fr-FR");
         assert_eq!(pack.strings.menu_file, "Fichier");
+        assert_eq!(
+            pack.strings.preferences_associate_formats,
+            "Associate Formats"
+        );
         assert_eq!(pack.strings.menu_export, "Export");
         assert_eq!(pack.strings.info_dialog_ok, "OK");
         assert_eq!(pack.strings.update_open_release, "Open Releases");
@@ -2749,5 +2822,53 @@ mod tests {
             pack.strings.help_about_star_message,
             "If this project helps you, consider giving it a Star⭐. Thank you!"
         );
+    }
+
+    #[test]
+    fn file_association_strings_support_custom_overrides_and_fallbacks() {
+        let pack = I18nLanguagePack::from_json(
+            r#"{
+                "id": "custom",
+                "strings": {
+                    "preferences_associate_formats": "Connect Markdown",
+                    "preferences_file_associations_pending": ""
+                }
+            }"#,
+        )
+        .unwrap();
+        let defaults = I18nStrings::en_us();
+        assert_eq!(
+            pack.strings.preferences_associate_formats,
+            "Connect Markdown"
+        );
+        assert_eq!(
+            pack.strings.preferences_file_associations,
+            defaults.preferences_file_associations
+        );
+        assert_eq!(
+            pack.strings.preferences_file_associations_checking,
+            defaults.preferences_file_associations_checking
+        );
+        assert_eq!(
+            pack.strings.preferences_file_associations_associated,
+            defaults.preferences_file_associations_associated
+        );
+        assert_eq!(
+            pack.strings.preferences_file_associations_pending,
+            defaults.preferences_file_associations_pending
+        );
+        assert_eq!(
+            pack.strings.preferences_file_associations_failed,
+            defaults.preferences_file_associations_failed
+        );
+        for key in super::I18N_STRING_KEYS.iter().filter(|key| {
+            key.starts_with("preferences_file_associations")
+                || **key == "preferences_associate_formats"
+        }) {
+            assert!(
+                include_str!("../../assets/custom-language.example.jsonc")
+                    .contains(&format!("\"{key}\""))
+            );
+        }
     }
 }
