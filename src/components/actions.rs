@@ -35,6 +35,8 @@ actions!(
         JumpToBottom,
         SelectLeft,
         SelectRight,
+        SelectUp,
+        SelectDown,
         WordSelectLeft,
         WordSelectRight,
         SelectHome,
@@ -101,6 +103,66 @@ pub struct OpenRecentFile {
     pub path: String,
 }
 
+/// Native writing commands shared by menus, shortcuts, and status controls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+pub enum WritingCommand {
+    Find,
+    Replace,
+    FindNext,
+    FindPrevious,
+    FocusMode,
+    TypewriterMode,
+    ReadOnly,
+    Outline,
+    Files,
+    Documents,
+    Sidebar,
+    OpenFolder,
+    SourceMode,
+    ZoomIn,
+    ZoomOut,
+    ActualSize,
+    Statistics,
+    Undo,
+    Redo,
+    Copy,
+    Cut,
+    Paste,
+    SelectAll,
+    Bold,
+    Italic,
+    Underline,
+    InlineCode,
+    Strikethrough,
+    Link,
+    Paragraph,
+    Heading1,
+    Heading2,
+    Heading3,
+    Heading4,
+    Heading5,
+    Heading6,
+    Quote,
+    BulletList,
+    OrderedList,
+    TaskList,
+    CodeBlock,
+    HorizontalRule,
+    Table,
+    MathBlock,
+    MermaidBlock,
+    MinimizeWindow,
+    ZoomWindow,
+    FullScreen,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema, gpui::Action)]
+#[action(namespace = velotype)]
+#[serde(deny_unknown_fields)]
+pub struct WritingAction {
+    pub command: WritingCommand,
+}
+
 /// Group used to organize editable shortcuts in preferences.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum ShortcutCategory {
@@ -164,6 +226,10 @@ pub(crate) enum ShortcutCommand {
     SelectLeft,
     /// Extend the selection right.
     SelectRight,
+    /// Extend the selection one visual row upward.
+    SelectUp,
+    /// Extend the selection one visual row downward.
+    SelectDown,
     /// Extend the selection one word left.
     WordSelectLeft,
     /// Extend the selection one word right.
@@ -206,6 +272,8 @@ pub(crate) enum ShortcutCommand {
     NewWindow,
     /// Prompt to open a document.
     OpenFile,
+    /// Open the application preferences.
+    OpenPreferences,
     /// Request guarded application quit.
     QuitApplication,
     /// Request closing the current window.
@@ -258,6 +326,12 @@ const CLOSE_WINDOW_DEFAULT_KEYS: &[&str] = &["cmd-w"];
 #[cfg(not(target_os = "macos"))]
 /// Non-macOS current-window close binding.
 const CLOSE_WINDOW_DEFAULT_KEYS: &[&str] = &["ctrl-q"];
+
+/// Source-mode toggle uses the actual slash character emitted by the platform.
+#[cfg(target_os = "macos")]
+const TOGGLE_SOURCE_MODE_DEFAULT_KEYS: &[&str] = &["cmd-/"];
+#[cfg(not(target_os = "macos"))]
+const TOGGLE_SOURCE_MODE_DEFAULT_KEYS: &[&str] = &["ctrl-/"];
 
 /// Canonical command catalog and default key assignments.
 const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
@@ -412,6 +486,20 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         context: BLOCK_CONTEXT,
     },
     ShortcutDefinition {
+        command: ShortcutCommand::SelectUp,
+        id: "select_up",
+        category: ShortcutCategory::Navigation,
+        default_keys: &["shift-up"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::SelectDown,
+        id: "select_down",
+        category: ShortcutCategory::Navigation,
+        default_keys: &["shift-down"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
         command: ShortcutCommand::WordSelectLeft,
         id: "word_select_left",
         category: ShortcutCategory::Navigation,
@@ -559,6 +647,13 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         context: None,
     },
     ShortcutDefinition {
+        command: ShortcutCommand::OpenPreferences,
+        id: "open_preferences",
+        category: ShortcutCategory::File,
+        default_keys: &["cmd-,", "ctrl-,"],
+        context: None,
+    },
+    ShortcutDefinition {
         command: ShortcutCommand::QuitApplication,
         id: "quit_application",
         category: ShortcutCategory::File,
@@ -583,7 +678,7 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         command: ShortcutCommand::ToggleViewMode,
         id: "toggle_view_mode",
         category: ShortcutCategory::Navigation,
-        default_keys: &["ctrl-tab", "cmd-tab"],
+        default_keys: TOGGLE_SOURCE_MODE_DEFAULT_KEYS,
         context: None,
     },
     ShortcutDefinition {
@@ -787,6 +882,8 @@ fn key_binding_for(
         ShortcutCommand::JumpToBottom => KeyBinding::new(key, JumpToBottom, context),
         ShortcutCommand::SelectLeft => KeyBinding::new(key, SelectLeft, context),
         ShortcutCommand::SelectRight => KeyBinding::new(key, SelectRight, context),
+        ShortcutCommand::SelectUp => KeyBinding::new(key, SelectUp, context),
+        ShortcutCommand::SelectDown => KeyBinding::new(key, SelectDown, context),
         ShortcutCommand::WordSelectLeft => KeyBinding::new(key, WordSelectLeft, context),
         ShortcutCommand::WordSelectRight => KeyBinding::new(key, WordSelectRight, context),
         ShortcutCommand::SelectHome => KeyBinding::new(key, SelectHome, context),
@@ -808,10 +905,17 @@ fn key_binding_for(
         ShortcutCommand::SaveDocumentAs => KeyBinding::new(key, SaveDocumentAs, context),
         ShortcutCommand::NewWindow => KeyBinding::new(key, NewWindow, context),
         ShortcutCommand::OpenFile => KeyBinding::new(key, OpenFile, context),
+        ShortcutCommand::OpenPreferences => KeyBinding::new(key, OpenPreferences, context),
         ShortcutCommand::QuitApplication => KeyBinding::new(key, QuitApplication, context),
         ShortcutCommand::CloseWindow => KeyBinding::new(key, CloseWindow, context),
         ShortcutCommand::DismissTransientUi => KeyBinding::new(key, DismissTransientUi, context),
-        ShortcutCommand::ToggleViewMode => KeyBinding::new(key, ToggleViewMode, context),
+        ShortcutCommand::ToggleViewMode => KeyBinding::new(
+            key,
+            WritingAction {
+                command: WritingCommand::SourceMode,
+            },
+            context,
+        ),
         ShortcutCommand::ToggleWorkspace => KeyBinding::new(key, ToggleWorkspace, context),
     }
 }
@@ -835,6 +939,8 @@ pub(crate) fn resolved_keybindings(config: &BTreeMap<String, Vec<String>>) -> Ve
 
 /// Installs the resolved shortcut set in GPUI.
 pub(crate) fn install_keybindings(cx: &mut App, config: &BTreeMap<String, Vec<String>>) {
+    crate::editor::writing::install_writing_keybindings(cx);
+    // Keep explicit existing command bindings authoritative on conflicts.
     cx.bind_keys(resolved_keybindings(config));
 }
 
@@ -871,7 +977,11 @@ mod tests {
     fn toggle_view_mode_has_default_shortcuts() {
         assert_eq!(
             resolved_shortcut_keys(&BTreeMap::new(), ShortcutCommand::ToggleViewMode),
-            vec!["ctrl-tab".to_string(), "cmd-tab".to_string()]
+            if cfg!(target_os = "macos") {
+                vec!["cmd-/".to_string()]
+            } else {
+                vec!["ctrl-/".to_string()]
+            }
         );
     }
 

@@ -31,6 +31,124 @@ fn assert_only_code_range(block: &Block, expected: Range<usize>) {
 }
 
 #[gpui::test]
+async fn unicode_link_projection_ranges_keep_markdown_scalar_boundaries(cx: &mut TestAppContext) {
+    for source in [
+        "[带 title 的链接](https://example.com \"悬停提示文字\")",
+        "前😀[**中文** 与 *斜体*](https://example.com \"中文标题\")后",
+        "[中文](中文路径 \"标题\")",
+        "[**中文** 与 `a_b`](https://example.com \"中文\")",
+        "<https://example.com/a_b\\c>",
+    ] {
+        for select_all in [false, true] {
+            let initial = cx.new(|cx| {
+                let mut block = Block::with_record(
+                    cx,
+                    BlockRecord::new(BlockKind::Paragraph, InlineTextTree::from_markdown(source)),
+                );
+                if select_all {
+                    block.selected_range = 0..block.visible_len();
+                }
+                block.sync_inline_projection_for_focus(true);
+                block
+            });
+            let display = initial.read_with(cx, |block, _| block.display_text().to_string());
+            let offsets = display
+                .char_indices()
+                .map(|(i, _)| i)
+                .chain(std::iter::once(display.len()))
+                .collect::<Vec<_>>();
+            initial.read_with(cx, |block, _| {
+                let mapped = offsets
+                    .iter()
+                    .map(|&offset| block.current_range_to_markdown_range(offset..offset).start)
+                    .collect::<Vec<_>>();
+                assert!(
+                    mapped.windows(2).all(|pair| pair[0] <= pair[1]),
+                    "{source:?}: {display:?}, mapped carets {mapped:?}"
+                );
+            });
+            for &start in &offsets {
+                for &end in offsets.iter().filter(|&&end| end >= start) {
+                    let block = cx.new(|cx| {
+                        let mut block = Block::with_record(
+                            cx,
+                            BlockRecord::new(
+                                BlockKind::Paragraph,
+                                InlineTextTree::from_markdown(source),
+                            ),
+                        );
+                        if select_all {
+                            block.selected_range = 0..block.visible_len();
+                        }
+                        block.sync_inline_projection_for_focus(true);
+                        block
+                    });
+                    block.update(cx, |block, cx| {
+                        let mapped = block.current_range_to_markdown_range(start..end);
+                        let markdown = block.record.title.serialize_markdown();
+                        assert!(
+                            markdown.get(mapped.clone()).is_some(),
+                            "{source:?}: display {start}..{end}, mapped {mapped:?}"
+                        );
+                        if start == end {
+                            assert!(mapped.is_empty());
+                        }
+                        block.replace_text_in_visible_range(start..end, "QA", None, false, cx);
+                        assert!(
+                            block
+                                .display_text()
+                                .get(block.selected_range.clone())
+                                .is_some()
+                        );
+                    });
+                }
+            }
+        }
+    }
+}
+
+#[gpui::test]
+async fn partially_expanded_link_maps_destination_and_title_exactly(cx: &mut TestAppContext) {
+    let block = cx.new(|cx| {
+        let mut block = Block::with_record(
+            cx,
+            BlockRecord::new(
+                BlockKind::Paragraph,
+                InlineTextTree::from_markdown(
+                    "[**粗体** 与 *斜体*](https://example.com \"中文标题\")",
+                ),
+            ),
+        );
+        block.sync_inline_projection_for_focus(true);
+        block
+    });
+    block.read_with(cx, |block, _| {
+        let display = block.display_text();
+        let markdown = block.record.title.serialize_markdown();
+        assert_ne!(display, markdown);
+        for text in ["https://example.com", "中文标题"] {
+            let start = display.find(text).unwrap();
+            let mapped = block.current_range_to_markdown_range(start..start + text.len());
+            assert_eq!(&markdown[mapped], text);
+        }
+    });
+}
+
+#[gpui::test]
+async fn caret_blinks_in_half_second_steps_and_resets_after_movement(cx: &mut TestAppContext) {
+    use std::time::{Duration, Instant};
+    let block = cx.new(|cx| Block::with_record(cx, BlockRecord::paragraph("text")));
+    block.update(cx, |block, cx| {
+        for (elapsed_ms, expected) in [(100, 1.0), (750, 0.0), (1250, 1.0), (1750, 0.0)] {
+            block.cursor_blink_epoch = Instant::now() - Duration::from_millis(elapsed_ms);
+            assert_eq!(block.cursor_opacity(), expected);
+        }
+        block.move_to(1, cx);
+        assert_eq!(block.cursor_opacity(), 1.0);
+    });
+}
+
+#[gpui::test]
 async fn unicode_selection_and_replacement_stay_on_scalar_boundaries(cx: &mut TestAppContext) {
     let cx = cx.add_empty_window();
     let block = cx.new(|cx| Block::with_record(cx, BlockRecord::paragraph("*测试")));
@@ -188,6 +306,7 @@ fn expanded_code_cursor_offset_stays_before_closing_backtick() {
         link: None,
         footnote: None,
         math: None,
+        image: false,
     }];
 
     assert_eq!(expanded_display_offset_for_clean(&fragments, 0), 1);
@@ -206,6 +325,7 @@ fn expanded_code_cursor_offset_keeps_plain_text_boundaries() {
             link: None,
             footnote: None,
             math: None,
+            image: false,
         },
         InlineFragment {
             text: "bc".to_string(),
@@ -217,6 +337,7 @@ fn expanded_code_cursor_offset_keeps_plain_text_boundaries() {
             link: None,
             footnote: None,
             math: None,
+            image: false,
         },
     ];
 
@@ -242,6 +363,7 @@ fn typing_inside_manual_backticks_keeps_cursor_inside_code_span() {
             link: None,
             footnote: None,
             math: None,
+            image: false,
         }]
     );
 

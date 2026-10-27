@@ -634,11 +634,22 @@ impl BlockRecord {
         )
     }
 
-    /// Serializes this block's own Markdown, including nested indentation and
-    /// numbered-list ordinal. Multi-line titles may produce multiple lines;
-    /// raw-preserved blocks use their fallback source when available.
-    pub fn markdown_line(&self, depth: usize, list_ordinal: Option<usize>) -> String {
-        let indentation = "  ".repeat(depth);
+    /// Width of the list marker and separator before a child or continuation.
+    pub(crate) fn list_content_indent(&self, list_ordinal: Option<usize>) -> usize {
+        match self.kind {
+            BlockKind::NumberedListItem => list_ordinal.unwrap_or(1).to_string().len() + 2,
+            BlockKind::BulletedListItem | BlockKind::TaskListItem { .. } => 2,
+            _ => 0,
+        }
+    }
+
+    /// Serializes with an exact source indentation, independent of visual depth.
+    pub(crate) fn markdown_line(
+        &self,
+        indent_columns: usize,
+        list_ordinal: Option<usize>,
+    ) -> String {
+        let indentation = " ".repeat(indent_columns);
         let title_markdown = self.title_markdown_for_output();
         match self.kind {
             BlockKind::Paragraph => indent_multiline(&title_markdown, &indentation),
@@ -664,7 +675,7 @@ impl BlockRecord {
                 prefixed_multiline(
                     &title_markdown,
                     &format!("{indentation}{ordinal}. "),
-                    &format!("{indentation}   "),
+                    &" ".repeat(indent_columns + self.list_content_indent(list_ordinal)),
                 )
             }
             BlockKind::Quote => prefixed_multiline(
@@ -686,7 +697,7 @@ impl BlockRecord {
             | BlockKind::HtmlBlock
             | BlockKind::MathBlock
             | BlockKind::MermaidBlock => {
-                if depth == 0 {
+                if indent_columns == 0 {
                     self.raw_fallback.clone().unwrap_or(title_markdown)
                 } else {
                     indent_multiline(
@@ -700,7 +711,7 @@ impl BlockRecord {
 
     /// Uses visible text for a lone image when inline serialization would
     /// reinterpret characters in its Markdown target.
-    fn title_markdown_for_output(&self) -> String {
+    pub(crate) fn title_markdown_for_output(&self) -> String {
         let visible = self.title.visible_text();
         if self.can_present_title_as_standalone_image()
             && parse_standalone_image(&visible).is_some()
@@ -801,6 +812,8 @@ pub enum BlockEvent {
         /// Whether this block has already retained its leading text.
         source_already_mutated: bool,
     },
+    /// Insert an empty paragraph before this block, keeping focus on this block.
+    RequestInsertParagraphBefore,
     /// The user pressed Enter on a callout header; the editor should ensure
     /// the callout owns a body entry and move focus into it.
     RequestEnterCalloutBody,
@@ -1131,17 +1144,17 @@ mod tests {
         let comment = BlockRecord::comment("<!--\ncomment\n-->");
 
         assert_eq!(list.markdown_line(0, None), "- *item*");
-        assert_eq!(list.markdown_line(2, None), "    - *item*");
+        assert_eq!(list.markdown_line(4, None), "    - *item*");
         assert_eq!(task.markdown_line(0, None), "- [x] done");
-        assert_eq!(task.markdown_line(2, None), "    - [x] done");
+        assert_eq!(task.markdown_line(4, None), "    - [x] done");
         assert_eq!(numbered.markdown_line(0, Some(3)), "3. step");
-        assert_eq!(numbered.markdown_line(2, Some(12)), "    12. step");
+        assert_eq!(numbered.markdown_line(4, Some(12)), "    12. step");
         assert_eq!(heading.markdown_line(0, None), "## **title**");
         assert_eq!(quote.markdown_line(0, None), "> quoted text");
-        assert_eq!(quote.markdown_line(2, None), "    > quoted text");
-        assert_eq!(paragraph.markdown_line(1, None), "  plain");
+        assert_eq!(quote.markdown_line(4, None), "    > quoted text");
+        assert_eq!(paragraph.markdown_line(2, None), "  plain");
         assert_eq!(comment.markdown_line(0, None), "<!--\ncomment\n-->");
-        assert_eq!(comment.markdown_line(1, None), "  <!--\n  comment\n  -->");
+        assert_eq!(comment.markdown_line(2, None), "  <!--\n  comment\n  -->");
     }
 
     #[test]

@@ -10,9 +10,17 @@ use super::{
     UndoSelectionSnapshot, ViewMode,
 };
 use crate::components::{
-    Block, BlockKind, Copy, Cut, Delete, DeleteBack, UndoCaptureKind,
-    serialize_table_markdown_lines,
+    Block, BlockKind, Copy, Cut, Delete, DeleteBack, FocusNext, FocusPrev, MoveLeft, MoveRight,
+    SelectDown, SelectLeft, SelectRight, SelectUp, UndoCaptureKind, serialize_table_markdown_lines,
 };
+
+#[derive(Clone, Copy)]
+enum SelectionDirection {
+    Left,
+    Right,
+    Up,
+    Down,
+}
 
 /// Cross-block selection with endpoints ordered by visible block position.
 #[derive(Clone, Copy)]
@@ -30,6 +38,386 @@ struct NormalizedCrossBlockSelection {
 }
 
 impl Editor {
+    pub(super) fn on_move_left_selection_capture(
+        &mut self,
+        _: &MoveLeft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.collapse_cross_block_selection_for_arrow(true, window, cx)
+            && !self.move_across_block_boundary(true, window, cx)
+        {
+            cx.propagate();
+        }
+    }
+
+    pub(super) fn on_move_right_selection_capture(
+        &mut self,
+        _: &MoveRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.collapse_cross_block_selection_for_arrow(false, window, cx)
+            && !self.move_across_block_boundary(false, window, cx)
+        {
+            cx.propagate();
+        }
+    }
+
+    /// Transfers a horizontal caret at a block edge to the adjacent block.
+    fn move_across_block_boundary(
+        &mut self,
+        backward: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.view_mode != ViewMode::Rendered {
+            return false;
+        }
+        let Some(current) = self.focused_edit_target(window, cx) else {
+            return false;
+        };
+        let block = current.read(cx);
+        if block.code_language_focus_handle.is_focused(window) || !block.selected_range.is_empty() {
+            return false;
+        }
+        let offset = block.cursor_offset();
+        let at_edge = if backward {
+            offset == 0 && block.projected_move_left_target(offset).is_none()
+        } else {
+            offset == block.visible_len() && block.projected_move_right_target(offset).is_none()
+        };
+        if !at_edge {
+            return false;
+        }
+        // Table cells retain their own horizontal navigation handlers.
+        let Some(index) = self
+            .document
+            .visible_index_for_entity_id(current.entity_id())
+        else {
+            return false;
+        };
+        let target_index = if backward {
+            index.checked_sub(1)
+        } else {
+            index.checked_add(1)
+        };
+        let Some(mut target) = target_index
+            .and_then(|index| self.document.visible_blocks().get(index))
+            .map(|visible| visible.entity.clone())
+        else {
+            return false;
+        };
+        if target.read(cx).kind() == BlockKind::Table {
+            let Some(runtime) = target.read(cx).table_runtime.clone() else {
+                return false;
+            };
+            let cell = if backward {
+                runtime.rows.last().unwrap_or(&runtime.header).last()
+            } else {
+                runtime.header.first()
+            };
+            let Some(cell) = cell else {
+                return false;
+            };
+            target = cell.clone();
+        }
+        current.update(cx, |block, cx| {
+            block.sync_inline_projection_for_focus(false);
+            cx.notify();
+        });
+        target.update(cx, |block, cx| {
+            let offset = if backward { block.visible_len() } else { 0 };
+            block.move_to(offset, cx);
+            block.sync_inline_projection_for_focus(true);
+        });
+        self.focus_block(target.entity_id());
+        cx.stop_propagation();
+        cx.notify();
+        true
+    }
+
+    pub(super) fn on_focus_prev_selection_capture(
+        &mut self,
+        _: &FocusPrev,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.collapse_cross_block_selection_for_arrow(true, window, cx) {
+            cx.propagate();
+        }
+    }
+
+    pub(super) fn on_focus_next_selection_capture(
+        &mut self,
+        _: &FocusNext,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.collapse_cross_block_selection_for_arrow(false, window, cx) {
+            cx.propagate();
+        }
+    }
+
+    /// An unmodified arrow collapses the document selection toward that edge.
+    fn collapse_cross_block_selection_for_arrow(
+        &mut self,
+        backward: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(selection) = self.normalized_cross_block_selection(cx) else {
+            return false;
+        };
+        let endpoint = if backward {
+            selection.start
+        } else {
+            selection.end
+        };
+        let Some(target) = self.document.block_entity_by_id(endpoint.entity_id) else {
+            return false;
+        };
+        if let Some(previous) = self.focused_edit_target(window, cx)
+            && previous.entity_id() != target.entity_id()
+        {
+            previous.update(cx, |block, cx| {
+                block.sync_inline_projection_for_focus(false);
+                cx.notify();
+            });
+        }
+        self.clear_cross_block_selection(cx);
+        target.update(cx, |block, cx| {
+            block.move_to(endpoint.offset, cx);
+            block.sync_inline_projection_for_focus(true);
+        });
+        self.focus_block(target.entity_id());
+        cx.stop_propagation();
+        cx.notify();
+        true
+    }
+
+    /// Extends a rendered selection across block boundaries. Block-local
+    /// actions keep handling ordinary selection, source text and table cells.
+    fn extend_keyboard_selection(
+        &mut self,
+        direction: SelectionDirection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.view_mode != ViewMode::Rendered {
+            return false;
+        }
+        let Some(focused) = self.focused_edit_target(window, cx) else {
+            return false;
+        };
+        if focused
+            .read(cx)
+            .code_language_focus_handle
+            .is_focused(window)
+            || self
+                .document
+                .visible_index_for_entity_id(focused.entity_id())
+                .is_none()
+        {
+            return false;
+        }
+
+        let (anchor, focus) = if let Some(selection) = self.cross_block_selection {
+            (selection.anchor, selection.focus)
+        } else {
+            let block = focused.read(cx);
+            let anchor = if block.selection_reversed {
+                block.selected_range.end
+            } else {
+                block.selected_range.start
+            };
+            (
+                CrossBlockSelectionEndpoint {
+                    entity_id: focused.entity_id(),
+                    offset: anchor,
+                },
+                CrossBlockSelectionEndpoint {
+                    entity_id: focused.entity_id(),
+                    offset: block.cursor_offset(),
+                },
+            )
+        };
+        let Some(current) = self.document.block_entity_by_id(focus.entity_id) else {
+            return false;
+        };
+        let vertical = matches!(direction, SelectionDirection::Up | SelectionDirection::Down);
+        let backward = matches!(direction, SelectionDirection::Left | SelectionDirection::Up);
+        // Mouse selections can leave keyboard focus at the anchor. Movement
+        // must continue from the selection's active endpoint instead.
+        if self.cross_block_selection.is_some() {
+            current.update(cx, |block, cx| {
+                block.move_to_with_preferred_x(focus.offset, block.vertical_motion_x, cx);
+            });
+        }
+        let preferred_x = vertical.then(|| current.read(cx).vertical_anchor_x());
+        let local_target = {
+            let block = current.read(cx);
+            match direction {
+                SelectionDirection::Left => {
+                    let offset = block
+                        .projected_move_left_target(focus.offset)
+                        .map(|(offset, _)| offset)
+                        .unwrap_or_else(|| block.previous_boundary(focus.offset));
+                    (offset != focus.offset).then_some(offset)
+                }
+                SelectionDirection::Right => {
+                    let offset = block
+                        .projected_move_right_target(focus.offset)
+                        .map(|(offset, _)| offset)
+                        .unwrap_or_else(|| block.next_boundary(focus.offset));
+                    (offset != focus.offset).then_some(offset)
+                }
+                SelectionDirection::Up => block.vertical_cursor_target(-1, preferred_x.unwrap()),
+                SelectionDirection::Down => block.vertical_cursor_target(1, preferred_x.unwrap()),
+            }
+        };
+        if self.cross_block_selection.is_none() && local_target.is_some() {
+            return false;
+        }
+        let (target, target_offset) = if let Some(offset) = local_target {
+            (current.clone(), offset)
+        } else {
+            let visible = self.document.visible_blocks();
+            let Some(index) = self.document.visible_index_for_entity_id(focus.entity_id) else {
+                return false;
+            };
+            let neighbor = if backward {
+                visible[..index].iter().rev().find(|v| {
+                    let block = v.entity.read(cx);
+                    block.kind() != BlockKind::Table && !Self::is_empty_root_paragraph(block)
+                })
+            } else {
+                visible[index + 1..].iter().find(|v| {
+                    let block = v.entity.read(cx);
+                    block.kind() != BlockKind::Table && !Self::is_empty_root_paragraph(block)
+                })
+            };
+            if let Some(neighbor) = neighbor {
+                let target = neighbor.entity.clone();
+                let offset = if vertical {
+                    target
+                        .read(cx)
+                        .entry_offset_for_vertical_focus(backward, preferred_x)
+                } else if backward {
+                    target.read(cx).visible_len()
+                } else {
+                    0
+                };
+                (target, offset)
+            } else if self.cross_block_selection.is_some() {
+                let offset = if backward {
+                    0
+                } else {
+                    current.read(cx).visible_len()
+                };
+                (current.clone(), offset)
+            } else {
+                return false;
+            }
+        };
+
+        // Preserve endpoints in Markdown coordinates while focus changes the
+        // inline projection (for example, revealing a bold span's ** markers).
+        let mappings = self.source_mapping_by_entity_id(cx);
+        let Some(anchor_source) = self.endpoint_source_offset(anchor, &mappings, cx) else {
+            return false;
+        };
+        self.clear_cross_block_selection(cx);
+        if focused.entity_id() != target.entity_id() {
+            focused.update(cx, |block, cx| {
+                block.sync_inline_projection_for_focus(false);
+                cx.notify();
+            });
+        }
+        if current.entity_id() != focused.entity_id() && current.entity_id() != target.entity_id() {
+            current.update(cx, |block, cx| {
+                block.sync_inline_projection_for_focus(false);
+                cx.notify();
+            });
+        }
+        target.update(cx, |block, cx| {
+            block.move_to(target_offset, cx);
+            block.sync_inline_projection_for_focus(true);
+            block.vertical_motion_x = preferred_x;
+        });
+        let mappings = self.build_source_target_mappings(cx);
+        let Some(anchor) = self.endpoint_for_source_offset(anchor_source, &mappings, cx) else {
+            return false;
+        };
+        // The active caret already retains its projected delimiter affinity.
+        // A Markdown round trip here could snap an outer ** boundary back
+        // inside the span and make repeated Shift+Right stall there.
+        let focus = CrossBlockSelectionEndpoint {
+            entity_id: target.entity_id(),
+            offset: target.read(cx).cursor_offset(),
+        };
+        if anchor.entity_id == focus.entity_id {
+            target.update(cx, |block, cx| {
+                block.move_to(anchor.offset, cx);
+                block.select_to(focus.offset, cx);
+                block.sync_inline_projection_for_focus(true);
+                block.vertical_motion_x = preferred_x;
+            });
+        } else {
+            self.cross_block_selection = Some(CrossBlockSelection { anchor, focus });
+            self.sync_cross_block_selection_visuals(cx);
+        }
+        self.rendered_select_all_cycle = None;
+        self.focus_block(target.entity_id());
+        cx.stop_propagation();
+        cx.notify();
+        true
+    }
+
+    pub(super) fn on_select_left_capture(
+        &mut self,
+        _: &SelectLeft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.extend_keyboard_selection(SelectionDirection::Left, window, cx) {
+            cx.propagate();
+        }
+    }
+
+    pub(super) fn on_select_right_capture(
+        &mut self,
+        _: &SelectRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.extend_keyboard_selection(SelectionDirection::Right, window, cx) {
+            cx.propagate();
+        }
+    }
+
+    pub(super) fn on_select_up_capture(
+        &mut self,
+        _: &SelectUp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.extend_keyboard_selection(SelectionDirection::Up, window, cx) {
+            cx.propagate();
+        }
+    }
+
+    pub(super) fn on_select_down_capture(
+        &mut self,
+        _: &SelectDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.extend_keyboard_selection(SelectionDirection::Down, window, cx) {
+            cx.propagate();
+        }
+    }
+
     /// Clears per-block selection highlights and reports whether any changed.
     fn clear_cross_block_selection_visuals(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
@@ -152,6 +540,10 @@ impl Editor {
 
     /// Copies and removes a cross-block selection or delegates to the focused block.
     pub(super) fn on_cut_capture(&mut self, _: &Cut, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.writing.read_only {
+            cx.stop_propagation();
+            return;
+        }
         let Some(markdown) = self.cross_block_selected_markdown(cx) else {
             cx.propagate();
             return;
@@ -168,6 +560,10 @@ impl Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.writing.read_only {
+            cx.stop_propagation();
+            return;
+        }
         if !self.delete_cross_block_selection(cx) {
             cx.propagate();
             return;
@@ -182,6 +578,10 @@ impl Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.writing.read_only {
+            cx.stop_propagation();
+            return;
+        }
         if !self.delete_cross_block_selection(cx) {
             cx.propagate();
             return;
@@ -363,6 +763,28 @@ impl Editor {
         if start_index == end_index {
             return false;
         }
+
+        // Focusing a formatted endpoint can expand its Markdown delimiters.
+        // Recompute display offsets after that expansion so the restored range
+        // still covers the same source text when typing or deleting next.
+        let focus_id = if snapshot.reversed {
+            start.entity_id
+        } else {
+            end.entity_id
+        };
+        if let Some(block) = self.document.block_entity_by_id(focus_id) {
+            block.update(cx, |block, cx| {
+                block.sync_inline_projection_for_focus(true);
+                cx.notify();
+            });
+        }
+        let Some(start) = self.endpoint_for_source_offset(snapshot.range.start, &mappings, cx)
+        else {
+            return false;
+        };
+        let Some(end) = self.endpoint_for_source_offset(snapshot.range.end, &mappings, cx) else {
+            return false;
+        };
 
         self.cross_block_selection = Some(if snapshot.reversed {
             CrossBlockSelection {
@@ -575,7 +997,13 @@ impl Editor {
         let block = mapping.entity.read(cx);
         Some(CrossBlockSelectionEndpoint {
             entity_id: mapping.entity.entity_id(),
-            offset: block.markdown_offset_to_current_offset(content_offset),
+            offset: if offset <= mapping.full_source_range.start {
+                0
+            } else if offset >= mapping.full_source_range.end {
+                block.visible_len()
+            } else {
+                block.markdown_offset_to_current_offset(content_offset)
+            },
         })
     }
 
@@ -687,6 +1115,9 @@ impl Editor {
         undo_kind: UndoCaptureKind,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.writing.read_only {
+            return false;
+        }
         let Some(selection) = self.normalized_cross_block_selection(cx) else {
             return false;
         };
@@ -823,32 +1254,38 @@ impl Editor {
     ) -> String {
         if let Some(mapping) = mappings.get(&entity.entity_id()) {
             if full_block {
-                return source[mapping.full_source_range.clone()].to_string();
+                if let Some(chunk) = source.get(mapping.full_source_range.clone()) {
+                    return chunk.to_string();
+                }
+            } else {
+                let start = self
+                    .endpoint_source_offset(
+                        CrossBlockSelectionEndpoint {
+                            entity_id: entity.entity_id(),
+                            offset: range.start,
+                        },
+                        mappings,
+                        cx,
+                    )
+                    .unwrap_or(mapping.full_source_range.start);
+                let end = self
+                    .endpoint_source_offset(
+                        CrossBlockSelectionEndpoint {
+                            entity_id: entity.entity_id(),
+                            offset: range.end,
+                        },
+                        mappings,
+                        cx,
+                    )
+                    .unwrap_or(mapping.full_source_range.end);
+                if let Some(chunk) = source.get(start.min(end)..start.max(end)) {
+                    return chunk.to_string();
+                }
             }
-
-            let start = self
-                .endpoint_source_offset(
-                    CrossBlockSelectionEndpoint {
-                        entity_id: entity.entity_id(),
-                        offset: range.start,
-                    },
-                    mappings,
-                    cx,
-                )
-                .unwrap_or(mapping.full_source_range.start);
-            let end = self
-                .endpoint_source_offset(
-                    CrossBlockSelectionEndpoint {
-                        entity_id: entity.entity_id(),
-                        offset: range.end,
-                    },
-                    mappings,
-                    cx,
-                )
-                .unwrap_or(mapping.full_source_range.end);
-            return source[start.min(end)..start.max(end)].to_string();
         }
 
+        // A stale or inconsistent source mapping must not abort rendering the
+        // selection word count. Serialize this block directly as a fallback.
         let block = entity.read(cx);
         if full_block {
             return match block.kind() {
@@ -859,9 +1296,11 @@ impl Editor {
                     .map(serialize_table_markdown_lines)
                     .map(|lines| lines.join("\n"))
                     .unwrap_or_default(),
-                _ => block
-                    .record
-                    .markdown_line(block.render_depth, block.list_ordinal),
+                _ => block.record.markdown_line(
+                    self.document
+                        .source_indent_for_entity_id(entity.entity_id(), cx),
+                    block.list_ordinal,
+                ),
             };
         }
 
@@ -932,8 +1371,10 @@ impl Editor {
             let full_markdown = block.record.title.serialize_markdown();
             let start = markdown_range.start.min(full_markdown.len());
             let end = markdown_range.end.min(full_markdown.len());
-            if start < end {
-                return Some(full_markdown[start..end].to_owned());
+            if start < end
+                && let Some(selected) = full_markdown.get(start..end)
+            {
+                return Some(selected.to_owned());
             }
         }
 
@@ -1002,6 +1443,60 @@ mod tests {
                 ));
             });
         }
+    }
+
+    #[test]
+    fn selection_after_loose_and_nested_lists_matches_document_source() {
+        let mut cx = TestAppContext::single();
+        init_editor_test_app(&mut cx);
+        let suffix = "### 文档末尾\n\n**中文**😀结尾\n\n最后一段";
+        for prefix in [
+            "- alpha\n\n- beta\n\n",
+            "1. alpha\n\n   `chrome://flags`\n\n2. beta\n\n",
+            "- alpha\n\n- beta\n\n1. gamma\n\n   后续段落\n\n2. delta\n\n",
+        ] {
+            let editor = cx.new(|cx| Editor::from_markdown(cx, format!("{prefix}{suffix}"), None));
+            editor.update(&mut cx, |editor, cx| {
+                let source = editor.current_document_source(cx);
+                for mapping in editor.build_source_target_mappings(cx) {
+                    let block = mapping.entity.read(cx);
+                    let expected = block.record.markdown_line(
+                        editor
+                            .document
+                            .source_indent_for_entity_id(mapping.entity.entity_id(), cx),
+                        block.list_ordinal,
+                    );
+                    assert_eq!(
+                        source.get(mapping.full_source_range.clone()),
+                        Some(expected.as_str()),
+                        "{prefix:?}: {:?}",
+                        mapping.full_source_range
+                    );
+                }
+
+                let visible = editor.document.visible_blocks().to_vec();
+                let end = visible.len() - 1;
+                let start = end - 2;
+                let end_len = visible[end].entity.read(cx).visible_len();
+                for reversed in [false, true] {
+                    if reversed {
+                        set_selection(editor, end, end_len, start, 0, cx);
+                    } else {
+                        set_selection(editor, start, 0, end, end_len, cx);
+                    }
+                    assert_eq!(editor.selected_markdown_text(cx).as_deref(), Some(suffix));
+                }
+                // Select Chinese scalars inside both boundary blocks, then
+                // exercise the same mapped source span used by cut/delete.
+                set_selection(editor, start + 1, 3, end, 6, cx);
+                let selected = editor.cross_block_selected_markdown(cx).unwrap();
+                assert!(selected.contains('😀'));
+                assert!(selected.ends_with("最后"));
+                assert!(editor.delete_cross_block_selection(cx));
+                assert!(!editor.current_document_source(cx).contains('😀'));
+            });
+        }
+        cx.quit();
     }
 
     #[test]
@@ -1123,10 +1618,10 @@ mod tests {
 
     #[test]
     fn cross_block_cut_writes_markdown_deletes_range_and_undo_restores() {
-        let mut cx = TestAppContext::single();
-        init_editor_test_app(&mut cx);
+        let mut test_cx = TestAppContext::single();
+        init_editor_test_app(&mut test_cx);
         let original = "alpha\n\nbeta\n\ngamma";
-        let (editor, cx) = cx.add_window_view({
+        let (editor, cx) = test_cx.add_window_view({
             let original = original.to_string();
             move |_window, cx| Editor::from_markdown(cx, original.clone(), None)
         });
@@ -1168,7 +1663,8 @@ mod tests {
                 Some("pha\n\nbeta\n\nga")
             );
         });
-        cx.quit();
+        // Shut down through the owner: the visual context is released by this call.
+        test_cx.quit();
     }
 
     const TABLE_DOC: &str = "alpha\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\ngamma";

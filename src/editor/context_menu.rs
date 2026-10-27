@@ -278,6 +278,10 @@ impl Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.writing.search_open {
+            self.close_search(cx);
+        }
+        self.writing.statistics_open = false;
         self.dismiss_contextual_overlays(cx);
     }
 
@@ -308,6 +312,9 @@ impl Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.writing.read_only {
+            return;
+        }
         let Some(ContextMenuState::Insert { target, .. }) = self.context_menu.take() else {
             return;
         };
@@ -389,6 +396,9 @@ impl Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.writing.read_only {
+            return;
+        }
         let Some(dialog) = self.table_insert_dialog.take() else {
             return;
         };
@@ -477,6 +487,9 @@ impl Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.writing.read_only {
+            return;
+        }
         // Left is the default, so emit the unmarked `---` form rather than an
         // explicit `:---`; an explicit colon is only kept when the source had
         // one. This keeps the menu's output unchanged from before.
@@ -490,6 +503,9 @@ impl Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.writing.read_only {
+            return;
+        }
         self.on_apply_column_alignment(TableColumnAlignment::Center, cx);
     }
 
@@ -500,6 +516,9 @@ impl Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.writing.read_only {
+            return;
+        }
         self.on_apply_column_alignment(TableColumnAlignment::Right, cx);
     }
 
@@ -510,6 +529,9 @@ impl Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.writing.read_only {
+            return;
+        }
         let Some(selection) = self.active_axis_menu_selection() else {
             return;
         };
@@ -530,6 +552,9 @@ impl Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.writing.read_only {
+            return;
+        }
         let Some(selection) = self.active_axis_menu_selection() else {
             return;
         };
@@ -560,6 +585,9 @@ impl Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.writing.read_only {
+            return;
+        }
         let Some(selection) = self.active_axis_menu_selection() else {
             return;
         };
@@ -580,6 +608,9 @@ impl Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.writing.read_only {
+            return;
+        }
         let Some(selection) = self.active_axis_menu_selection() else {
             return;
         };
@@ -610,6 +641,9 @@ impl Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.writing.read_only {
+            return;
+        }
         let Some(selection) = self.active_axis_menu_selection() else {
             return;
         };
@@ -647,6 +681,9 @@ impl Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.writing.read_only {
+            return;
+        }
         let next = !crate::config::EditorSettings::show_table_headers(cx);
         crate::config::EditorSettings::set_show_table_headers(cx, next);
         self.close_context_menu(cx);
@@ -662,6 +699,9 @@ impl Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.writing.read_only {
+            return;
+        }
         let Some(selection) = self.active_axis_menu_selection() else {
             return;
         };

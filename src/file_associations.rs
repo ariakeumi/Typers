@@ -258,7 +258,7 @@ mod platform {
             &format!("\"{shell_path}\",0"),
         )?;
         let capabilities = "Software\\Velotype\\Capabilities";
-        set_value(capabilities, "ApplicationName", "Velotype")?;
+        set_value(capabilities, "ApplicationName", "Typers")?;
         set_value(capabilities, "ApplicationDescription", "Markdown editor")?;
         for extension in EXTENSIONS {
             set_value(
@@ -391,7 +391,7 @@ fn desktop_entry(executable: &std::path::Path) -> Result<String> {
     // Desktop value escaping precedes Exec argument parsing, so backslashes need a second layer.
     let command = format!("Exec={} -- %F", quoted.replace('\\', "\\\\"));
     Ok(
-        include_str!("../resources/linux/com.manyougz.Velotype.desktop")
+        include_str!("../resources/linux/com.ariakeumi.Typers.desktop")
             .replace("Exec=velotype %F", &command),
     )
 }
@@ -405,7 +405,7 @@ mod platform {
         time::{Duration, Instant},
     };
     const MIME_TYPES: [&str; 2] = ["text/markdown", "text/x-markdown"];
-    const DESKTOP_ID: &str = "com.manyougz.Velotype.desktop";
+    const DESKTOP_ID: &str = "com.ariakeumi.Typers.desktop";
 
     fn xdg_mime(args: &[&str]) -> Result<String> {
         let mut child = Command::new("xdg-mime")
@@ -462,7 +462,7 @@ mod platform {
 #[cfg(target_os = "macos")]
 mod platform {
     use super::*;
-    use crate::app_identity::VELOTYPE_APP_ID;
+    use crate::app_identity::APP_ID;
     use std::{ffi::c_void, ptr};
 
     #[link(name = "CoreFoundation", kind = "framework")]
@@ -534,7 +534,7 @@ mod platform {
     }
 
     pub(super) fn is_associated() -> Result<bool> {
-        let application = OwnedCf::string(VELOTYPE_APP_ID)?;
+        let application = OwnedCf::string(APP_ID)?;
         for content in markdown_types()? {
             let handler = unsafe { LSCopyDefaultRoleHandlerForContentType(content.0, u32::MAX) };
             if handler.is_null() {
@@ -553,7 +553,7 @@ mod platform {
         let bundle = executable
             .ancestors()
             .find(|path| path.extension().is_some_and(|ext| ext == "app"))
-            .context("run Velotype from its .app bundle to associate Markdown files")?;
+            .context("run Typers from its .app bundle to associate Markdown files")?;
         let path = OwnedCf::string(
             bundle
                 .to_str()
@@ -565,7 +565,7 @@ mod platform {
             unsafe { LSRegisterURL(url.0, 1) } == 0,
             "cannot register the application bundle"
         );
-        let application = OwnedCf::string(VELOTYPE_APP_ID)?;
+        let application = OwnedCf::string(APP_ID)?;
         for content in markdown_types()? {
             let status = unsafe {
                 LSSetDefaultRoleHandlerForContentType(content.0, u32::MAX, application.0)

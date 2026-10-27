@@ -1180,7 +1180,7 @@ mod tests {
         let html = render_html("# Title\n\ntext", &Theme::light_theme(), "Doc");
 
         assert!(html.contains("color-scheme: light;"));
-        assert!(html.contains("--vlt-bg: rgba(247,248,251,1.000);"));
+        assert!(html.contains("--vlt-bg: rgba(255,255,255,1.000);"));
         assert!(!html.contains("color-scheme: dark;"));
     }
 

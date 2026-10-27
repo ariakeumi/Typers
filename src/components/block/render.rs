@@ -192,7 +192,9 @@ fn visible_quote_guides(block: &Block) -> usize {
 
 /// Budgets native table width inside the centered column and quote insets.
 fn effective_table_width(block: &Block, viewport_width: f32, d: &ThemeDimensions) -> f32 {
-    let centered_width = Editor::centered_column_width(viewport_width, d);
+    let centered_width = block
+        .document_column_width
+        .unwrap_or_else(|| Editor::centered_column_width(viewport_width, d));
     let visible_quote_guides = visible_quote_guides(block);
     let quote_inset = d.quote_padding_left * visible_quote_guides as f32;
     let callout_inset = if block.callout_depth > 0 {
@@ -207,7 +209,9 @@ fn effective_table_width(block: &Block, viewport_width: f32, d: &ThemeDimensions
 
 /// Returns the centered-column width left after quote and callout insets.
 fn container_image_width_budget(block: &Block, viewport_width: f32, d: &ThemeDimensions) -> f32 {
-    let centered_width = Editor::centered_column_width(viewport_width, d);
+    let centered_width = block
+        .document_column_width
+        .unwrap_or_else(|| Editor::centered_column_width(viewport_width, d));
     let visible_quote_guides = visible_quote_guides(block);
     let quote_inset = d.quote_padding_left * visible_quote_guides as f32;
     let callout_inset = if block.callout_depth > 0 {
@@ -605,7 +609,7 @@ impl Block {
             return div()
                 .w_full()
                 .text_size(px(t.text_size))
-                .line_height(rems(t.text_line_height))
+                .line_height(px(t.text_size * t.text_line_height))
                 .text_color(c.text_default)
                 .child(SharedString::from(raw.to_string()))
                 .into_any_element();
@@ -635,7 +639,7 @@ impl Block {
                 .px(px(d.block_padding_x))
                 .py(px(d.block_padding_y))
                 .text_size(px(t.text_size))
-                .line_height(rems(t.text_line_height))
+                .line_height(px(t.text_size * t.text_line_height))
                 .text_color(c.text_default)
                 .child(SharedString::from(raw.to_string()))
                 .child(
@@ -663,7 +667,7 @@ impl Block {
             return div()
                 .w_full()
                 .text_size(px(t.text_size))
-                .line_height(rems(t.text_line_height))
+                .line_height(px(t.text_size * t.text_line_height))
                 .text_color(c.text_default)
                 .child(SharedString::from(raw.to_string()))
                 .into_any_element();
@@ -717,7 +721,7 @@ impl Block {
                 .px(px(d.block_padding_x))
                 .py(px(d.block_padding_y))
                 .text_size(px(t.text_size))
-                .line_height(rems(t.text_line_height))
+                .line_height(px(t.text_size * t.text_line_height))
                 .text_color(c.text_default)
                 .child(SharedString::from(raw.to_string()))
                 .child(
@@ -799,7 +803,12 @@ impl Block {
             .items_center()
             .gap(px(0.0))
             .text_size(px(font_size))
-            .line_height(rems(theme.typography.text_line_height))
+            .line_height(px(font_size
+                * if matches!(self.kind(), BlockKind::Heading { .. }) {
+                    1.4
+                } else {
+                    theme.typography.text_line_height
+                }))
             .children(self.render_inline_tree_children(
                 tree,
                 theme,
@@ -835,6 +844,7 @@ impl Block {
                     link: None,
                     footnote: None,
                     math: None,
+                    image: false,
                 };
                 children.extend(self.render_inline_text_word_segments(
                     &text[cursor..span.range.start],
@@ -848,7 +858,11 @@ impl Block {
             }
 
             let span_text = &text[span.range.clone()];
-            if let Some(math) = span.math.as_ref() {
+            if span.image
+                && let Some(image) = self.render_inline_image_segment(span_text, span, theme, cx)
+            {
+                children.push(image);
+            } else if let Some(math) = span.math.as_ref() {
                 children.push(
                     self.render_inline_math_segment(math, span, theme, base_color, font_size, cx),
                 );
@@ -874,6 +888,7 @@ impl Block {
                 link: None,
                 footnote: None,
                 math: None,
+                image: false,
             };
             children.extend(self.render_inline_text_word_segments(
                 &text[cursor..],
@@ -964,7 +979,9 @@ impl Block {
         let mut element = div()
             .min_w(px(0.0))
             .text_size(px(display_font_size))
-            .line_height(rems(theme.typography.text_line_height))
+            .line_height(px(
+                theme.typography.text_size * theme.typography.text_line_height
+            ))
             .text_color(color)
             .font_weight(if span.style.bold {
                 FontWeight::BOLD
@@ -1068,6 +1085,53 @@ impl Block {
     }
 
     /// Renders a compact image suitable for a native table cell.
+    fn render_inline_image_segment(
+        &self,
+        source: &str,
+        span: &crate::components::InlineSpan,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let syntax = crate::components::parse_standalone_image(source)?;
+        let runtime = self.image_runtime_for_syntax(syntax)?;
+        let strings = cx.global::<I18nManager>().strings().clone();
+        let image = self.render_inline_image_content(&runtime, theme, &strings);
+        Some(self.render_linked_inline_content(image, span.link.as_ref(), cx))
+    }
+
+    /// Uses the same follow gesture for image links and text links.
+    fn render_linked_inline_content(
+        &self,
+        content: AnyElement,
+        link: Option<&InlineLinkHit>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(link) = link.cloned() else {
+            return content;
+        };
+        LinkFollowCursor {
+            child: div()
+                .flex()
+                .items_center()
+                .child(content)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(Self::on_rendered_link_mouse_down),
+                )
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(move |block, event: &MouseUpEvent, _window, cx| {
+                        if event.modifiers.secondary() {
+                            block.open_rendered_link(&link, cx);
+                        }
+                    }),
+                )
+                .into_any_element(),
+        }
+        .into_any_element()
+    }
+
+    /// Renders a compact image suitable for a native table cell or text run.
     fn render_inline_image_content(
         &self,
         runtime: &ImageRuntime,
@@ -1200,7 +1264,9 @@ impl Block {
                 .items_center()
                 .gap(px(6.0))
                 .text_size(px(theme.typography.text_size))
-                .line_height(rems(theme.typography.text_line_height))
+                .line_height(px(
+                    theme.typography.text_size * theme.typography.text_line_height
+                ))
                 .children(children)
                 .into_any_element(),
         )
@@ -1297,7 +1363,7 @@ impl Block {
                 .flex_wrap()
                 .items_center()
                 .text_size(px(inherited_style.font_size))
-                .line_height(rems(t.text_line_height))
+                .line_height(px(t.text_size * t.text_line_height))
                 .children(self.render_inline_tree_children(
                     tree,
                     theme,
@@ -1893,6 +1959,8 @@ impl Block {
             .on_action(cx.listener(Self::on_block_down))
             .on_action(cx.listener(Self::on_select_left))
             .on_action(cx.listener(Self::on_select_right))
+            .on_action(cx.listener(Self::on_select_up))
+            .on_action(cx.listener(Self::on_select_down))
             .on_action(cx.listener(Self::on_word_select_left))
             .on_action(cx.listener(Self::on_word_select_right))
             .on_action(cx.listener(Self::on_select_home))
@@ -1944,7 +2012,7 @@ impl Focusable for Block {
 impl Render for Block {
     /// Builds the block-kind-specific element tree and interaction shell.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let focused = self.focus_handle.is_focused(window);
+        let focused = self.focus_handle.is_focused(window) && !self.read_only;
         let code_language_focused = self.code_language_focus_handle.is_focused(window);
         let input_active = focused || code_language_focused;
         if self.sync_image_focus_state(focused) {
@@ -1958,9 +2026,10 @@ impl Render for Block {
         // same way script spans already behave.
         self.sync_inline_projection_for_focus(focused && !showing_rendered_image);
 
-        if input_active && self.cursor_blink_task.is_none() {
+        let blink_active = input_active && window.is_window_active();
+        if blink_active && self.cursor_blink_task.is_none() {
             self.start_cursor_blink(cx);
-        } else if !input_active && self.cursor_blink_task.is_some() {
+        } else if !blink_active && self.cursor_blink_task.is_some() {
             self.cursor_blink_task = None;
         }
         if !input_active {
@@ -1971,7 +2040,14 @@ impl Render for Block {
         let is_placeholder =
             focused && self.display_text().is_empty() && self.marked_range.is_none();
 
-        let theme = cx.global::<ThemeManager>().current_arc();
+        let base_theme = cx.global::<ThemeManager>().current_arc();
+        let scaled_theme;
+        let theme = if self.document_zoom == 1.0 {
+            base_theme.as_ref()
+        } else {
+            scaled_theme = base_theme.with_document_scale(self.document_zoom);
+            &scaled_theme
+        };
         let strings = cx.global::<I18nManager>().strings_arc();
         let c = &theme.colors;
         let d = &theme.dimensions;
@@ -2032,7 +2108,7 @@ impl Render for Block {
                 .bg(bg)
                 .text_size(px(t.text_size))
                 .text_color(c.text_default)
-                .line_height(rems(t.text_line_height));
+                .line_height(px(t.text_size * t.text_line_height));
 
             let cell_base = if style_as_header {
                 cell_base.font_weight(FontWeight::MEDIUM)
@@ -2047,7 +2123,7 @@ impl Render for Block {
                         Length::Definite(relative(1.0)),
                         px(d.image_cell_max_height),
                         px(d.image_cell_placeholder_height),
-                        &theme,
+                        theme,
                         &strings,
                     ))
                     .into_any_element();
@@ -2055,7 +2131,7 @@ impl Render for Block {
 
             if !focused
                 && let Some(inline_images) = self.render_table_cell_inline_images(
-                    &theme,
+                    theme,
                     &strings,
                     if style_as_header {
                         FontWeight::MEDIUM
@@ -2070,7 +2146,7 @@ impl Render for Block {
 
             return cell_base
                 .child(self.render_text_or_mixed_inline_visuals(
-                    &theme,
+                    theme,
                     focused,
                     is_placeholder,
                     None,
@@ -2110,9 +2186,10 @@ impl Render for Block {
                     d,
                     cx,
                 )
-                .text_size(px(t.text_size))
+                .font(FontSettings::code_font(cx))
+                .text_size(px(t.code_size))
                 .text_color(c.text_default)
-                .line_height(rems(t.text_line_height));
+                .line_height(px(t.code_size * t.text_line_height));
 
             let source_base = if self.kind() == BlockKind::Comment {
                 source_base.bg(c.comment_bg).rounded_sm()
@@ -2122,9 +2199,10 @@ impl Render for Block {
                 source_base
             };
 
-            return source_base
+            let content = source_base
                 .child(BlockTextElement::new(cx.entity(), is_placeholder))
                 .into_any_element();
+            return wrap_with_quote_guides(content, visible_quote_guides(self), theme);
         }
 
         let focused_base = self.render_shell(
@@ -2159,11 +2237,23 @@ impl Render for Block {
                         max_width.into(),
                         px(d.image_root_max_height),
                         px(d.image_root_placeholder_height),
-                        &theme,
+                        theme,
                         &strings,
                     ))
                     .into_any_element();
             }
+        }
+
+        if self.list_group_separator_candidate && self.display_text().is_empty() && !focused {
+            return focused_base.min_h(px(0.0)).h(px(0.0)).into_any_element();
+        }
+
+        if self.visible_quote_depth > 0 && self.display_text().is_empty() && !focused {
+            let blank = focused_base
+                .min_h(px(t.text_size * 0.5))
+                .h(px(t.text_size * 0.5))
+                .into_any_element();
+            return wrap_with_quote_guides(blank, visible_quote_guides(self), theme);
         }
 
         let content = match self.kind() {
@@ -2179,6 +2269,7 @@ impl Render for Block {
                 .into_any_element(),
             BlockKind::Heading { level: 1 } => focused_base
                 .text_size(px(t.h1_size))
+                .line_height(px(t.h1_size * 1.2))
                 .font_weight(t.h1_weight.to_font_weight())
                 .text_color(c.text_h1)
                 .pb(px(d.h1_padding_bottom))
@@ -2186,7 +2277,7 @@ impl Render for Block {
                 .border_b(px(d.h1_border_width))
                 .border_color(c.border_h1)
                 .child(self.render_text_or_mixed_inline_visuals(
-                    &theme,
+                    theme,
                     focused,
                     is_placeholder,
                     None,
@@ -2199,6 +2290,7 @@ impl Render for Block {
                 .into_any_element(),
             BlockKind::Heading { level: 2 } => focused_base
                 .text_size(px(t.h2_size))
+                .line_height(px(t.h2_size * 1.225))
                 .font_weight(t.h2_weight.to_font_weight())
                 .text_color(c.text_h2)
                 .pb(px(d.h1_padding_bottom))
@@ -2206,7 +2298,7 @@ impl Render for Block {
                 .border_b(px(d.h1_border_width))
                 .border_color(c.border_h2)
                 .child(self.render_text_or_mixed_inline_visuals(
-                    &theme,
+                    theme,
                     focused,
                     is_placeholder,
                     None,
@@ -2219,10 +2311,11 @@ impl Render for Block {
                 .into_any_element(),
             BlockKind::Heading { level: 3 } => focused_base
                 .text_size(px(t.h3_size))
+                .line_height(px(t.h3_size * 1.43))
                 .font_weight(t.h3_weight.to_font_weight())
                 .text_color(c.text_h3)
                 .child(self.render_text_or_mixed_inline_visuals(
-                    &theme,
+                    theme,
                     focused,
                     is_placeholder,
                     None,
@@ -2235,10 +2328,11 @@ impl Render for Block {
                 .into_any_element(),
             BlockKind::Heading { level: 4 } => focused_base
                 .text_size(px(t.h4_size))
+                .line_height(px(t.h4_size * 1.4))
                 .font_weight(t.h4_weight.to_font_weight())
                 .text_color(c.text_h4)
                 .child(self.render_text_or_mixed_inline_visuals(
-                    &theme,
+                    theme,
                     focused,
                     is_placeholder,
                     None,
@@ -2251,10 +2345,11 @@ impl Render for Block {
                 .into_any_element(),
             BlockKind::Heading { level: 5 } => focused_base
                 .text_size(px(t.h5_size))
+                .line_height(px(t.h5_size * 1.4))
                 .font_weight(t.h5_weight.to_font_weight())
                 .text_color(c.text_h5)
                 .child(self.render_text_or_mixed_inline_visuals(
-                    &theme,
+                    theme,
                     focused,
                     is_placeholder,
                     None,
@@ -2267,10 +2362,11 @@ impl Render for Block {
                 .into_any_element(),
             BlockKind::Heading { level: 6 } => focused_base
                 .text_size(px(t.h6_size))
+                .line_height(px(t.h6_size * 1.4))
                 .font_weight(t.h6_weight.to_font_weight())
                 .text_color(c.text_h6)
                 .child(self.render_text_or_mixed_inline_visuals(
-                    &theme,
+                    theme,
                     focused,
                     is_placeholder,
                     None,
@@ -2284,7 +2380,7 @@ impl Render for Block {
             BlockKind::BulletedListItem => focused_base
                 .text_size(px(t.text_size))
                 .text_color(c.text_default)
-                .line_height(rems(t.text_line_height))
+                .line_height(px(t.text_size * t.text_line_height))
                 .w_full()
                 .flex()
                 .flex_row()
@@ -2293,6 +2389,8 @@ impl Render for Block {
                 .children([
                     div()
                         .min_w(px(d.list_marker_width))
+                        .text_size(px(t.text_size * 1.2))
+                        .text_align(TextAlign::Center)
                         .child(SharedString::new(bulleted_list_marker(self.render_depth))),
                     if showing_rendered_image {
                         let viewport_width = f32::from(window.viewport_size().width.max(px(1.0)));
@@ -2304,13 +2402,13 @@ impl Render for Block {
                                 max_width.into(),
                                 px(d.image_root_max_height),
                                 px(d.image_root_placeholder_height),
-                                &theme,
+                                theme,
                                 &strings,
                             ))
                         } else {
                             div().min_w(px(0.0)).flex_grow(1.0).child(
                                 self.render_text_or_mixed_inline_visuals(
-                                    &theme,
+                                    theme,
                                     focused,
                                     is_placeholder,
                                     None,
@@ -2325,7 +2423,7 @@ impl Render for Block {
                     } else {
                         div().min_w(px(0.0)).flex_grow(1.0).child(
                             self.render_text_or_mixed_inline_visuals(
-                                &theme,
+                                theme,
                                 focused,
                                 is_placeholder,
                                 None,
@@ -2345,7 +2443,7 @@ impl Render for Block {
                 focused_base
                     .text_size(px(t.text_size))
                     .text_color(c.text_default)
-                    .line_height(rems(t.text_line_height))
+                    .line_height(px(t.text_size * t.text_line_height))
                     .w_full()
                     .flex()
                     .flex_row()
@@ -2399,13 +2497,13 @@ impl Render for Block {
                                     max_width.into(),
                                     px(d.image_root_max_height),
                                     px(d.image_root_placeholder_height),
-                                    &theme,
+                                    theme,
                                     &strings,
                                 ))
                             } else {
                                 div().min_w(px(0.0)).flex_grow(1.0).child(
                                     self.render_text_or_mixed_inline_visuals(
-                                        &theme,
+                                        theme,
                                         focused,
                                         is_placeholder,
                                         None,
@@ -2420,7 +2518,7 @@ impl Render for Block {
                         } else {
                             div().min_w(px(0.0)).flex_grow(1.0).child(
                                 self.render_text_or_mixed_inline_visuals(
-                                    &theme,
+                                    theme,
                                     focused,
                                     is_placeholder,
                                     None,
@@ -2438,7 +2536,7 @@ impl Render for Block {
             BlockKind::NumberedListItem => focused_base
                 .text_size(px(t.text_size))
                 .text_color(c.text_default)
-                .line_height(rems(t.text_line_height))
+                .line_height(px(t.text_size * t.text_line_height))
                 .w_full()
                 .flex()
                 .flex_row()
@@ -2461,13 +2559,13 @@ impl Render for Block {
                                 max_width.into(),
                                 px(d.image_root_max_height),
                                 px(d.image_root_placeholder_height),
-                                &theme,
+                                theme,
                                 &strings,
                             ))
                         } else {
                             div().min_w(px(0.0)).flex_grow(1.0).child(
                                 self.render_text_or_mixed_inline_visuals(
-                                    &theme,
+                                    theme,
                                     focused,
                                     is_placeholder,
                                     None,
@@ -2482,7 +2580,7 @@ impl Render for Block {
                     } else {
                         div().min_w(px(0.0)).flex_grow(1.0).child(
                             self.render_text_or_mixed_inline_visuals(
-                                &theme,
+                                theme,
                                 focused,
                                 is_placeholder,
                                 None,
@@ -2499,9 +2597,9 @@ impl Render for Block {
             BlockKind::Quote => focused_base
                 .text_size(px(t.text_size))
                 .text_color(c.text_quote)
-                .line_height(rems(t.text_line_height))
+                .line_height(px(t.text_size * t.text_line_height))
                 .child(self.render_text_or_mixed_inline_visuals(
-                    &theme,
+                    theme,
                     focused,
                     is_placeholder,
                     None,
@@ -2513,7 +2611,7 @@ impl Render for Block {
                 ))
                 .into_any_element(),
             BlockKind::Callout(variant) => {
-                let (accent, _) = callout_accent_and_background(variant, &theme);
+                let (accent, _) = callout_accent_and_background(variant, theme);
                 let title_is_empty = self.record.title.visible_text().is_empty();
                 let show_static_default_label = title_is_empty && !focused;
                 let header_label = SharedString::from(variant.label());
@@ -2532,7 +2630,7 @@ impl Render for Block {
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(accent)
                         .child(self.render_text_or_mixed_inline_visuals(
-                            &theme,
+                            theme,
                             focused,
                             is_placeholder,
                             Some(header_label),
@@ -2592,7 +2690,7 @@ impl Render for Block {
                             .flex_grow(1.0)
                             .text_color(c.text_quote)
                             .child(self.render_text_or_mixed_inline_visuals(
-                                &theme,
+                                theme,
                                 focused,
                                 is_placeholder,
                                 None,
@@ -2627,7 +2725,7 @@ impl Render for Block {
                 }
             }
             BlockKind::CodeBlock { .. } => {
-                let show_language_input = focused || code_language_focused;
+                let show_language_input = !self.read_only && (focused || code_language_focused);
                 let language_placeholder =
                     SharedString::from(strings.code_language_placeholder.clone());
                 let code_panel = focused_base
@@ -2638,7 +2736,7 @@ impl Render for Block {
                     .py(px(d.code_block_padding_y))
                     .text_size(px(t.code_size))
                     .text_color(c.code_text)
-                    .line_height(rems(t.text_line_height))
+                    .line_height(px(t.code_size * t.text_line_height))
                     .child(
                         div()
                             .font(FontSettings::code_font(cx))
@@ -2659,7 +2757,7 @@ impl Render for Block {
                         .child(
                             div()
                                 .absolute()
-                                .right(px(d.code_language_input_gap))
+                                .right(px(d.code_block_padding_x))
                                 .bottom(px(0.0))
                                 .occlude()
                                 .key_context(BLOCK_EDITOR_CONTEXT)
@@ -2721,9 +2819,9 @@ impl Render for Block {
                     return focused_base
                         .text_size(px(t.text_size))
                         .text_color(c.text_default)
-                        .line_height(rems(t.text_line_height))
+                        .line_height(px(t.text_size * t.text_line_height))
                         .child(self.render_text_or_mixed_inline_visuals(
-                            &theme,
+                            theme,
                             focused,
                             is_placeholder,
                             None,
@@ -2747,7 +2845,7 @@ impl Render for Block {
                             table,
                             table_width,
                             window,
-                            &theme,
+                            theme,
                             &FontSettings::code_font(cx),
                         )
                     })
@@ -3222,8 +3320,8 @@ impl Render for Block {
                 focused_base
                     .text_size(px(t.text_size))
                     .text_color(c.text_default)
-                    .line_height(rems(t.text_line_height))
-                    .child(self.render_html_document(&html, &theme, cx))
+                    .line_height(px(t.text_size * t.text_line_height))
+                    .child(self.render_html_document(&html, theme, cx))
                     .into_any_element()
             }
             BlockKind::MathBlock => {
@@ -3234,7 +3332,7 @@ impl Render for Block {
                 let child = if focused {
                     BlockTextElement::new(cx.entity(), is_placeholder).into_any_element()
                 } else {
-                    self.render_math_content(&theme)
+                    self.render_math_content(theme)
                 };
                 focused_base.w_full().child(child).into_any_element()
             }
@@ -3246,7 +3344,7 @@ impl Render for Block {
                 let child = if focused {
                     BlockTextElement::new(cx.entity(), is_placeholder).into_any_element()
                 } else {
-                    self.render_mermaid_content(&theme, window)
+                    self.render_mermaid_content(theme, window)
                 };
                 focused_base.w_full().child(child).into_any_element()
             }
@@ -3256,9 +3354,9 @@ impl Render for Block {
             | BlockKind::Heading { .. } => focused_base
                 .text_size(px(t.text_size))
                 .text_color(c.text_default)
-                .line_height(rems(t.text_line_height))
+                .line_height(px(t.text_size * t.text_line_height))
                 .child(self.render_text_or_mixed_inline_visuals(
-                    &theme,
+                    theme,
                     focused,
                     is_placeholder,
                     None,
@@ -3271,7 +3369,7 @@ impl Render for Block {
                 .into_any_element(),
         };
 
-        wrap_with_quote_guides(content, visible_quote_guides(self), &theme)
+        wrap_with_quote_guides(content, visible_quote_guides(self), theme)
     }
 }
 
@@ -3373,14 +3471,39 @@ fn inline_word_chunks(text: &str, code: bool, has_background: bool) -> Vec<&str>
 #[cfg(test)]
 mod tests {
     use super::{
-        HtmlComputedStyle, column_axis_gutter_visible, html_badge_run_end, html_node_visual_style,
-        inline_word_chunks,
+        HtmlComputedStyle, column_axis_gutter_visible, container_image_width_budget,
+        effective_table_width, html_badge_run_end, html_node_visual_style, inline_word_chunks,
     };
     use crate::components::{Block, BlockKind, BlockRecord, InlineTextTree, parse_html_document};
     use crate::components::{TableAxisKind, TableAxisMarker};
     use crate::i18n::I18nManager;
     use crate::theme::{Theme, ThemeManager};
-    use gpui::{Hsla, Rgba, TestAppContext, px};
+    use gpui::{AppContext, Hsla, Rgba, TestAppContext, px};
+
+    #[gpui::test]
+    fn media_width_uses_editor_column_after_sidebar_layout(cx: &mut TestAppContext) {
+        let theme = Theme::default_theme();
+        let block = cx.new(|cx| {
+            let mut block = Block::with_record(
+                cx,
+                BlockRecord::new(BlockKind::Paragraph, InlineTextTree::plain("media")),
+            );
+            block.document_column_width = Some(400.0);
+            block.visible_quote_depth = 1;
+            block
+        });
+        block.read_with(cx, |block, _| {
+            let expected = 400.0 - theme.dimensions.quote_padding_left;
+            assert_eq!(
+                effective_table_width(block, 1600.0, &theme.dimensions),
+                expected
+            );
+            assert_eq!(
+                container_image_width_budget(block, 1600.0, &theme.dimensions),
+                expected,
+            );
+        });
+    }
 
     #[test]
     fn consecutive_linked_badges_share_a_row_but_blank_lines_break_it() {

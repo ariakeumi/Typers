@@ -1,13 +1,16 @@
 //! Lightweight workspace panel state, file-tree scanning, and outline parsing.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 
 use super::{BlockKind, Editor};
+use crate::components::{InlineTextTree, parse_link_reference_definitions};
 use crate::i18n::I18nStrings;
 use crate::theme::Theme;
 
@@ -18,7 +21,7 @@ const MARKDOWN_ICON: &str = "icon/workspace/markdown.svg";
 /// Fraction of viewport width requested by the workspace panel.
 const WORKSPACE_PANEL_TARGET_RATIO: f32 = 0.15;
 /// Lower width bound for the workspace panel, in pixels.
-const WORKSPACE_PANEL_MIN_WIDTH: f32 = 240.0;
+const WORKSPACE_PANEL_MIN_WIDTH: f32 = 270.0;
 /// Upper width bound for the workspace panel, in pixels.
 const WORKSPACE_PANEL_MAX_WIDTH: f32 = 360.0;
 /// Height of each visible tree row, in pixels.
@@ -29,8 +32,10 @@ const WORKSPACE_NODE_INDENT: f32 = 18.0;
 /// The active workspace panel view.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum WorkspaceTab {
-    /// Directory and Markdown file tree.
+    /// Flat document cards with short text previews.
     #[default]
+    Documents,
+    /// Directory and Markdown file tree.
     Files,
     /// Headings parsed from the current document.
     Outline,
@@ -75,7 +80,12 @@ pub(super) struct WorkspaceState {
     /// Whether the drawer is visible.
     pub(super) is_open: bool,
     /// Currently displayed workspace tab.
-    active_tab: WorkspaceTab,
+    pub(super) active_tab: WorkspaceTab,
+    /// Folder explicitly opened by the user, retained while switching files.
+    root_override: Option<PathBuf>,
+    previews: HashMap<PathBuf, String>,
+    panel_width: Option<f32>,
+    pub(super) resizing: bool,
     /// Parent directory of the current document, when it has a path.
     root: Option<PathBuf>,
     /// Last scanned file tree.
@@ -86,6 +96,7 @@ pub(super) struct WorkspaceState {
     outline_tree: Vec<WorkspaceTreeNode>,
     /// Source text corresponding to `outline_tree`.
     outline_source: Option<String>,
+    outline_initialized: bool,
     /// IDs of expanded directory and heading nodes.
     expanded: HashSet<String>,
     /// Current file or heading selection.
@@ -107,6 +118,80 @@ impl Editor {
         cx.notify();
     }
 
+    pub(super) fn show_workspace_tab(
+        &mut self,
+        tab: WorkspaceTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.workspace.is_open = true;
+        self.set_workspace_tab(tab, cx);
+        self.sync_workspace_models(cx);
+        window.activate_window();
+        cx.notify();
+    }
+
+    pub(super) fn prompt_workspace_folder(&mut self, cx: &mut Context<Self>) {
+        let prompt = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some(super::writing::localized(cx, "Open Folder", "打开文件夹").into()),
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = prompt.await
+                && let Some(path) = paths.into_iter().next()
+            {
+                let _ = this.update(cx, |editor, cx| {
+                    editor.workspace.root_override = Some(path);
+                    editor.workspace.root = None;
+                    editor.workspace.file_tree = None;
+                    editor.workspace.is_open = true;
+                    editor.workspace.active_tab = WorkspaceTab::Files;
+                    editor.sync_workspace_models(cx);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    pub(super) fn workspace_panel_width(&self, viewport: f32) -> f32 {
+        self.workspace
+            .panel_width
+            .unwrap_or_else(|| workspace_panel_width_for_viewport(viewport))
+            .clamp(180.0, (viewport - 240.0).max(180.0))
+    }
+
+    pub(super) fn on_workspace_resize_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.workspace.resizing {
+            return;
+        }
+        self.workspace.panel_width = Some(f32::from(event.position.x).clamp(
+            180.0,
+            (f32::from(window.viewport_size().width) - 240.0).max(180.0),
+        ));
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    pub(super) fn on_workspace_resize_end(
+        &mut self,
+        _: &MouseUpEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.workspace.resizing {
+            self.workspace.resizing = false;
+            cx.notify();
+        }
+    }
+
     /// Handles the workspace toggle application action.
     pub(crate) fn on_toggle_workspace_action(
         &mut self,
@@ -123,6 +208,7 @@ impl Editor {
         self.workspace.file_tree = None;
         self.workspace.file_error = None;
         self.workspace.outline_source = None;
+        self.workspace.outline_initialized = false;
         if self.workspace.is_open {
             self.sync_workspace_models(cx);
         }
@@ -132,26 +218,43 @@ impl Editor {
     fn sync_workspace_models(&mut self, cx: &mut Context<Self>) {
         self.sync_workspace_file_tree();
         self.sync_workspace_outline(cx);
+        if self.workspace.active_tab == WorkspaceTab::Outline {
+            let offset = self.capture_source_selection_snapshot(cx).range.start;
+            let line = self.workspace.outline_source.as_ref().map_or(0, |source| {
+                source.as_bytes()[..offset.min(source.len())]
+                    .iter()
+                    .filter(|&&ch| ch == b'\n')
+                    .count()
+            });
+            self.workspace.selected = outline_node_at_line(&self.workspace.outline_tree, line)
+                .map(WorkspaceSelection::Outline);
+        }
     }
 
     /// Uses the current file's parent directory as the workspace root.
     fn workspace_root_for_current_file(&self) -> Option<PathBuf> {
-        self.file_path.as_ref()?.parent().map(Path::to_path_buf)
+        self.workspace
+            .root_override
+            .clone()
+            .or_else(|| self.file_path.as_ref()?.parent().map(Path::to_path_buf))
     }
 
     /// Scans a changed root and updates the selected file path.
     fn sync_workspace_file_tree(&mut self) {
         let next_root = self.workspace_root_for_current_file();
         if self.workspace.root == next_root && self.workspace.file_tree.is_some() {
-            self.workspace.selected = self
-                .file_path
-                .as_ref()
-                .map(|path| WorkspaceSelection::File(path.clone()));
+            if self.workspace.active_tab != WorkspaceTab::Outline {
+                self.workspace.selected = self
+                    .file_path
+                    .as_ref()
+                    .map(|path| WorkspaceSelection::File(path.clone()));
+            }
             return;
         }
 
         self.workspace.root = next_root.clone();
         self.workspace.file_tree = None;
+        self.workspace.previews.clear();
         self.workspace.file_error = None;
 
         let Some(root) = next_root else {
@@ -190,6 +293,10 @@ impl Editor {
 
         let outline = build_outline_tree(&source);
         prune_outline_state(&mut self.workspace, &outline);
+        if !self.workspace.outline_initialized {
+            collect_node_ids(&outline, &mut self.workspace.expanded);
+            self.workspace.outline_initialized = true;
+        }
         self.workspace.outline_tree = outline;
         self.workspace.outline_source = Some(source);
     }
@@ -265,6 +372,7 @@ impl Editor {
         theme: &Theme,
         strings: &I18nStrings,
         panel_width: f32,
+        titlebar_height: f32,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         if !self.workspace.is_open {
@@ -275,44 +383,24 @@ impl Editor {
         let editor = cx.entity().downgrade();
         let c = &theme.colors;
         let d = &theme.dimensions;
-        let t = &theme.typography;
-
-        let tab = |label: String, tab: WorkspaceTab, active: bool| {
-            let tab_editor = editor.clone();
-            let tab_id = match tab {
-                WorkspaceTab::Files => "workspace-tab-files",
-                WorkspaceTab::Outline => "workspace-tab-outline",
-            };
-            div()
-                .id(tab_id)
-                .h(px(30.0))
-                .px(px(12.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(6.0))
-                .bg(if active {
-                    c.selection
-                } else {
-                    hsla(0.0, 0.0, 0.0, 0.0)
-                })
-                .hover(|this| this.bg(c.dialog_secondary_button_hover))
-                .cursor_pointer()
-                .text_size(px(t.text_size * 0.88))
-                .text_color(if active {
-                    c.text_default
-                } else {
-                    c.dialog_muted
-                })
-                .child(label)
-                .on_click(move |_event, _window, cx| {
-                    let _ = tab_editor.update(cx, |editor, cx| {
-                        editor.set_workspace_tab(tab, cx);
-                    });
-                })
+        let header = match self.workspace.active_tab {
+            WorkspaceTab::Documents => {
+                super::writing::localized(cx, "Documents", "文档").to_string()
+            }
+            WorkspaceTab::Files => self
+                .workspace
+                .root
+                .as_ref()
+                .and_then(|path| path.file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| strings.workspace_tab_files.clone()),
+            WorkspaceTab::Outline => strings.workspace_tab_outline.clone(),
         };
-
+        let documents = self.workspace.active_tab == WorkspaceTab::Documents;
         let body = match self.workspace.active_tab {
+            WorkspaceTab::Documents => {
+                self.render_workspace_document_list(theme, strings, &editor, cx)
+            }
             WorkspaceTab::Files => self.render_workspace_files_tree(theme, strings, &editor),
             WorkspaceTab::Outline => self.render_workspace_outline_tree(theme, strings, &editor),
         };
@@ -325,28 +413,33 @@ impl Editor {
                 .flex()
                 .flex_col()
                 .flex_shrink_0()
-                .bg(c.dialog_surface)
+                .bg(if c.editor_background.l > 0.5 {
+                    rgba(0xfafafaff).into()
+                } else {
+                    c.dialog_surface
+                })
                 .border_r(px(d.dialog_border_width))
                 .border_color(c.dialog_border)
+                .relative()
+                .children((titlebar_height > 0.0).then(|| {
+                    div()
+                        .id("workspace-titlebar-drag")
+                        .h(px(titlebar_height))
+                        .w_full()
+                        .flex_shrink_0()
+                        .window_control_area(WindowControlArea::Drag)
+                }))
                 .child(
                     div()
-                        .px(px(12.0))
-                        .pt(px(12.0))
-                        .pb(px(8.0))
+                        .h(px(32.0))
+                        .flex_shrink_0()
+                        .w_full()
                         .flex()
-                        .gap(px(8.0))
-                        .border_b(px(d.dialog_border_width))
-                        .border_color(c.dialog_border)
-                        .child(tab(
-                            strings.workspace_tab_files.clone(),
-                            WorkspaceTab::Files,
-                            self.workspace.active_tab == WorkspaceTab::Files,
-                        ))
-                        .child(tab(
-                            strings.workspace_tab_outline.clone(),
-                            WorkspaceTab::Outline,
-                            self.workspace.active_tab == WorkspaceTab::Outline,
-                        )),
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(14.0))
+                        .text_color(c.dialog_body)
+                        .child(header),
                 )
                 .child(
                     div()
@@ -354,12 +447,126 @@ impl Editor {
                         .flex_1()
                         .min_h(px(0.0))
                         .overflow_y_scroll()
-                        .px(px(8.0))
-                        .py(px(10.0))
+                        .px(px(if documents { 0.0 } else { 8.0 }))
+                        .py(px(if documents { 0.0 } else { 10.0 }))
                         .child(body),
+                )
+                .child(
+                    div()
+                        .id("workspace-resize-handle")
+                        .absolute()
+                        .right(px(-3.0))
+                        .top_0()
+                        .bottom_0()
+                        .w(px(6.0))
+                        .cursor(CursorStyle::ResizeLeftRight)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|editor, _, _, cx| {
+                                editor.workspace.resizing = true;
+                                cx.stop_propagation();
+                            }),
+                        ),
                 )
                 .into_any_element(),
         )
+    }
+
+    fn render_workspace_document_list(
+        &mut self,
+        theme: &Theme,
+        strings: &I18nStrings,
+        editor: &WeakEntity<Editor>,
+        cx: &App,
+    ) -> AnyElement {
+        let Some(tree) = self.workspace.file_tree.as_ref() else {
+            return self.render_workspace_files_tree(theme, strings, editor);
+        };
+        let files = tree
+            .children
+            .iter()
+            .filter_map(|node| match &node.kind {
+                WorkspaceTreeKind::MarkdownFile(path) => Some((path.clone(), node.label.clone())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let mut cards = Vec::new();
+        for (path, label) in files {
+            let preview = self
+                .workspace
+                .previews
+                .entry(path.clone())
+                .or_insert_with(|| {
+                    let mut bytes = Vec::new();
+                    if let Ok(file) = fs::File::open(&path) {
+                        let _ = file.take(8192).read_to_end(&mut bytes);
+                    }
+                    document_preview(&String::from_utf8_lossy(&bytes))
+                })
+                .clone();
+            let selected = self.file_path.as_ref() == Some(&path);
+            let preview = if selected {
+                document_preview(&self.serialized_document_text(cx))
+            } else {
+                preview
+            };
+            let open_editor = editor.clone();
+            let c = &theme.colors;
+            cards.push(
+                div()
+                    .id((
+                        "workspace-document",
+                        stable_node_hash(&path.to_string_lossy()),
+                    ))
+                    .w_full()
+                    .px(px(24.0))
+                    .py(px(14.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(5.0))
+                    .border_b(px(1.0))
+                    .border_color(c.dialog_border)
+                    .bg(if selected {
+                        c.status_bar_button_hover
+                    } else {
+                        hsla(0.0, 0.0, 0.0, 0.0)
+                    })
+                    .hover(|style| style.bg(c.status_bar_button_hover))
+                    .cursor_pointer()
+                    .child(
+                        div()
+                            .text_size(px(14.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .truncate()
+                            .text_color(c.dialog_body)
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(13.0))
+                            .line_height(px(20.0))
+                            .text_color(c.dialog_muted)
+                            .h(px(40.0))
+                            .overflow_hidden()
+                            .child(preview),
+                    )
+                    .on_click(move |_, window, cx| {
+                        let _ = open_editor.update(cx, |editor, cx| {
+                            editor.open_workspace_file(path.clone(), window, cx)
+                        });
+                    })
+                    .into_any_element(),
+            );
+        }
+        if cards.is_empty() {
+            return self.render_workspace_empty_state("", &strings.workspace_empty_files, theme);
+        }
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .children(cards)
+            .into_any_element()
     }
 
     /// Renders the file tree or its empty/error state.
@@ -446,7 +653,7 @@ impl Editor {
             .children(title)
             .child(
                 div()
-                    .text_size(px(t.text_size * 0.9))
+                    .text_size(px(12.0))
                     .line_height(px(t.text_size * t.text_line_height))
                     .text_color(c.dialog_muted)
                     .child(message.to_string()),
@@ -486,7 +693,7 @@ impl Editor {
         editor: &WeakEntity<Editor>,
     ) -> AnyElement {
         let c = &theme.colors;
-        let t = &theme.typography;
+        let is_heading = matches!(node.kind, WorkspaceTreeKind::Heading { .. });
         let is_expanded = self.workspace.expanded.contains(&node.id);
         let has_children = !node.children.is_empty();
         let selected = match (&self.workspace.selected, &node.kind) {
@@ -502,28 +709,28 @@ impl Editor {
         let arrow_node_id = node.id.clone();
         let arrow_editor = editor.clone();
         let arrow = if has_children {
-            if is_expanded { "v" } else { ">" }
+            if is_expanded { "⌄" } else { "›" }
         } else {
             ""
         };
 
         let icon = match &node.kind {
-            WorkspaceTreeKind::Directory(_) => Some((FOLDER_ICON, Hsla::from(rgba(0xf59e0bff)))),
-            WorkspaceTreeKind::MarkdownFile(_) => {
-                Some((MARKDOWN_ICON, Hsla::from(rgba(0x2563ebff))))
-            }
+            WorkspaceTreeKind::Directory(_) => Some((FOLDER_ICON, c.dialog_muted)),
+            WorkspaceTreeKind::MarkdownFile(_) => Some((MARKDOWN_ICON, c.dialog_muted)),
             WorkspaceTreeKind::Heading { .. } => None,
         };
 
         let label_color = if selected {
             c.text_default
+        } else if is_heading {
+            c.dialog_body
         } else {
             c.dialog_muted
         };
 
         let mut arrow_el = div()
             .w(px(14.0))
-            .h(px(18.0))
+            .h(px(22.0))
             .flex_shrink_0()
             .flex()
             .items_center()
@@ -545,15 +752,22 @@ impl Editor {
 
         div()
             .id(("workspace-node", stable_node_hash(&node.id)))
-            .h(px(WORKSPACE_NODE_HEIGHT))
+            .min_h(px(if is_heading {
+                32.0
+            } else {
+                WORKSPACE_NODE_HEIGHT
+            }))
+            .flex_shrink_0()
+            .py(px(if is_heading { 5.0 } else { 3.0 }))
             .w_full()
             .overflow_hidden()
             .flex()
             .items_center()
+            .when(is_heading, |row| row.items_start())
             .gap(px(6.0))
             .pl(px(8.0 + depth as f32 * WORKSPACE_NODE_INDENT))
             .pr(px(8.0))
-            .rounded(px(6.0))
+            .rounded(px(3.0))
             .bg(if selected {
                 c.selection
             } else {
@@ -575,9 +789,9 @@ impl Editor {
                     .flex_1()
                     .min_w(px(0.0))
                     .overflow_hidden()
-                    .truncate()
-                    .text_size(px(t.text_size * 0.9))
-                    .line_height(px(t.text_size * t.text_line_height))
+                    .when(!is_heading, |label| label.truncate())
+                    .text_size(px(14.0))
+                    .line_height(px(22.0))
                     .text_color(label_color)
                     .child(node.label.clone()),
             )
@@ -596,6 +810,33 @@ impl Editor {
             })
             .into_any_element()
     }
+}
+
+fn outline_node_at_line(nodes: &[WorkspaceTreeNode], line: usize) -> Option<String> {
+    let mut selected = None;
+    for node in nodes {
+        if let WorkspaceTreeKind::Heading { line: heading, .. } = node.kind {
+            if heading > line {
+                break;
+            }
+            selected = Some(node.id.clone());
+            if let Some(child) = outline_node_at_line(&node.children, line) {
+                selected = Some(child);
+            }
+        }
+    }
+    selected
+}
+
+fn document_preview(source: &str) -> String {
+    source
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(2)
+        .map(|line| line.trim_start_matches(['#', '>', ' ']))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Recognizes `.md` files for the workspace tree, ignoring extension case.
@@ -704,6 +945,7 @@ fn build_outline_tree(markdown: &str) -> Vec<WorkspaceTreeNode> {
     let mut roots = Vec::new();
     let mut stack: Vec<(u8, Vec<usize>)> = Vec::new();
     let mut fence: Option<(char, usize)> = None;
+    let references = parse_link_reference_definitions(markdown);
 
     for (line_index, line) in markdown.lines().enumerate() {
         let trimmed = line.trim_start();
@@ -732,7 +974,8 @@ fn build_outline_tree(markdown: &str) -> Vec<WorkspaceTreeNode> {
 
         let node = WorkspaceTreeNode {
             id: format!("outline:{line_index}"),
-            label: title,
+            label: InlineTextTree::from_markdown_with_link_references(&title, &references)
+                .visible_text(),
             kind: WorkspaceTreeKind::Heading {
                 line: line_index,
                 level,
@@ -797,6 +1040,30 @@ mod tests {
     use crate::components::{BlockKind, Editor};
     use gpui::{AppContext, TestAppContext};
 
+    #[gpui::test]
+    async fn opened_folder_survives_document_switches_and_sidebar_width_is_bounded(
+        cx: &mut TestAppContext,
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("nested")).unwrap();
+        fs::write(root.path().join("a.md"), "# A").unwrap();
+        let nested = root.path().join("nested/b.md");
+        fs::write(&nested, "# B").unwrap();
+        let editor = cx.new(|cx| Editor::from_markdown(cx, "# B".into(), Some(nested)));
+        editor.update(cx, |editor, cx| {
+            editor.workspace.root_override = Some(root.path().to_path_buf());
+            editor.sync_workspace_models(cx);
+            assert_eq!(editor.workspace.root.as_deref(), Some(root.path()));
+            editor.file_path = Some(root.path().join("a.md"));
+            editor.sync_workspace_after_document_path_change(cx);
+            editor.sync_workspace_models(cx);
+            assert_eq!(editor.workspace.root.as_deref(), Some(root.path()));
+            editor.workspace.panel_width = Some(700.0);
+            assert_eq!(editor.workspace_panel_width(800.0), 560.0);
+            assert_eq!(editor.workspace_panel_width(400.0), 180.0);
+        });
+    }
+
     #[test]
     fn workspace_scan_keeps_dirs_and_md_files_only() {
         let root =
@@ -839,6 +1106,40 @@ mod tests {
     }
 
     #[test]
+    fn outline_labels_show_formatted_text_and_keep_source_locations() {
+        let outline = build_outline_tree(
+            "# **使用** pmset 禁用 USB 唤醒\n\n\
+             ## *嵌套 **加粗***、~~删除~~和 `code`\n\n\
+             ### [**链接**](https://example.com) 与 [参考][ref]\n\n\
+             [ref]: https://example.com/reference",
+        );
+
+        let root = &outline[0];
+        assert_eq!(root.label, "使用 pmset 禁用 USB 唤醒");
+        assert_eq!(root.id, "outline:0");
+        assert_eq!(root.kind, WorkspaceTreeKind::Heading { line: 0, level: 1 });
+        let child = &root.children[0];
+        assert_eq!(child.label, "嵌套 加粗、删除和 code");
+        assert_eq!(child.kind, WorkspaceTreeKind::Heading { line: 2, level: 2 });
+        assert_eq!(child.children[0].label, "链接 与 参考");
+        assert_eq!(child.children[0].id, "outline:4");
+    }
+
+    #[test]
+    fn outline_labels_preserve_literal_markers() {
+        let outline = build_outline_tree(
+            "# `**literal**` 与 \\*星号\\*\n\n## **尚未闭合\n\n### file_name 和 2 * 3",
+        );
+
+        assert_eq!(outline[0].label, "**literal** 与 *星号*");
+        assert_eq!(outline[0].children[0].label, "**尚未闭合");
+        assert_eq!(
+            outline[0].children[0].children[0].label,
+            "file_name 和 2 * 3"
+        );
+    }
+
+    #[test]
     fn outline_expansion_state_is_not_auto_populated_and_prunes_stale_ids() {
         let outline = build_outline_tree("# Root\n\n## Child\n\n# Next");
         let mut fresh = WorkspaceState::default();
@@ -863,7 +1164,7 @@ mod tests {
 
     #[test]
     fn workspace_panel_width_uses_ratio_with_bounds() {
-        assert_eq!(workspace_panel_width_for_viewport(1000.0), 240.0);
+        assert_eq!(workspace_panel_width_for_viewport(1000.0), 270.0);
         assert_eq!(workspace_panel_width_for_viewport(2000.0), 300.0);
         assert_eq!(workspace_panel_width_for_viewport(4000.0), 360.0);
     }

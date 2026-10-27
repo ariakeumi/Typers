@@ -47,6 +47,501 @@ fn redraw(cx: &mut gpui::VisualTestContext) {
 }
 
 #[gpui::test]
+async fn typing_after_malformed_abbreviation_keeps_caret_at_inserted_text(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let source = "*[HTML]: HyperText Markup Language\n\\*[CSS]: Cascading Style Sheets*\\*[HTML]: HyperText Markup Language\n\\*[CSS]: Cascading Style Sheets";
+    let (editor, cx) = cx.add_window_view(|_, cx| Editor::from_markdown(cx, source.into(), None));
+    editor.update(cx, |editor, cx| {
+        let block = editor.document.first_root().unwrap().clone();
+        block.update(cx, |block, cx| block.move_to(block.visible_len(), cx));
+        editor.focus_block(block.entity_id());
+    });
+    redraw(cx);
+    for (ch, expected_suffix) in [("Q", "Q"), ("A", "QA"), ("中文😀", "QA中文😀")] {
+        cx.simulate_input(ch);
+        redraw(cx);
+        editor.read_with(cx, |editor, cx| {
+            let block = editor.document.first_root().unwrap().read(cx);
+            assert!(block.display_text().ends_with(expected_suffix));
+            assert_eq!(block.cursor_offset(), block.visible_len());
+        });
+    }
+    assert!(
+        editor
+            .read_with(cx, |editor, cx| editor.current_document_source(cx))
+            .contains("QA中文😀")
+    );
+}
+
+#[gpui::test]
+async fn markdown_syntax_fixture_edit_and_undo_every_text_block(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let (editor, cx) = cx.add_window_view(|_, cx| {
+        Editor::from_markdown(cx, include_str!("fixtures/markdown-syntax.md").into(), None)
+    });
+    redraw(cx);
+    let (original, count) = editor.read_with(cx, |editor, cx| {
+        (
+            editor.current_document_source(cx),
+            editor.document.visible_blocks().len(),
+        )
+    });
+    let mut edited_count = 0;
+    for index in 0..count {
+        let editable = editor.update(cx, |editor, cx| {
+            let block = editor.document.visible_blocks()[index].entity.clone();
+            if matches!(
+                block.read(cx).kind(),
+                BlockKind::Separator | BlockKind::Table | BlockKind::FootnoteDefinition
+            ) || block.read(cx).renders_as_standalone_image()
+            {
+                return false;
+            }
+            // The abbreviation sample contains unbalanced delimiters across
+            // definition lines, so reparsing may normalize its source. Its
+            // typing/caret behavior has a separate regression above.
+            if block
+                .read(cx)
+                .display_text()
+                .contains("Cascading Style Sheets")
+            {
+                return false;
+            }
+            block.update(cx, |block, cx| {
+                // Edit formula/diagram content while preserving closing fences.
+                let offset =
+                    if matches!(block.kind(), BlockKind::MathBlock | BlockKind::MermaidBlock) {
+                        block
+                            .display_text()
+                            .find('\n')
+                            .map(|offset| offset + 1)
+                            .unwrap_or(0)
+                    } else {
+                        block.visible_len()
+                    };
+                block.move_to(offset, cx);
+            });
+            editor.focus_block(block.entity_id());
+            true
+        });
+        if !editable {
+            continue;
+        }
+        redraw(cx);
+        cx.simulate_input("QA中文😀");
+        redraw(cx);
+        let edited = editor.read_with(cx, |editor, cx| editor.current_document_source(cx));
+        assert!(
+            edited.contains("QA中文😀"),
+            "input missing at block {index}: {:?}",
+            editor.read_with(cx, |editor, cx| {
+                let block = editor.document.visible_blocks()[index].entity.read(cx);
+                (
+                    block.kind(),
+                    block.display_text().to_string(),
+                    editor.active_entity_id,
+                    block.selected_range.clone(),
+                )
+            })
+        );
+        cx.simulate_keystrokes("cmd-z");
+        redraw(cx);
+        assert_eq!(
+            editor.read_with(cx, |editor, cx| editor.current_document_source(cx)),
+            original,
+            "undo changed unrelated content at block {index}"
+        );
+        cx.simulate_keystrokes("cmd-shift-z");
+        redraw(cx);
+        let redone = editor.read_with(cx, |editor, cx| editor.current_document_source(cx));
+        if redone != edited {
+            let first_difference = redone.bytes().zip(edited.bytes()).position(|(a, b)| a != b);
+            let offset = first_difference.unwrap_or(0);
+            let excerpt = |source: &str| {
+                let start =
+                    crate::text_offsets::floor_char_boundary(source, offset.saturating_sub(80));
+                let end = crate::text_offsets::floor_char_boundary(
+                    source,
+                    (offset + 180).min(source.len()),
+                );
+                source[start..end].to_string()
+            };
+            panic!(
+                "redo changed content at block {index}, byte {first_difference:?}\nexpected: {:?}\nactual: {:?}",
+                excerpt(&edited),
+                excerpt(&redone)
+            );
+        }
+        cx.simulate_keystrokes("cmd-z");
+        redraw(cx);
+        edited_count += 1;
+    }
+    assert!(
+        edited_count > 150,
+        "exercise the entire document: {edited_count}"
+    );
+    eprintln!("edited, undid, and redid {edited_count} text blocks");
+}
+
+#[gpui::test]
+async fn markdown_syntax_fixture_select_all_delete_undo_and_mode_roundtrip(
+    cx: &mut TestAppContext,
+) {
+    init_editor_test_app(cx);
+    let (editor, cx) = cx.add_window_view(|_, cx| {
+        Editor::from_markdown(cx, include_str!("fixtures/markdown-syntax.md").into(), None)
+    });
+    redraw(cx);
+    let original = editor.read_with(cx, |editor, cx| editor.current_document_source(cx));
+    for _ in 0..3 {
+        editor.update(cx, |editor, cx| editor.toggle_view_mode(cx));
+        redraw(cx);
+        editor.update(cx, |editor, cx| editor.toggle_view_mode(cx));
+        redraw(cx);
+        assert_eq!(
+            editor.read_with(cx, |editor, cx| editor.current_document_source(cx)),
+            original
+        );
+    }
+    cx.simulate_keystrokes("cmd-a");
+    redraw(cx);
+    cx.simulate_keystrokes("cmd-a");
+    redraw(cx);
+    cx.simulate_keystrokes("backspace");
+    redraw(cx);
+    let remaining = editor.read_with(cx, |editor, cx| editor.current_document_source(cx));
+    assert!(
+        remaining.trim().is_empty(),
+        "remaining after delete: {remaining:?}"
+    );
+    cx.simulate_keystrokes("cmd-z");
+    redraw(cx);
+    assert_eq!(
+        editor.read_with(cx, |editor, cx| editor.current_document_source(cx)),
+        original
+    );
+    // Undo restores the full selection too, so typing replaces the document.
+    cx.simulate_input("替换全文😀");
+    redraw(cx);
+    assert_eq!(
+        editor.read_with(cx, |editor, cx| editor.current_document_source(cx)),
+        "替换全文😀"
+    );
+    cx.simulate_keystrokes("cmd-z");
+    redraw(cx);
+    assert_eq!(
+        editor.read_with(cx, |editor, cx| editor.current_document_source(cx)),
+        original
+    );
+}
+
+#[gpui::test]
+async fn horizontal_arrows_cross_block_edges_without_editing(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    for source in [
+        "第一段😀\n\n下一段",
+        "**中文**😀\n\n下一段",
+        "第一行\n第二行😀\n\n下一段",
+        "- 第一项😀\n- 下一项",
+        "> 第一段😀\n\n下一段",
+        "```rust\n第一行\n第二行😀\n```\n\n下一段",
+    ] {
+        let (editor, cx) =
+            cx.add_window_view(|_, cx| Editor::from_markdown(cx, source.into(), None));
+        let (first, second, original) = editor.read_with(cx, |editor, cx| {
+            let visible = editor.document.visible_blocks();
+            assert_eq!(visible.len(), 2, "{source}");
+            (
+                visible[0].entity.clone(),
+                visible[1].entity.clone(),
+                editor.current_document_source(cx),
+            )
+        });
+        editor.update(cx, |editor, cx| {
+            second.update(cx, |block, cx| block.move_to(0, cx));
+            editor.focus_block(second.entity_id());
+        });
+        redraw(cx);
+        redraw(cx);
+
+        cx.simulate_keystrokes("left");
+        redraw(cx);
+        editor.read_with(cx, |editor, cx| {
+            assert_eq!(editor.active_entity_id, Some(first.entity_id()), "{source}");
+            let block = first.read(cx);
+            assert_eq!(block.cursor_offset(), block.visible_len(), "{source}");
+        });
+        cx.simulate_keystrokes("right");
+        redraw(cx);
+        editor.read_with(cx, |editor, cx| {
+            assert_eq!(
+                editor.active_entity_id,
+                Some(second.entity_id()),
+                "{source}"
+            );
+            assert_eq!(second.read(cx).selected_range, 0..0, "{source}");
+            assert_eq!(editor.current_document_source(cx), original);
+        });
+
+        // Crossing an edge must consume the key, leaving the next grapheme
+        // for the following press rather than moving twice.
+        cx.simulate_keystrokes("right");
+        redraw(cx);
+        second.read_with(cx, |block, _| assert_eq!(block.cursor_offset(), "下".len()));
+
+        editor.update(cx, |editor, cx| {
+            first.update(cx, |block, cx| block.move_to(0, cx));
+            editor.focus_block(first.entity_id());
+        });
+        redraw(cx);
+        cx.simulate_keystrokes("left");
+        redraw(cx);
+        editor.read_with(cx, |editor, cx| {
+            assert_eq!(editor.active_entity_id, Some(first.entity_id()));
+            assert_eq!(first.read(cx).selected_range, 0..0);
+        });
+        editor.update(cx, |editor, cx| {
+            second.update(cx, |block, cx| block.move_to(block.visible_len(), cx));
+            editor.focus_block(second.entity_id());
+        });
+        redraw(cx);
+        cx.simulate_keystrokes("right");
+        redraw(cx);
+        editor.read_with(cx, |editor, cx| {
+            assert_eq!(editor.active_entity_id, Some(second.entity_id()));
+            assert_eq!(editor.document.visible_blocks().len(), 2);
+            assert_eq!(editor.current_document_source(cx), original);
+        });
+    }
+}
+
+#[gpui::test]
+async fn horizontal_arrows_enter_table_at_first_and_last_cell(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let (editor, cx) = cx.add_window_view(|_, cx| {
+        Editor::from_markdown(
+            cx,
+            "上段\n\n| A | B |\n| --- | --- |\n| 1 | 中文😀 |\n\n下段".into(),
+            None,
+        )
+    });
+    let (before, after, first_cell, last_cell) = editor.read_with(cx, |editor, cx| {
+        let visible = editor.document.visible_blocks();
+        let table = visible[1].entity.read(cx);
+        let runtime = table.table_runtime.as_ref().unwrap();
+        (
+            visible[0].entity.clone(),
+            visible[2].entity.clone(),
+            runtime.header[0].clone(),
+            runtime.rows.last().unwrap().last().unwrap().clone(),
+        )
+    });
+    editor.update(cx, |editor, cx| {
+        before.update(cx, |block, cx| block.move_to(block.visible_len(), cx));
+        editor.focus_block(before.entity_id());
+    });
+    redraw(cx);
+    redraw(cx);
+    cx.simulate_keystrokes("right");
+    redraw(cx);
+    editor.read_with(cx, |editor, cx| {
+        assert_eq!(editor.active_entity_id, Some(first_cell.entity_id()));
+        assert_eq!(first_cell.read(cx).selected_range, 0..0);
+    });
+    editor.update(cx, |editor, cx| {
+        after.update(cx, |block, cx| block.move_to(0, cx));
+        editor.focus_block(after.entity_id());
+    });
+    redraw(cx);
+    cx.simulate_keystrokes("left");
+    redraw(cx);
+    editor.read_with(cx, |editor, cx| {
+        assert_eq!(editor.active_entity_id, Some(last_cell.entity_id()));
+        let block = last_cell.read(cx);
+        assert_eq!(block.cursor_offset(), block.visible_len());
+    });
+}
+
+#[gpui::test]
+async fn shift_arrows_extend_and_shrink_across_paragraphs(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let (editor, cx) = cx
+        .add_window_view(|_, cx| Editor::from_markdown(cx, "alpha\n\nbeta\n\ngamma".into(), None));
+    let first = editor.read_with(cx, |editor, _| {
+        editor.document.first_root().unwrap().clone()
+    });
+    editor.update(cx, |editor, cx| {
+        first.update(cx, |block, cx| block.move_to(2, cx));
+        editor.focus_block(first.entity_id());
+    });
+    redraw(cx);
+    redraw(cx);
+    cx.simulate_keystrokes("shift-down");
+    redraw(cx);
+    editor.read_with(cx, |editor, cx| {
+        assert_eq!(
+            editor.selected_markdown_text(cx).as_deref(),
+            Some("pha\n\nbe")
+        );
+    });
+    cx.simulate_keystrokes("shift-down");
+    redraw(cx);
+    editor.read_with(cx, |editor, cx| {
+        assert_eq!(
+            editor.selected_markdown_text(cx).as_deref(),
+            Some("pha\n\nbeta\n\nga")
+        );
+    });
+    cx.simulate_keystrokes("shift-up shift-up");
+    redraw(cx);
+    editor.read_with(cx, |editor, cx| {
+        assert!(editor.cross_block_selection.is_none());
+        assert_eq!(first.read(cx).selected_range, 2..2);
+    });
+    cx.simulate_keystrokes("shift-right shift-right shift-right shift-right shift-right");
+    redraw(cx);
+    editor.read_with(cx, |editor, cx| {
+        assert_eq!(
+            editor.selected_markdown_text(cx).as_deref(),
+            Some("pha\n\nb")
+        );
+    });
+    cx.simulate_keystrokes("shift-left shift-left shift-left shift-left shift-left");
+    redraw(cx);
+    editor.read_with(cx, |editor, cx| {
+        assert!(editor.cross_block_selection.is_none());
+        assert_eq!(first.read(cx).selected_range, 2..2);
+    });
+    cx.simulate_keystrokes("shift-down");
+    redraw(cx);
+    cx.simulate_keystrokes("left");
+    redraw(cx);
+    editor.read_with(cx, |editor, cx| {
+        assert!(editor.cross_block_selection.is_none());
+        assert_eq!(first.read(cx).selected_range, 2..2);
+        assert_eq!(editor.current_document_source(cx), "alpha\n\nbeta\n\ngamma");
+    });
+}
+
+#[gpui::test]
+async fn shift_vertical_arrows_select_soft_wrapped_rows(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let source = "中文 abcdef ".repeat(60);
+    let (editor, cx) = cx.add_window_view(|_, cx| Editor::from_markdown(cx, source.clone(), None));
+    let block = editor.read_with(cx, |editor, _| {
+        editor.document.first_root().unwrap().clone()
+    });
+    redraw(cx);
+    redraw(cx);
+    block.read_with(cx, |block, _| {
+        assert!(
+            !block.last_layout.as_ref().unwrap()[0]
+                .wrap_boundaries()
+                .is_empty()
+        );
+    });
+    cx.simulate_keystrokes("shift-down");
+    redraw(cx);
+    let first_end = block.read_with(cx, |block, _| {
+        assert_eq!(block.selected_range.start, 0);
+        assert!(block.selected_range.end > 0 && block.selected_range.end < source.len());
+        block.selected_range.end
+    });
+    cx.simulate_keystrokes("shift-down");
+    redraw(cx);
+    block.read_with(cx, |block, _| assert!(block.selected_range.end > first_end));
+    cx.simulate_keystrokes("shift-up");
+    redraw(cx);
+    cx.simulate_keystrokes("shift-up");
+    redraw(cx);
+    block.read_with(cx, |block, _| assert_eq!(block.selected_range, 0..0));
+    editor.read_with(cx, |editor, cx| {
+        assert_eq!(editor.current_document_source(cx), source)
+    });
+}
+
+#[gpui::test]
+async fn shift_vertical_arrows_select_source_lines_and_preserve_column(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let (editor, cx) =
+        cx.add_window_view(|_, cx| Editor::from_markdown(cx, "abcdef\nx\nabcdef".into(), None));
+    let source = editor.update(cx, |editor, cx| {
+        editor.toggle_view_mode(cx);
+        let source = editor.document.first_root().unwrap().clone();
+        source.update(cx, |block, cx| block.move_to(4, cx));
+        editor.focus_block(source.entity_id());
+        source
+    });
+    redraw(cx);
+    redraw(cx);
+    for expected in [4..8, 4..13] {
+        cx.simulate_keystrokes("shift-down");
+        redraw(cx);
+        source.read_with(cx, |block, _| assert_eq!(block.selected_range, expected));
+    }
+    cx.simulate_keystrokes("shift-up");
+    redraw(cx);
+    cx.simulate_keystrokes("shift-up");
+    redraw(cx);
+    source.read_with(cx, |block, _| assert_eq!(block.selected_range, 4..4));
+}
+
+#[gpui::test]
+async fn shift_arrows_keep_unicode_and_inline_projection_across_blocks(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let (editor, cx) =
+        cx.add_window_view(|_, cx| Editor::from_markdown(cx, "**中文**😀\n\n下一段".into(), None));
+    let (first, second) = editor.read_with(cx, |editor, _| {
+        (
+            editor.document.root_blocks()[0].clone(),
+            editor.document.root_blocks()[1].clone(),
+        )
+    });
+    editor.update(cx, |editor, cx| {
+        second.update(cx, |block, cx| block.move_to(0, cx));
+        editor.focus_block(second.entity_id());
+    });
+    redraw(cx);
+    redraw(cx);
+    cx.simulate_keystrokes("shift-left");
+    redraw(cx);
+    cx.simulate_keystrokes("shift-left");
+    redraw(cx);
+    editor.read_with(cx, |editor, cx| {
+        let selection = editor.cross_block_selection.unwrap();
+        assert_eq!(selection.focus.entity_id, first.entity_id());
+        assert_eq!(editor.selected_markdown_text(cx).as_deref(), Some("😀"));
+        for visible in editor.document.visible_blocks() {
+            let block = visible.entity.read(cx);
+            assert!(
+                block
+                    .display_text()
+                    .get(block.selected_range.clone())
+                    .is_some()
+            );
+        }
+    });
+    for _ in 0..3 {
+        cx.simulate_keystrokes("shift-right");
+        redraw(cx);
+    }
+    editor.read_with(cx, |editor, cx| {
+        assert!(
+            editor.cross_block_selection.is_none(),
+            "selection={:?}; first={:?}; range={:?}",
+            editor.cross_block_selection.map(|s| (
+                s.anchor.offset,
+                s.focus.offset,
+                s.focus.entity_id
+            )),
+            first.read(cx).display_text(),
+            first.read(cx).selected_range
+        );
+        assert_eq!(second.read(cx).selected_range, 0..0);
+    });
+}
+
+#[gpui::test]
 async fn html_badges_keep_loaded_images_across_source_focus_round_trips(cx: &mut TestAppContext) {
     use gpui::http_client::{AsyncBody, FakeHttpClient, Response};
     use std::sync::{Arc, Mutex};
@@ -465,7 +960,7 @@ fn about_dialog_body_lines_include_repository_and_star_message() {
     let strings = I18nStrings::zh_cn();
     let lines = Editor::about_dialog_body_lines(&strings);
 
-    assert_eq!(lines[0], format!("Velotype {}", env!("CARGO_PKG_VERSION")));
+    assert_eq!(lines[0], format!("Typers {}", env!("CARGO_PKG_VERSION")));
     assert_eq!(
         lines[2],
         format!("GitHub: {}", super::render::ABOUT_GITHUB_URL)
@@ -857,6 +1352,43 @@ async fn close_window_menu_action_closes_only_active_editor_window(cx: &mut Test
 }
 
 #[gpui::test]
+async fn close_window_menu_action_closes_settings_without_prompting_dirty_editor(
+    cx: &mut TestAppContext,
+) {
+    init_editor_test_app(cx);
+    let editor =
+        cx.update(|cx| crate::app_menu::open_editor_window(cx, "unsaved document".into(), None));
+    editor
+        .update(cx, |editor, _, cx| editor.mark_dirty(cx))
+        .unwrap();
+
+    for dispatch_in_window in [false, true] {
+        let settings = cx.update(crate::config::open_preferences_window);
+        cx.run_until_parked();
+        if dispatch_in_window {
+            settings
+                .update(cx, |_, _, cx| {
+                    crate::app_menu::dispatch_menu_action(&CloseWindow, cx);
+                })
+                .unwrap();
+        } else {
+            cx.update(|cx| crate::app_menu::dispatch_menu_action(&CloseWindow, cx));
+        }
+        cx.run_until_parked();
+
+        let remaining = cx.update(|cx| cx.windows());
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].window_id(), editor.window_id());
+        editor
+            .update(cx, |editor, _, _| {
+                assert!(editor.document_dirty);
+                assert!(!editor.show_unsaved_changes_dialog);
+            })
+            .unwrap();
+    }
+}
+
+#[gpui::test]
 async fn app_menu_opened_windows_activate_and_close_independently(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
 
@@ -1008,6 +1540,44 @@ async fn app_menu_opened_dirty_window_close_guard_prompts_only_that_window(
             assert!(editor.show_unsaved_changes_dialog);
         })
         .expect("second editor window should be open");
+}
+
+#[gpui::test]
+async fn app_shortcut_quit_checks_focused_dirty_editor(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let (editor, cx) =
+        cx.add_window_view(|_, cx| Editor::from_markdown(cx, "unsaved".into(), None));
+    activate_visual_window(cx);
+    editor.update(cx, |editor, cx| editor.mark_dirty(cx));
+    redraw(cx);
+
+    #[cfg(target_os = "macos")]
+    cx.simulate_keystrokes("cmd-q");
+    #[cfg(not(target_os = "macos"))]
+    cx.dispatch_action(QuitApplication);
+    cx.run_until_parked();
+
+    assert!(editor.read_with(cx, |editor, _| editor.show_unsaved_changes_dialog));
+    assert_eq!(cx.cx.windows().len(), 1);
+}
+
+#[gpui::test]
+async fn app_shortcut_comma_opens_preferences(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    cx.update(crate::app_menu::init);
+    let (_, cx) = cx.add_window_view(|_, cx| Editor::from_markdown(cx, "hello".into(), None));
+    activate_visual_window(cx);
+    redraw(cx);
+
+    cx.simulate_keystrokes("cmd-,");
+    cx.run_until_parked();
+
+    let active = cx.cx.update(|cx| cx.active_window().unwrap());
+    assert!(
+        active
+            .downcast::<crate::config::preferences::PreferencesWindow>()
+            .is_some()
+    );
 }
 
 #[gpui::test]
@@ -2249,6 +2819,32 @@ async fn table_cell_with_standalone_image_installs_runtime(cx: &mut TestAppConte
 }
 
 #[gpui::test]
+async fn paragraph_with_linked_image_keeps_image_link_and_source_mapping(cx: &mut TestAppContext) {
+    let source = "图片也可以出现在链接里：[![嵌套图片](https://via.placeholder.com/120/2094f3?text=Link \"嵌套图片\")](https://example.com)";
+    let editor = cx.new(|cx| Editor::from_markdown(cx, source.into(), None));
+    editor.update(cx, |editor, cx| {
+        for _ in 0..3 {
+            let paragraph = editor.document.first_root().unwrap().read(cx);
+            assert_eq!(paragraph.kind(), BlockKind::Paragraph);
+            assert!(paragraph.has_mixed_inline_visuals());
+            assert!(paragraph.image_runtime().is_none());
+            let cache = paragraph.record.title.render_cache();
+            let image = cache.spans().iter().find(|span| span.image).unwrap();
+            assert_eq!(
+                image.link.as_ref().unwrap().open_target,
+                "https://example.com"
+            );
+            assert_eq!(editor.document.markdown_text(cx), source);
+            let mappings = editor.build_source_target_mappings(cx);
+            assert_eq!(mappings.len(), 1);
+            assert_eq!(mappings[0].full_source_range, 0..source.len());
+            editor.toggle_view_mode(cx);
+            editor.toggle_view_mode(cx);
+        }
+    });
+}
+
+#[gpui::test]
 async fn table_cell_with_mixed_inline_image_uses_inline_image_segments(cx: &mut TestAppContext) {
     let markdown = [
         "| Preview |",
@@ -2864,20 +3460,25 @@ async fn toggle_view_mode_ends_stale_code_block_pointer_selection(cx: &mut TestA
 }
 
 #[gpui::test]
-async fn ctrl_tab_toggles_view_mode(cx: &mut TestAppContext) {
+async fn default_source_mode_shortcut_toggles_both_directions(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
     let (editor, cx) =
         cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "alpha".to_string(), None));
 
     redraw(cx);
-    cx.simulate_keystrokes("ctrl-tab");
+    let shortcut = if cfg!(target_os = "macos") {
+        "cmd-/"
+    } else {
+        "ctrl-/"
+    };
+    cx.simulate_keystrokes(shortcut);
     redraw(cx);
 
     editor.update(cx, |editor, _cx| {
         assert!(matches!(editor.view_mode, ViewMode::Source));
     });
 
-    cx.simulate_keystrokes("ctrl-tab");
+    cx.simulate_keystrokes(shortcut);
     redraw(cx);
 
     editor.update(cx, |editor, _cx| {
@@ -3616,5 +4217,493 @@ async fn toggle_view_mode_preserves_callout_table_cell_position(cx: &mut TestApp
         assert_eq!(restored_cell.read(cx).display_text(), "beta");
         assert_eq!(restored_cell.read(cx).selected_range, 2..2);
         assert_eq!(editor.pending_focus, Some(restored_cell.entity_id()));
+    });
+}
+
+/// Exercise the real edit/event/render path with a representative Markdown file.
+/// Run with TYPERS_PERF_MARKDOWN=/path/to/file.md cargo test markdown_edit_performance -- --ignored --nocapture.
+#[gpui::test]
+#[ignore]
+async fn markdown_edit_performance(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler;
+    init_editor_test_app(cx);
+    let source = std::env::var_os("TYPERS_PERF_MARKDOWN")
+        .map(|path| fs::read_to_string(path).expect("read performance fixture"))
+        .unwrap_or_else(|| include_str!("../../test.md").to_string());
+    let (editor, cx) = cx.add_window_view(|_, cx| Editor::from_markdown(cx, source, None));
+    redraw(cx);
+    redraw(cx);
+    let block = editor.read_with(cx, |editor, _| {
+        editor.document.first_root().unwrap().clone()
+    });
+    block.update(cx, |block, cx| block.move_to(block.visible_len(), cx));
+    redraw(cx);
+    let start = Instant::now();
+    for _ in 0..60 {
+        cx.update(|window, cx| {
+            block.update(cx, |block, cx| {
+                block.replace_text_in_range(None, "a", window, cx);
+            });
+        });
+        redraw(cx);
+    }
+    let edit_elapsed = start.elapsed();
+    let start = Instant::now();
+    for _ in 0..60 {
+        redraw(cx);
+    }
+    eprintln!(
+        "markdown_edit_performance: 60 edits {:?}, 60 unchanged frames {:?}",
+        edit_elapsed,
+        start.elapsed()
+    );
+}
+
+#[gpui::test]
+async fn ordinary_edits_preserve_shared_references_without_notifying_siblings(
+    cx: &mut TestAppContext,
+) {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    init_editor_test_app(cx);
+    let editor = cx.new(|cx| Editor::from_markdown(cx,
+        "plain\n\n[link][ref]\n\n![image][ref]\n\n[ref]: old.png\n\ntext[^note]\n\n[^note]: footnote".into(), None));
+    let (plain, link, image, definition, references) = editor.read_with(cx, |editor, cx| {
+        let find = |text: &str| {
+            editor
+                .document
+                .visible_blocks()
+                .iter()
+                .find(|block| block.entity.read(cx).record.title.visible_text() == text)
+                .unwrap_or_else(|| panic!("missing block: {text}"))
+                .entity
+                .clone()
+        };
+        (
+            find("plain"),
+            find("link"),
+            find("![image][ref]"),
+            find("[ref]: old.png"),
+            (
+                editor.image_reference_definitions.clone(),
+                editor.link_reference_definitions.clone(),
+                editor.footnote_registry.clone(),
+            ),
+        )
+    });
+    cx.run_until_parked();
+    let notifications = Arc::new(AtomicUsize::new(0));
+    editor.update(cx, |_, cx| {
+        let notifications = notifications.clone();
+        cx.observe(&link, move |_, _, _| {
+            notifications.fetch_add(1, Ordering::Relaxed);
+        })
+        .detach();
+    });
+    plain.update(cx, |block, cx| {
+        block.replace_text_in_visible_range(5..5, "a", None, false, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(notifications.load(Ordering::Relaxed), 0);
+    editor.read_with(cx, |editor, _| {
+        assert!(Arc::ptr_eq(
+            &references.0,
+            &editor.image_reference_definitions
+        ));
+        assert!(Arc::ptr_eq(
+            &references.1,
+            &editor.link_reference_definitions
+        ));
+        assert!(Arc::ptr_eq(&references.2, &editor.footnote_registry));
+    });
+    definition.update(cx, |block, cx| {
+        block.replace_text_in_visible_range(
+            0..block.visible_len(),
+            "[ref]: new.png",
+            None,
+            false,
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    assert!(notifications.load(Ordering::Relaxed) > 0);
+    link.read_with(cx, |block, _| {
+        assert_eq!(block.inline_link_at(0), Some("new.png"))
+    });
+    image.read_with(cx, |block, _| {
+        assert_eq!(block.image_runtime().unwrap().src, "new.png")
+    });
+}
+
+/// Compare scroll frames through the real editor tree, layout and paint path.
+#[gpui::test]
+#[ignore]
+async fn markdown_scroll_performance(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let source = std::env::var_os("TYPERS_PERF_MARKDOWN")
+        .map(|path| fs::read_to_string(path).expect("read performance fixture"))
+        .unwrap_or_else(|| include_str!("../../test.md").to_string());
+    let (editor, cx) = cx.add_window_view(|_, cx| Editor::from_markdown(cx, source, None));
+    for _ in 0..3 {
+        redraw(cx);
+    }
+    for pass in 0..3 {
+        let start = Instant::now();
+        let mut mounted = 0;
+        for frame in 0..240 {
+            editor.update(cx, |editor, cx| {
+                let step = if frame < 120 { -120.0 } else { 120.0 };
+                let max = editor.scroll_handle.max_offset().y;
+                let y = (editor.scroll_handle.offset().y + gpui::px(step))
+                    .min(gpui::px(0.0))
+                    .max(-max);
+                editor
+                    .scroll_handle
+                    .set_offset(gpui::point(gpui::px(0.0), y));
+                editor.pending_scroll_active_block_into_view = false;
+                editor.pending_scroll_recheck_after_layout = false;
+                cx.notify();
+            });
+            redraw(cx);
+            mounted += editor.read_with(cx, |editor, _| {
+                let run = editor.prev_mounted_run.unwrap();
+                run.row_end - run.row_start
+            });
+        }
+        eprintln!(
+            "markdown_scroll_performance pass {pass}: 240 scroll frames {:?}, mounted rows {mounted}",
+            start.elapsed()
+        );
+    }
+}
+
+#[gpui::test]
+async fn scrolling_reuses_source_mappings_but_caret_movement_keeps_live_offsets(
+    cx: &mut TestAppContext,
+) {
+    init_editor_test_app(cx);
+    let source = (0..120)
+        .map(|i| format!("## Section {i}\n\nParagraph {i}.\n\n"))
+        .collect::<String>();
+    let (editor, cx) = cx.add_window_view(|_, cx| Editor::from_markdown(cx, source, None));
+    for _ in 0..3 {
+        redraw(cx);
+    }
+    let (revision, mappings) = editor.read_with(cx, |editor, cx| {
+        (
+            editor.document.source_revision(cx),
+            editor.source_selection_mappings(cx).as_ptr(),
+        )
+    });
+    for frame in 0..20 {
+        editor.update(cx, |editor, cx| {
+            editor
+                .scroll_handle
+                .set_offset(gpui::point(gpui::px(0.0), gpui::px(-60.0 * frame as f32)));
+            cx.notify();
+        });
+        redraw(cx);
+    }
+    editor.update(cx, |editor, cx| {
+        assert_eq!(editor.document.source_revision(cx), revision);
+        assert_eq!(editor.source_selection_mappings(cx).as_ptr(), mappings);
+        let heading = editor.document.first_root().unwrap().clone();
+        heading.update(cx, |block, cx| block.move_to(3, cx));
+        assert_eq!(editor.capture_source_selection_snapshot(cx).range, 6..6);
+        assert_eq!(editor.source_selection_mappings(cx).as_ptr(), mappings);
+    });
+}
+
+#[gpui::test]
+async fn source_caches_follow_text_table_and_runtime_identity_changes(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let editor = cx.new(|cx| {
+        Editor::from_markdown(
+            cx,
+            "# Head\n\nbody\n\n| A | B |\n| --- | --- |\n| one | two |".into(),
+            None,
+        )
+    });
+    editor.update(cx, |editor, cx| {
+        let heading = editor.document.root_blocks()[0].clone();
+        let body = editor.document.root_blocks()[1].clone();
+        editor.active_entity_id = Some(body.entity_id());
+        let original = editor.serialized_document_text(cx);
+        let revision = editor.document.source_revision(cx);
+        assert_eq!(
+            editor.capture_source_selection_snapshot(cx).range.start,
+            original.find("body").unwrap()
+        );
+        // Even direct record mutations must invalidate: some structural and
+        // table paths update records without going through text Changed events.
+        heading.update(cx, |block, _| {
+            block.record.set_title(InlineTextTree::plain("Longer 标题"));
+            block.sync_render_cache();
+        });
+        let source = editor.serialized_document_text(cx);
+        assert_ne!(editor.document.source_revision(cx), revision);
+        assert!(source.starts_with("# Longer 标题"));
+        assert_eq!(
+            editor.capture_source_selection_snapshot(cx).range.start,
+            source.find("body").unwrap()
+        );
+
+        let table = editor
+            .document
+            .visible_blocks()
+            .iter()
+            .find(|b| b.entity.read(cx).kind() == BlockKind::Table)
+            .unwrap()
+            .entity
+            .clone();
+        let revision = editor.document.source_revision(cx);
+        table.update(cx, |block, _| {
+            let table = block.record.table.as_mut().unwrap();
+            table.rows[0][0] = InlineTextTree::plain("changed");
+            table.alignments[0] = TableColumnAlignment::Right;
+        });
+        assert_ne!(editor.document.source_revision(cx), revision);
+        assert!(editor.serialized_document_text(cx).contains("changed"));
+        let old_cell = table.read(cx).table_runtime.as_ref().unwrap().header[0].entity_id();
+        let revision = editor.document.source_revision(cx);
+        editor.rebuild_table_runtimes(cx);
+        let new_cell = table.read(cx).table_runtime.as_ref().unwrap().header[0].entity_id();
+        assert_ne!(old_cell, new_cell);
+        assert_ne!(editor.document.source_revision(cx), revision);
+        let mappings = editor.source_selection_mappings(cx);
+        assert!(mappings.iter().any(|m| m.entity.entity_id() == new_cell));
+        assert!(mappings.iter().all(|m| m.entity.entity_id() != old_cell));
+        drop(mappings);
+
+        let source = editor.serialized_document_text(cx);
+        let old_body = body.entity_id();
+        let roots = Editor::build_root_blocks_from_markdown(cx, &source);
+        editor.document.replace_roots(roots, cx);
+        editor.rebuild_table_runtimes(cx);
+        assert_eq!(editor.serialized_document_text(cx), source);
+        assert!(
+            editor
+                .source_selection_mappings(cx)
+                .iter()
+                .all(|m| m.entity.entity_id() != old_body)
+        );
+    });
+}
+
+#[gpui::test]
+async fn composite_quote_keeps_native_heading_and_nested_list_structure(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let editor = cx.new(|cx| {
+        Editor::from_markdown(
+            cx,
+            include_str!("fixtures/quoted-composite.md").into(),
+            None,
+        )
+    });
+    editor.read_with(cx, |editor, cx| {
+        let visible = editor.document.visible_blocks();
+        assert!(
+            visible.iter().any(|row| {
+                let block = row.entity.read(cx);
+                block.kind() == BlockKind::Heading { level: 2 }
+                    && block.display_text() == "引用中的综合示例"
+                    && block.quote_depth == 1
+            }),
+            "quoted heading must be a native heading, not raw Markdown"
+        );
+        assert!(
+            !visible
+                .iter()
+                .any(|row| row.entity.read(cx).kind() == BlockKind::RawMarkdown)
+        );
+        let numbered = visible
+            .iter()
+            .filter(|row| row.entity.read(cx).kind() == BlockKind::NumberedListItem)
+            .collect::<Vec<_>>();
+        assert_eq!(numbered.len(), 2);
+        for (index, row) in numbered.iter().enumerate() {
+            let block = row.entity.read(cx);
+            assert_eq!(block.list_ordinal, Some(index + 1));
+            assert_eq!(block.children.len(), 2);
+            for child in &block.children {
+                assert_eq!(child.read(cx).render_depth, 1);
+                assert_eq!(child.read(cx).quote_depth, 1);
+            }
+        }
+        let tasks = numbered[1].entity.read(cx).children.clone();
+        assert_eq!(
+            tasks[0].read(cx).kind(),
+            BlockKind::TaskListItem { checked: true }
+        );
+        assert_eq!(
+            tasks[1].read(cx).kind(),
+            BlockKind::TaskListItem { checked: false }
+        );
+        assert!(
+            visible
+                .iter()
+                .any(|row| row.entity.read(cx).kind() == BlockKind::MathBlock)
+        );
+    });
+}
+
+#[gpui::test]
+async fn composite_quote_preserves_heading_selection_edits_and_mode_round_trips(
+    cx: &mut TestAppContext,
+) {
+    use gpui::EntityInputHandler;
+    init_editor_test_app(cx);
+    let (editor, cx) = cx.add_window_view(|_, cx| {
+        Editor::from_markdown(
+            cx,
+            include_str!("fixtures/quoted-composite.md").into(),
+            None,
+        )
+    });
+    for _ in 0..3 {
+        redraw(cx);
+    }
+    let heading = editor.read_with(cx, |editor, cx| {
+        editor
+            .document
+            .visible_blocks()
+            .iter()
+            .find(|row| row.entity.read(cx).kind() == BlockKind::Heading { level: 2 })
+            .unwrap()
+            .entity
+            .clone()
+    });
+    heading.read_with(cx, |block, cx| {
+        let theme = cx.global::<ThemeManager>().current_arc();
+        assert!(block.last_bounds.unwrap().left() >= gpui::px(theme.dimensions.quote_padding_left));
+        assert_eq!(
+            block.last_line_height,
+            gpui::px((theme.typography.h2_size * 1.225).ceil())
+        );
+    });
+    editor.update(cx, |editor, cx| {
+        let source = editor.serialized_document_text(cx);
+        assert!(source.contains("> ## 引用中的综合示例"));
+        assert!(source.contains(">    - [x] 完成"));
+        assert!(source.contains(">    - [ ] 待办"));
+        assert!(source.contains("![小图片](https://via.placeholder.com/16 \"icon\")"));
+        assert!(source.contains("**粗体**"));
+        assert!(source.contains("> $$\n> e = mc^2\n> $$"));
+        editor.active_entity_id = Some(heading.entity_id());
+        heading.update(cx, |block, cx| block.move_to("引用中".len(), cx));
+        let selection = editor.capture_source_selection_snapshot(cx);
+        assert_eq!(
+            selection.range.start,
+            source.find("引用中的综合示例").unwrap() + "引用中".len()
+        );
+        editor.toggle_view_mode_from_ui(cx);
+        assert!(editor.view_mode == ViewMode::Source);
+        assert_eq!(
+            editor.capture_source_selection_snapshot(cx).range,
+            selection.range
+        );
+        editor.toggle_view_mode_from_ui(cx);
+        assert!(editor.view_mode == ViewMode::Rendered);
+        assert_eq!(
+            editor.capture_source_selection_snapshot(cx).range,
+            selection.range
+        );
+        assert_eq!(editor.serialized_document_text(cx), source);
+    });
+    redraw(cx);
+    let heading = editor.read_with(cx, |editor, cx| {
+        editor
+            .document
+            .visible_blocks()
+            .iter()
+            .find(|row| row.entity.read(cx).kind() == BlockKind::Heading { level: 2 })
+            .unwrap()
+            .entity
+            .clone()
+    });
+    let original = editor.read_with(cx, |editor, cx| editor.serialized_document_text(cx));
+    cx.update(|window, cx| {
+        heading.update(cx, |block, cx| {
+            block.move_to(block.visible_len(), cx);
+            block.replace_text_in_range(None, "（修改）", window, cx);
+        });
+    });
+    cx.run_until_parked();
+    editor.update(cx, |editor, cx| {
+        let edited = editor.serialized_document_text(cx);
+        assert!(edited.contains("> ## 引用中的综合示例（修改）"));
+        editor.undo_document(cx);
+        assert_eq!(editor.serialized_document_text(cx), original);
+        editor.redo_document(cx);
+        assert_eq!(editor.serialized_document_text(cx), edited);
+        assert!(
+            editor
+                .document
+                .visible_blocks()
+                .iter()
+                .any(|row| row.entity.read(cx).kind() == BlockKind::Heading { level: 2 })
+        );
+    });
+}
+
+#[gpui::test]
+async fn raw_quote_children_keep_the_same_quote_inset_as_native_text(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let (editor, cx) = cx.add_window_view(|_, cx| {
+        Editor::from_markdown(
+            cx,
+            "# Outside\n\n> quoted text\n>\n> [reference]: https://example.com".into(),
+            None,
+        )
+    });
+    for _ in 0..3 {
+        redraw(cx);
+    }
+    editor.read_with(cx, |editor, cx| {
+        let rows = editor.document.visible_blocks();
+        let quote = rows
+            .iter()
+            .find(|row| row.entity.read(cx).kind() == BlockKind::Quote)
+            .unwrap()
+            .entity
+            .read(cx);
+        let raw = rows
+            .iter()
+            .find(|row| row.entity.read(cx).kind() == BlockKind::RawMarkdown)
+            .unwrap()
+            .entity
+            .read(cx);
+        assert_eq!(raw.visible_quote_depth, 1);
+        assert_eq!(
+            raw.last_bounds.unwrap().left(),
+            quote.last_bounds.unwrap().left()
+        );
+    });
+}
+
+#[gpui::test]
+async fn quoted_headings_are_native_inside_nested_quotes_and_callouts(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let editor = cx.new(|cx| Editor::from_markdown(cx,
+        "> # Outer\n>\n> > ## Inner\n> > body\n\n> [!NOTE]\n> ### Callout heading\n>\n> Setext title\n> ===".into(), None));
+    editor.read_with(cx, |editor, cx| {
+        let rows = editor.document.visible_blocks();
+        for (text, level, depth) in [
+            ("Outer", 1, 1),
+            ("Inner", 2, 2),
+            ("Callout heading", 3, 1),
+            ("Setext title", 1, 1),
+        ] {
+            let block = rows
+                .iter()
+                .find(|row| row.entity.read(cx).display_text() == text)
+                .unwrap()
+                .entity
+                .read(cx);
+            assert_eq!(block.kind(), BlockKind::Heading { level });
+            assert_eq!(block.quote_depth, depth);
+        }
     });
 }

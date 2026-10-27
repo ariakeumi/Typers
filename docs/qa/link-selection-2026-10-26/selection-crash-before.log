@@ -1,0 +1,137 @@
+   Compiling velotype v0.7.8 (/Users/umi/Documents/typer)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.81s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/main.rs (target/debug/deps/velotype-01da506580686cb8)
+
+running 1 test
+
+thread 'editor::writing::tests::selecting_unicode_link_delimiters_keeps_source_selection_valid' (1183909) panicked at src/editor/selection.rs:1270:42:
+end byte index 5 is not a char boundary; it is inside '粗' (bytes 3..6 of string)
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:679:5
+   1: core::panicking::panic_fmt
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panicking.rs:80:14
+   2: core::str::slice_error_fail_rt
+   3: core::str::slice_error_fail
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/str/mod.rs:70:5
+   4: <core::range::Range<usize> as core::slice::index::SliceIndex<str>>::index
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/str/traits.rs:335:21
+   5: <core::ops::range::Range<usize> as core::slice::index::SliceIndex<str>>::index
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/str/traits.rs:248:34
+   6: <alloc::string::String as core::ops::index::Index<core::ops::range::Range<usize>>>::index
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/string.rs:2839:15
+   7: <velotype::editor::Editor>::selected_markdown_text
+             at ./src/editor/selection.rs:1270:42
+   8: <velotype::editor::Editor>::render_status_bar
+             at ./src/editor/status_bar.rs:109:40
+   9: <velotype::editor::Editor as gpui::element::Render>::render
+             at ./src/editor/render.rs:2386:51
+  10: gpui::view::any_view::render::<velotype::editor::Editor>::{closure#0}
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/view.rs:185:41
+  11: <gpui::app::App as gpui::AppContext>::update_entity::<velotype::editor::Editor, gpui::element::AnyElement, gpui::view::any_view::render<velotype::editor::Editor>::{closure#0}>::{closure#0}
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:3272:25
+  12: <gpui::app::App>::update_entity_erased::{closure#0}
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:3209:13
+  13: <gpui::app::App>::update::<(), <gpui::app::App>::update_entity_erased::{closure#0}>
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:1315:22
+  14: <gpui::app::App>::update_entity_erased
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:3207:14
+  15: <gpui::app::App as gpui::AppContext>::update_entity::<velotype::editor::Editor, gpui::element::AnyElement, gpui::view::any_view::render<velotype::editor::Editor>::{closure#0}>
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:3271:14
+  16: <gpui::app::entity_map::Entity<velotype::editor::Editor>>::update::<gpui::element::AnyElement, gpui::app::App, gpui::view::any_view::render<velotype::editor::Editor>::{closure#0}>
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app/entity_map.rs:502:12
+  17: gpui::view::any_view::render::<velotype::editor::Editor>
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/view.rs:185:14
+  18: <gpui::view::AnyView as gpui::view::View>::render
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/view.rs:100:9
+  19: <gpui::view::ViewElement<gpui::view::AnyView> as gpui::element::Element>::request_layout::{closure#0}
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/view.rs:361:56
+  20: gpui::view::request_layout_view::{closure#0}
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/view.rs:485:35
+  21: <gpui::window::Window>::with_rendered_view::<(gpui::taffy::LayoutId, core::option::Option<gpui::element::AnyElement>), gpui::view::request_layout_view::{closure#0}>
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/window.rs:5363:22
+  22: gpui::view::request_layout_view
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/view.rs:475:12
+  23: <gpui::view::ViewElement<gpui::view::AnyView> as gpui::element::Element>::request_layout
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/view.rs:356:26
+  24: <gpui::element::Drawable<gpui::view::ViewElement<gpui::view::AnyView>>>::request_layout
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/element.rs:383:64
+  25: <gpui::element::AnyElement>::request_layout
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/element.rs:671:16
+  26: <gpui::window::Window>::draw_roots
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/window.rs:3703:43
+  27: <gpui::window::Window>::draw
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/window.rs:3462:18
+  28: <gpui::app::App>::flush_effects::{closure#1}
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:2044:75
+  29: <gpui::app::App>::update_window_id::<(), <gpui::app::App>::flush_effects::{closure#1}>::{closure#0}
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:2209:31
+  30: <gpui::app::App>::update_window_erased::{closure#0}
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:3154:13
+  31: <gpui::app::App>::update::<(), <gpui::app::App>::update_window_erased::{closure#0}>
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:1315:22
+  32: <gpui::app::App>::update_window_erased
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:3145:14
+  33: <gpui::app::App>::update_window_id::<(), <gpui::app::App>::flush_effects::{closure#1}>
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:2207:14
+  34: <gpui::app::App as gpui::AppContext>::update_window::<(), <gpui::app::App>::flush_effects::{closure#1}>
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:3301:14
+  35: <gpui::app::App>::flush_effects
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:2044:30
+  36: <gpui::app::App>::finish_update
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:1327:18
+  37: <gpui::app::App>::update::<(), <gpui::app::App>::update_window_erased::{closure#0}>
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:1316:14
+  38: <gpui::app::App>::update_window_erased
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:3145:14
+  39: <gpui::app::App>::update_window_id::<bool, <gpui::app::test_context::TestAppContext>::dispatch_keystroke::{closure#0}>
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:2207:14
+  40: <gpui::app::App as gpui::AppContext>::update_window::<bool, <gpui::app::test_context::TestAppContext>::dispatch_keystroke::{closure#0}>
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:3301:14
+  41: <gpui::app::test_context::TestAppContext as gpui::AppContext>::update_window::<bool, <gpui::app::test_context::TestAppContext>::dispatch_keystroke::{closure#0}>
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app/test_context.rs:85:14
+  42: <gpui::app::test_context::TestAppContext>::dispatch_keystroke
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app/test_context.rs:643:14
+  43: <gpui::app::test_context::TestAppContext>::simulate_keystrokes
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app/test_context.rs:623:18
+  44: velotype::editor::writing::tests::selecting_unicode_link_delimiters_keeps_source_selection_valid::__selecting_unicode_link_delimiters_keeps_source_selection_valid::{closure#0}
+             at ./src/editor/writing.rs:1280:16
+  45: <gpui::executor::ForegroundExecutor>::block_test::<(), velotype::editor::writing::tests::selecting_unicode_link_delimiters_keeps_source_selection_valid::__selecting_unicode_link_delimiters_keeps_source_selection_valid::{closure#0}>::{closure#0}
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/executor.rs:425:36
+  46: <scheduler::test_scheduler::TestScheduler>::block_until
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-scheduler-0.3.9/src/test_scheduler.rs:123:35
+  47: <gpui::executor::ForegroundExecutor>::block_test::<(), velotype::editor::writing::tests::selecting_unicode_link_delimiters_keeps_source_selection_valid::__selecting_unicode_link_delimiters_keeps_source_selection_valid::{closure#0}>
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/executor.rs:432:19
+  48: velotype::editor::writing::tests::selecting_unicode_link_delimiters_keeps_source_selection_valid::{closure#0}
+             at ./src/editor/writing.rs:1272:5
+  49: gpui::test::run_test::{closure#0}
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/test.rs:113:17
+  50: std::panicking::catch_unwind::do_call::<gpui::test::run_test::{closure#0}, ()>
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:576:43
+  51: std::panicking::catch_unwind::<(), gpui::test::run_test::{closure#0}>
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:544:19
+  52: std::panic::catch_unwind::<gpui::test::run_test::{closure#0}, ()>
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panic.rs:359:14
+  53: gpui::test::run_test
+             at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/test.rs:110:26
+  54: velotype::editor::writing::tests::selecting_unicode_link_delimiters_keeps_source_selection_valid
+             at ./src/editor/writing.rs:1272:5
+  55: velotype::editor::writing::tests::selecting_unicode_link_delimiters_keeps_source_selection_valid::{closure#0}
+             at ./src/editor/writing.rs:1272:18
+  56: <velotype::editor::writing::tests::selecting_unicode_link_delimiters_keeps_source_selection_valid::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250:5
+  57: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+test editor::writing::tests::selecting_unicode_link_delimiters_keeps_source_selection_valid ... FAILED
+
+failures:
+
+failures:
+    editor::writing::tests::selecting_unicode_link_delimiters_keeps_source_selection_valid
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 874 filtered out; finished in 0.17s
+
+error: test failed, to rerun pass `--bin velotype`

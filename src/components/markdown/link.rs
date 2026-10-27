@@ -46,7 +46,7 @@ pub(crate) type LinkReferenceDefinitions = HashMap<String, LinkReferenceDefiniti
 
 /// Scans container-prefixed lines for definitions, keeping the first normalized label.
 /// HTML regions and fences with nonblank info tails suppress scanning via line heuristics.
-/// Bare fences do not activate suppression, and closing runs must match the opener exactly.
+/// Bare fences do not activate suppression; closing runs must be at least as long as the opener.
 pub(crate) fn parse_link_reference_definitions(markdown: &str) -> LinkReferenceDefinitions {
     let lines = markdown.split('\n').collect::<Vec<_>>();
     let normalized_lines = lines
@@ -281,7 +281,7 @@ fn parse_reference_scan_opening_fence(line: &str) -> Option<FenceInfo> {
     (len >= 3).then_some(FenceInfo { ch, len })
 }
 
-/// Requires the opening marker and exact run length, followed only by whitespace.
+/// Requires the opening marker and at least the opening run length, followed only by whitespace.
 fn is_reference_scan_closing_fence(line: &str, opener: FenceInfo) -> bool {
     let trimmed = line.trim_end();
     if !trimmed.starts_with(opener.ch) {
@@ -292,7 +292,7 @@ fn is_reference_scan_closing_fence(line: &str, opener: FenceInfo) -> bool {
         .chars()
         .take_while(|current| *current == opener.ch)
         .count();
-    run_len == opener.len && trimmed[opener.ch.len_utf8() * run_len..].trim().is_empty()
+    run_len >= opener.len && trimmed[opener.ch.len_utf8() * run_len..].trim().is_empty()
 }
 
 /// Detects a comment or opening tag at the trimmed line start without validating HTML.

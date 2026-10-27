@@ -5,6 +5,24 @@ use std::ops::Range;
 use super::*;
 
 impl Editor {
+    /// Borrows selection mappings without rebuilding or cloning their byte
+    /// arrays on each scroll frame. Validation includes live block records and
+    /// table-cell identity, so edits and document replacement cannot reuse them.
+    pub(super) fn source_selection_mappings(
+        &self,
+        cx: &App,
+    ) -> std::cell::Ref<'_, Vec<SourceTargetMapping>> {
+        let revision = self.document.source_revision(cx);
+        let mut cache = self.source_selection_mappings.borrow_mut();
+        if cache.as_ref().is_none_or(|(cached, _)| *cached != revision) {
+            *cache = Some((revision, self.build_source_target_mappings(cx)));
+        }
+        drop(cache);
+        std::cell::Ref::map(self.source_selection_mappings.borrow(), |cache| {
+            &cache.as_ref().unwrap().1
+        })
+    }
+
     /// Returns canonical rendered Markdown or the source editor's raw text.
     pub(super) fn current_document_source(&self, cx: &App) -> String {
         match self.view_mode {
@@ -83,6 +101,7 @@ impl Editor {
         let mut content_to_source = vec![0; content.len() + 1];
         let mut source_to_content = vec![0];
 
+        full.push_str(indentation);
         full.push_str(&fence);
         if let Some(language) = language {
             full.push_str(language);
@@ -125,6 +144,7 @@ impl Editor {
 
         full.push('\n');
         source_to_content.resize(full.len() + 1, content.len());
+        full.push_str(indentation);
         full.push_str(&fence);
         source_to_content.resize(full.len() + 1, content.len());
         source_to_content[full.len()] = content.len();
@@ -215,6 +235,7 @@ impl Editor {
     pub(super) fn push_raw_block_mapping(
         &self,
         block: &Entity<Block>,
+        indent_columns: usize,
         quote_depth: usize,
         absolute_start: usize,
         mappings: &mut Vec<SourceTargetMapping>,
@@ -224,10 +245,10 @@ impl Editor {
             let block_ref = block.read(cx);
             (
                 block_ref.display_text().to_string(),
-                if block_ref.render_depth == 0 {
+                if indent_columns == 0 {
                     String::new()
                 } else {
-                    "  ".repeat(block_ref.render_depth)
+                    " ".repeat(indent_columns)
                 },
             )
         };
@@ -253,6 +274,7 @@ impl Editor {
     pub(super) fn push_code_block_mapping(
         &self,
         block: &Entity<Block>,
+        indent_columns: usize,
         quote_depth: usize,
         absolute_start: usize,
         mappings: &mut Vec<SourceTargetMapping>,
@@ -265,7 +287,7 @@ impl Editor {
                     BlockKind::CodeBlock { language } => language.clone(),
                     _ => None,
                 },
-                "  ".repeat(block_ref.render_depth),
+                " ".repeat(indent_columns),
                 block_ref.display_text().to_string(),
             )
         };
@@ -322,7 +344,7 @@ impl Editor {
     pub(super) fn push_table_mappings(
         &self,
         block: &Entity<Block>,
-        list_depth: usize,
+        indent_columns: usize,
         quote_depth: usize,
         absolute_start: usize,
         mappings: &mut Vec<SourceTargetMapping>,
@@ -336,7 +358,7 @@ impl Editor {
         };
 
         let lines = crate::components::serialize_table_markdown_lines(&table);
-        let indentation = "  ".repeat(list_depth);
+        let indentation = " ".repeat(indent_columns);
         let quote_prefix = "> ".repeat(quote_depth);
         let line_prefix_len = indentation.len() + quote_prefix.len();
         let mut line_start = absolute_start;
@@ -403,7 +425,7 @@ impl Editor {
     pub(super) fn collect_single_block_source_mappings(
         &self,
         block: &Entity<Block>,
-        list_depth: usize,
+        indent_columns: usize,
         quote_depth: usize,
         absolute_start: usize,
         mappings: &mut Vec<SourceTargetMapping>,
@@ -424,7 +446,7 @@ impl Editor {
                     | BlockKind::RawMarkdown
                     | BlockKind::Separator
             ))
-            .then(|| block_ref.record.title.markdown_offset_map());
+            .then(|| block_ref.record.title_markdown_for_output());
             (
                 kind,
                 block_ref.list_ordinal,
@@ -436,27 +458,37 @@ impl Editor {
         let own_len = match kind {
             BlockKind::Table => self.push_table_mappings(
                 block,
-                list_depth,
+                indent_columns,
                 quote_depth,
                 absolute_start,
                 mappings,
                 cx,
             ),
-            BlockKind::CodeBlock { .. } => {
-                self.push_code_block_mapping(block, quote_depth, absolute_start, mappings, cx)
-            }
+            BlockKind::CodeBlock { .. } => self.push_code_block_mapping(
+                block,
+                indent_columns,
+                quote_depth,
+                absolute_start,
+                mappings,
+                cx,
+            ),
             BlockKind::RawMarkdown
             | BlockKind::Comment
             | BlockKind::HtmlBlock
             | BlockKind::MathBlock
-            | BlockKind::MermaidBlock => {
-                self.push_raw_block_mapping(block, quote_depth, absolute_start, mappings, cx)
-            }
+            | BlockKind::MermaidBlock => self.push_raw_block_mapping(
+                block,
+                indent_columns,
+                quote_depth,
+                absolute_start,
+                mappings,
+                cx,
+            ),
             BlockKind::Separator => {
                 let line = block
                     .read(cx)
                     .record
-                    .markdown_line(list_depth, list_ordinal);
+                    .markdown_line(indent_columns, list_ordinal);
                 if quote_depth == 0 {
                     line.len()
                 } else {
@@ -472,18 +504,22 @@ impl Editor {
             }
             BlockKind::Heading { level } => self.push_inline_block_mapping(
                 block,
-                title.expect("heading title").markdown().to_string(),
-                format!("{}{} ", "  ".repeat(list_depth), "#".repeat(level as usize)),
+                title.expect("heading title"),
+                format!(
+                    "{}{} ",
+                    " ".repeat(indent_columns),
+                    "#".repeat(level as usize)
+                ),
                 String::new(),
                 quote_depth,
                 absolute_start,
                 mappings,
             ),
             BlockKind::Paragraph => {
-                let indentation = "  ".repeat(list_depth);
+                let indentation = " ".repeat(indent_columns);
                 self.push_inline_block_mapping(
                     block,
-                    title.expect("paragraph title").markdown().to_string(),
+                    title.expect("paragraph title"),
                     indentation.clone(),
                     indentation,
                     quote_depth,
@@ -492,10 +528,10 @@ impl Editor {
                 )
             }
             BlockKind::BulletedListItem => {
-                let indentation = "  ".repeat(list_depth);
+                let indentation = " ".repeat(indent_columns);
                 self.push_inline_block_mapping(
                     block,
-                    title.expect("bullet title").markdown().to_string(),
+                    title.expect("bullet title"),
                     format!("{indentation}- "),
                     format!("{indentation}  "),
                     quote_depth,
@@ -504,10 +540,10 @@ impl Editor {
                 )
             }
             BlockKind::TaskListItem { checked } => {
-                let indentation = "  ".repeat(list_depth);
+                let indentation = " ".repeat(indent_columns);
                 self.push_inline_block_mapping(
                     block,
-                    title.expect("task title").markdown().to_string(),
+                    title.expect("task title"),
                     format!("{indentation}- [{}] ", if checked { "x" } else { " " }),
                     format!("{indentation}      "),
                     quote_depth,
@@ -516,20 +552,22 @@ impl Editor {
                 )
             }
             BlockKind::NumberedListItem => {
-                let indentation = "  ".repeat(list_depth);
+                let indentation = " ".repeat(indent_columns);
                 let ordinal = list_ordinal.unwrap_or(1);
                 self.push_inline_block_mapping(
                     block,
-                    title.expect("numbered title").markdown().to_string(),
+                    title.expect("numbered title"),
                     format!("{indentation}{ordinal}. "),
-                    format!("{indentation}   "),
+                    " ".repeat(
+                        indent_columns + block.read(cx).record.list_content_indent(list_ordinal),
+                    ),
                     quote_depth,
                     absolute_start,
                     mappings,
                 )
             }
             BlockKind::Quote => {
-                let title = title.expect("quote title").markdown().to_string();
+                let title = title.expect("quote title");
                 if title.is_empty() && !children.is_empty() {
                     0
                 } else {
@@ -545,7 +583,7 @@ impl Editor {
                 }
             }
             BlockKind::Callout(variant) => {
-                let title_markdown = title.expect("callout title").markdown().to_string();
+                let title_markdown = title.expect("callout title");
                 if title_markdown.is_empty() {
                     let full_text = Self::wrap_source_mapping_with_quotes(
                         format!("[!{}]", variant.marker()),
@@ -574,7 +612,7 @@ impl Editor {
                 }
             }
             BlockKind::FootnoteDefinition => {
-                let footnote_id = title.expect("footnote id").markdown().to_string();
+                let footnote_id = title.expect("footnote id");
                 let first_child = children.first().cloned();
                 let first_is_paragraph = first_child
                     .as_ref()
@@ -598,13 +636,7 @@ impl Editor {
             {
                 total_len = self.push_inline_block_mapping(
                     first_child,
-                    first_child
-                        .read(cx)
-                        .record
-                        .title
-                        .markdown_offset_map()
-                        .markdown()
-                        .to_string(),
+                    first_child.read(cx).record.title.serialize_markdown(),
                     block
                         .read(cx)
                         .footnote_definition_id()
@@ -638,7 +670,7 @@ impl Editor {
                 }
                 total_len += self.collect_single_block_source_mappings(
                     child,
-                    2,
+                    indent_columns + 4,
                     quote_depth,
                     absolute_start + total_len,
                     mappings,
@@ -654,22 +686,38 @@ impl Editor {
             return total_len;
         }
 
-        let child_list_depth = list_depth + usize::from(kind.is_list_item());
+        let child_indent_columns =
+            indent_columns + block.read(cx).record.list_content_indent(list_ordinal);
         let child_quote_depth = quote_depth + usize::from(kind.is_quote_container());
         let mut total_len = own_len;
+        let mut previous_was_list_item = false;
         for child in children {
             if total_len > 0 {
+                total_len += 1;
+                if !kind.is_list_item()
+                    && DocumentTree::paragraph_after_list_requires_blank(
+                        previous_was_list_item,
+                        child.read(cx),
+                    )
+                {
+                    total_len += 1 + child_quote_depth * 2;
+                }
+            }
+            if kind.is_list_item()
+                && DocumentTree::list_child_requires_leading_blank_line(child.read(cx))
+            {
                 total_len += 1;
             }
             total_len += self.collect_single_block_source_mappings(
                 &child,
-                child_list_depth,
+                child_indent_columns,
                 child_quote_depth,
                 absolute_start + total_len,
                 mappings,
                 block_ranges,
                 cx,
             );
+            previous_was_list_item = child.read(cx).kind().is_list_item();
         }
 
         block_ranges.insert(
@@ -719,15 +767,11 @@ impl Editor {
             }
 
             if wrote_non_empty_root {
-                let separator_count = if previous_was_list_item && current_is_list_item {
-                    if pending_empty_roots == 0 {
-                        0
-                    } else {
-                        pending_empty_roots + 1
-                    }
-                } else {
-                    pending_empty_roots + 1
-                };
+                let separator_count = DocumentTree::root_separator_line_count(
+                    previous_was_list_item,
+                    current_is_list_item,
+                    pending_empty_roots,
+                );
                 absolute += separator_count;
             } else if pending_empty_roots > 0 {
                 absolute += pending_empty_roots;

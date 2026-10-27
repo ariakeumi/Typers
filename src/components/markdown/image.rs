@@ -15,7 +15,7 @@ use super::link::parse_link_target;
 struct FenceInfo {
     /// Backtick or tilde used by the opening fence.
     ch: char,
-    /// Opening run length; closing runs must match exactly in this scanner.
+    /// Opening run length; same-marker closing runs must be at least this long.
     len: usize,
 }
 
@@ -163,52 +163,8 @@ pub(crate) fn parse_standalone_image(markdown: &str) -> Option<ImageSyntax> {
     if markdown.is_empty() {
         return None;
     }
-    if !markdown.starts_with("![") {
-        return None;
-    }
-
-    let bytes = markdown.as_bytes();
-    let mut alt_end = None;
-    for index in 2..bytes.len() {
-        if bytes[index] == b']' && !is_escaped(markdown, index) {
-            alt_end = Some(index);
-            break;
-        }
-    }
-    let alt_end = alt_end?;
-
-    let alt = unescape_ascii_punctuation(&markdown[2..alt_end]);
-    match bytes.get(alt_end + 1) {
-        Some(b'(') if markdown.ends_with(')') => {
-            let inner = &markdown[alt_end + 2..markdown.len() - 1];
-            let (src, title) = parse_image_target(inner)?;
-            Some(ImageSyntax {
-                alt,
-                target: ImageTarget::Direct { src, title },
-            })
-        }
-        Some(b'[') if markdown.ends_with(']') => {
-            let raw_label = &markdown[alt_end + 2..markdown.len() - 1];
-            let label_source = if raw_label.is_empty() {
-                alt.as_str()
-            } else {
-                raw_label
-            };
-            let label = normalize_reference_label(label_source)?;
-            Some(ImageSyntax {
-                alt,
-                target: ImageTarget::Reference { label },
-            })
-        }
-        None => {
-            let label = normalize_reference_label(&alt)?;
-            Some(ImageSyntax {
-                alt,
-                target: ImageTarget::Reference { label },
-            })
-        }
-        _ => None,
-    }
+    let (_, syntax, end) = parse_inline_image_at(markdown, 0)?;
+    (end == markdown.len()).then_some(syntax)
 }
 
 /// Finds a lone image line inside an HTML container, including linked badges.
@@ -292,19 +248,22 @@ pub(crate) fn parse_table_cell_inline_images(markdown: &str) -> Vec<TableCellInl
 }
 
 /// Parses an image at a valid UTF-8 byte offset and returns source, syntax, and exclusive end.
-/// Direct targets end at the first unescaped `)`, without nested-parenthesis tracking.
-fn parse_inline_image_at(markdown: &str, start: usize) -> Option<(String, ImageSyntax, usize)> {
+/// Balanced brackets and parentheses keep nested alt text and source URLs intact.
+pub(crate) fn parse_inline_image_at(
+    markdown: &str,
+    start: usize,
+) -> Option<(String, ImageSyntax, usize)> {
     if !markdown[start..].starts_with("![") {
         return None;
     }
 
-    let alt_end = find_unescaped_char(markdown, start + 2, b']')?;
+    let alt_end = find_image_delimiter_end(markdown, start + 2, b'[', b']')?;
     let alt = unescape_ascii_punctuation(&markdown[start + 2..alt_end]);
     let next = markdown.as_bytes().get(alt_end + 1).copied();
 
     match next {
         Some(b'(') => {
-            let close = find_unescaped_char(markdown, alt_end + 2, b')')?;
+            let close = find_image_delimiter_end(markdown, alt_end + 2, b'(', b')')?;
             let inner = &markdown[alt_end + 2..close];
             let (src, title) = parse_image_target(inner)?;
             let end = close + 1;
@@ -351,6 +310,54 @@ fn parse_inline_image_at(markdown: &str, start: usize) -> Option<(String, ImageS
     }
 }
 
+/// Finds a balanced closing delimiter, ignoring escaped and quoted target text.
+fn find_image_delimiter_end(markdown: &str, start: usize, open: u8, close: u8) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut quote = None;
+    let mut angle = false;
+    for (index, byte) in markdown.bytes().enumerate().skip(start) {
+        if is_escaped(markdown, index) {
+            continue;
+        }
+        if let Some(delimiter) = quote {
+            if byte == delimiter {
+                quote = None;
+            }
+            continue;
+        }
+        if open == b'(' {
+            if byte == b'>' && angle {
+                angle = false;
+                continue;
+            }
+            if angle {
+                continue;
+            }
+            if byte == b'<' {
+                angle = true;
+                continue;
+            }
+            if matches!(byte, b'"' | b'\'')
+                && index > start
+                && markdown.as_bytes()[index - 1].is_ascii_whitespace()
+            {
+                quote = Some(byte);
+                continue;
+            }
+        }
+        if byte == open {
+            depth += 1;
+        }
+        if byte == close {
+            if depth == 0 {
+                return Some(index);
+            }
+            depth -= 1;
+        }
+    }
+    None
+}
+
 /// Detects an unmatched label opener before the image and an immediate link suffix after it.
 fn is_link_wrapped_inline_image(markdown: &str, start: usize, end: usize) -> bool {
     let mut cursor = 0usize;
@@ -374,7 +381,7 @@ fn is_link_wrapped_inline_image(markdown: &str, start: usize, end: usize) -> boo
 
 /// Scans container-prefixed lines for definitions, retaining the first normalized label.
 /// HTML regions and fences with nonblank info tails suppress scanning via line heuristics.
-/// Bare fences do not activate suppression, and closing runs must match the opener exactly.
+/// Bare fences do not activate suppression; closing runs must be at least as long as the opener.
 pub(crate) fn parse_image_reference_definitions(markdown: &str) -> ImageReferenceDefinitions {
     let lines = markdown.split('\n').collect::<Vec<_>>();
     let normalized_lines = lines
@@ -609,7 +616,7 @@ fn parse_reference_scan_opening_fence(line: &str) -> Option<FenceInfo> {
     (len >= 3).then_some(FenceInfo { ch, len })
 }
 
-/// Requires the opening marker and exact run length followed only by whitespace.
+/// Requires the opening marker and at least the opening run length followed only by whitespace.
 fn is_reference_scan_closing_fence(line: &str, opener: FenceInfo) -> bool {
     let trimmed = line.trim_end();
     if !trimmed.starts_with(opener.ch) {
@@ -620,7 +627,7 @@ fn is_reference_scan_closing_fence(line: &str, opener: FenceInfo) -> bool {
         .chars()
         .take_while(|current| *current == opener.ch)
         .count();
-    run_len == opener.len && trimmed[opener.ch.len_utf8() * run_len..].trim().is_empty()
+    run_len >= opener.len && trimmed[opener.ch.len_utf8() * run_len..].trim().is_empty()
 }
 
 /// Detects a comment or opening tag at the trimmed line start without validating HTML.

@@ -92,6 +92,9 @@ impl EntityInputHandler for Block {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         if self.code_language_focus_handle.is_focused(_window) {
             let visible_range = range_utf16
                 .as_ref()
@@ -135,6 +138,9 @@ impl EntityInputHandler for Block {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         if self.code_language_focus_handle.is_focused(_window) {
             let visible_range = range_utf16
                 .as_ref()

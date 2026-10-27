@@ -2,17 +2,17 @@
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Bounds, ClickEvent, Context, Decorations, Hsla, MouseButton, Pixels, SharedString,
-    TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowButton,
+    AnyElement, Bounds, ClickEvent, Context, Decorations, FontWeight, Hsla, MouseButton, Pixels,
+    SharedString, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowButton,
     WindowButtonLayout, WindowControlArea, WindowDecorations, WindowOptions, div, point, px, rgba,
     svg,
 };
 
-use crate::app_identity::VELOTYPE_APP_ID;
+use crate::app_identity::APP_ID;
 use crate::theme::{Theme, ThemeDimensions};
 
 /// Minimum custom titlebar height in logical pixels.
-const TITLEBAR_MIN_HEIGHT: f32 = 32.0;
+const TITLEBAR_MIN_HEIGHT: f32 = 28.0;
 /// Width of each application-rendered window control in logical pixels.
 const TITLEBAR_BUTTON_WIDTH: f32 = 46.0;
 /// Side length of titlebar control icons in logical pixels.
@@ -28,7 +28,7 @@ const TITLEBAR_MINIMIZE_ICON: &str = "icon/titlebar/chrome-minimize.svg";
 /// Embedded asset path shown when a maximized or fullscreen window can restore.
 const TITLEBAR_RESTORE_ICON: &str = "icon/titlebar/chrome-restore.svg";
 
-/// Selects whether Velotype or the platform should render window controls.
+/// Selects whether Typers or the platform should render window controls.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TitlebarControlMode {
     /// Leaves macOS window controls to the platform.
@@ -98,7 +98,7 @@ pub(crate) fn velotype_window_options_for_target_os(
     bounds: Bounds<Pixels>,
 ) -> WindowOptions {
     WindowOptions {
-        app_id: Some(VELOTYPE_APP_ID.to_string()),
+        app_id: Some(APP_ID.to_string()),
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(titlebar_options_for_target_os(target_os, title)),
         window_background: WindowBackgroundAppearance::Opaque,
@@ -224,13 +224,13 @@ pub(crate) fn render_custom_titlebar<T: 'static>(
     let drag_strategy =
         titlebar_drag_strategy_for_target_os(std::env::consts::OS, window.window_decorations());
     let c = &theme.colors;
-    let t = &theme.typography;
     let controls = window.window_controls();
     let icon_color = custom_titlebar_icon_color(theme);
     let entity = cx.entity().downgrade();
 
     let drag_title = div()
         .id("window-titlebar-drag-title")
+        .justify_center()
         .h_full()
         .flex_1()
         .min_w(px(0.0))
@@ -242,8 +242,8 @@ pub(crate) fn render_custom_titlebar<T: 'static>(
             div()
                 .min_w(px(0.0))
                 .truncate()
-                .text_size(px(theme.dimensions.menu_text_size))
-                .font_weight(t.dialog_button_weight.to_font_weight())
+                .text_size(px(13.0))
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(c.dialog_secondary_button_text)
                 .child(title),
         );
@@ -278,7 +278,13 @@ pub(crate) fn render_custom_titlebar<T: 'static>(
         .flex()
         .items_center()
         .bg(custom_titlebar_background(theme))
-        .border_b(px(theme.dimensions.dialog_border_width))
+        .border_b(px(
+            if layout.controls == TitlebarControlMode::NativeTrafficLights {
+                0.0
+            } else {
+                theme.dimensions.dialog_border_width
+            },
+        ))
         .border_color(c.dialog_border);
 
     let root = match layout.controls {
@@ -426,9 +432,9 @@ mod tests {
 
     #[test]
     fn titlebar_options_enable_transparency_on_mac_and_windows() {
-        assert!(titlebar_options_for_target_os("windows", "Velotype".into()).appears_transparent);
-        assert!(titlebar_options_for_target_os("macos", "Velotype".into()).appears_transparent);
-        assert!(!titlebar_options_for_target_os("linux", "Velotype".into()).appears_transparent);
+        assert!(titlebar_options_for_target_os("windows", "Typers".into()).appears_transparent);
+        assert!(titlebar_options_for_target_os("macos", "Typers".into()).appears_transparent);
+        assert!(!titlebar_options_for_target_os("linux", "Typers".into()).appears_transparent);
     }
 
     #[test]

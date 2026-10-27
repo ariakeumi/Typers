@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       release_title:
-        description: "Optional release title. Defaults to Velotype <release_tag>."
+        description: "Optional release title. Defaults to Typers <release_tag>."
         required: false
         type: string
       release_notes:
@@ -119,9 +119,9 @@ jobs:
           mkdir -p dist/package/share/icons/hicolor/512x512/apps
           cp target/release/velotype dist/package/velotype
           cp README.md LICENSE-APACHE dist/package/
-          cp resources/linux/com.manyougz.Velotype.desktop dist/package/share/applications/
-          cp resources/linux/icons/hicolor/256x256/apps/com.manyougz.Velotype.png dist/package/share/icons/hicolor/256x256/apps/
-          cp resources/linux/icons/hicolor/512x512/apps/com.manyougz.Velotype.png dist/package/share/icons/hicolor/512x512/apps/
+          cp resources/linux/com.ariakeumi.Typers.desktop dist/package/share/applications/
+          cp resources/linux/icons/hicolor/256x256/apps/com.ariakeumi.Typers.png dist/package/share/icons/hicolor/256x256/apps/
+          cp resources/linux/icons/hicolor/512x512/apps/com.ariakeumi.Typers.png dist/package/share/icons/hicolor/512x512/apps/
           archive="velotype-${RELEASE_TAG}-${{ matrix.archive_suffix }}"
           tar -C dist/package -czf "dist/$archive" .
 
@@ -131,17 +131,17 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          mkdir -p "dist/Velotype.app/Contents/MacOS"
-          mkdir -p "dist/Velotype.app/Contents/Resources"
-          cp target/release/velotype "dist/Velotype.app/Contents/MacOS/velotype"
-          cp resources/macos/Info.plist "dist/Velotype.app/Contents/Info.plist"
+          mkdir -p "dist/Typers.app/Contents/MacOS"
+          mkdir -p "dist/Typers.app/Contents/Resources"
+          cp target/release/velotype "dist/Typers.app/Contents/MacOS/velotype"
+          cp resources/macos/Info.plist "dist/Typers.app/Contents/Info.plist"
           VERSION="${RELEASE_TAG#v}"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION%%[-+]*}" "dist/Velotype.app/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION%%[-+]*}" "dist/Velotype.app/Contents/Info.plist"
-          cp resources/macos/velotype.icns "dist/Velotype.app/Contents/Resources/velotype.icns"
-          chmod +x "dist/Velotype.app/Contents/MacOS/velotype"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION%%[-+]*}" "dist/Typers.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION%%[-+]*}" "dist/Typers.app/Contents/Info.plist"
+          cp resources/macos/velotype.icns "dist/Typers.app/Contents/Resources/velotype.icns"
+          chmod +x "dist/Typers.app/Contents/MacOS/velotype"
           archive="velotype-${RELEASE_TAG}-${{ matrix.archive_suffix }}"
-          ditto -c -k --sequesterRsrc --keepParent "dist/Velotype.app" "dist/$archive"
+          ditto -c -k --sequesterRsrc --keepParent "dist/Typers.app" "dist/$archive"
 
       - name: Create macOS PKG installer
         if: runner.os == 'macOS' && matrix.name == 'macOS aarch64'
@@ -150,8 +150,8 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           VERSION="${RELEASE_TAG#v}"
-          APP_NAME="Velotype"
-          BUNDLE_ID="com.manyougz.Velotype"
+          APP_NAME="Typers"
+          BUNDLE_ID="com.ariakeumi.Typers"
           COMPONENT_PKG="${APP_NAME}-component.pkg"
 
           mkdir -p dist/pkg/root/Applications
@@ -244,7 +244,7 @@ jobs:
             echo "Tag $RELEASE_TAG already exists and points to the current commit."
           else
             if [[ -z "$RELEASE_TITLE" ]]; then
-              RELEASE_TITLE="Velotype $RELEASE_TAG"
+              RELEASE_TITLE="Typers $RELEASE_TAG"
             fi
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -268,7 +268,7 @@ jobs:
           set -euo pipefail
 
           if [[ -z "$RELEASE_TITLE" ]]; then
-            RELEASE_TITLE="Velotype $RELEASE_TAG"
+            RELEASE_TITLE="Typers $RELEASE_TAG"
           fi
 
           if [[ -n "$RELEASE_NOTES" ]]; then

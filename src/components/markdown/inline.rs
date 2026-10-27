@@ -133,6 +133,8 @@ pub struct InlineFragment {
     pub footnote: Option<InlineFootnoteReference>,
     /// Source-preserving math metadata, when this fragment is inline math.
     pub math: Option<InlineMath>,
+    /// Whether this span retains Markdown image syntax for visual rendering.
+    pub image: bool,
 }
 
 /// Source-preserving inline LaTeX math metadata.
@@ -305,6 +307,8 @@ pub struct InlineSpan {
     pub footnote: Option<InlineFootnoteHit>,
     /// Inline math metadata for rendering.
     pub math: Option<InlineMath>,
+    /// Whether this span retains Markdown image syntax for visual rendering.
+    pub image: bool,
 }
 
 /// Fragment attributes inherited by inserted text at a caret position.
@@ -410,6 +414,7 @@ impl InlineRenderCache {
                         .as_ref()
                         .and_then(InlineFootnoteReference::hit),
                     math: fragment.math.clone(),
+                    image: fragment.image,
                 });
             }
 
@@ -528,6 +533,7 @@ impl InlineTextTree {
             link: None,
             footnote: None,
             math: None,
+            image: false,
         }])
     }
 
@@ -544,11 +550,21 @@ impl InlineTextTree {
         markdown: &str,
         reference_definitions: &LinkReferenceDefinitions,
     ) -> Self {
-        let mut tree = Self::plain(markdown)
-            .normalize_inline_syntax_with_link_references(reference_definitions)
-            .tree;
-        tree.normalize_code_spans();
-        tree
+        Self::parse_markdown_with_link_references(markdown, reference_definitions).tree
+    }
+
+    /// Parses source while retaining its byte map through code-span cleanup.
+    pub(crate) fn parse_markdown_with_link_references(
+        markdown: &str,
+        reference_definitions: &LinkReferenceDefinitions,
+    ) -> InlineEditResult {
+        let mut parsed = Self::plain(markdown)
+            .normalize_inline_syntax_with_link_references(reference_definitions);
+        let code_map = parsed.tree.normalize_code_spans();
+        for offset in &mut parsed.visible_to_normalized {
+            *offset = code_map[(*offset).min(code_map.len() - 1)];
+        }
+        parsed
     }
 
     /// Code-span content normalization:
@@ -556,19 +572,56 @@ impl InlineTextTree {
     ///   across hard lines in the editor.
     /// - If the content is not entirely spaces and both starts AND ends with
     ///   a single space, those two spaces are stripped.
-    fn normalize_code_spans(&mut self) {
+    fn normalize_code_spans(&mut self) -> Vec<usize> {
+        let mut offsets = vec![0; self.visible_len() + 1];
+        let mut old_start = 0;
+        let mut new_start = 0;
         for fragment in &mut self.fragments {
+            let old_len = fragment.text.len();
             if fragment.style.code && !fragment.text.is_empty() {
-                let mut s = fragment.text.replace("\r\n", "\n").replace('\r', "\n");
+                let mut s = String::new();
+                let mut local_map = vec![0; old_len + 1];
+                let mut chars = fragment.text.char_indices().peekable();
+                while let Some((start, ch)) = chars.next() {
+                    let mut end = start + ch.len_utf8();
+                    if ch == '\r' {
+                        if chars.peek().is_some_and(|(_, next)| *next == '\n') {
+                            end = chars.next().unwrap().0 + 1;
+                        }
+                        s.push('\n');
+                        for offset in start + 1..=end {
+                            local_map[offset] = s.len();
+                        }
+                    } else {
+                        let output_start = s.len();
+                        s.push(ch);
+                        for offset in start..=end {
+                            local_map[offset] = output_start + offset - start;
+                        }
+                    }
+                }
                 let all_space = s.chars().all(|c| c == ' ');
                 if !all_space && s.starts_with(' ') && s.ends_with(' ') {
                     s.remove(0);
                     s.pop();
+                    for offset in &mut local_map {
+                        *offset = offset.saturating_sub(1).min(s.len());
+                    }
+                }
+                for (offset, normalized) in local_map.into_iter().enumerate() {
+                    offsets[old_start + offset] = new_start + normalized;
                 }
                 fragment.text = s;
+            } else {
+                for offset in 0..=old_len {
+                    offsets[old_start + offset] = new_start + offset;
+                }
             }
+            old_start += old_len;
+            new_start += fragment.text.len();
         }
         self.normalize_fragments();
+        offsets
     }
 
     /// Build a tree from fragments, merging adjacent compatible runs.
@@ -604,6 +657,7 @@ impl InlineTextTree {
                 .is_some_and(InlineLink::is_source_preserving)
                 || fragment.footnote.is_some()
                 || fragment.math.is_some()
+                || fragment.image
         })
     }
 
@@ -619,9 +673,9 @@ impl InlineTextTree {
 
     /// Whether any fragment contains inline math or raised/lowered text.
     pub(crate) fn has_mixed_inline_visuals(&self) -> bool {
-        self.fragments
-            .iter()
-            .any(|fragment| fragment.math.is_some() || fragment.style.has_script())
+        self.fragments.iter().any(|fragment| {
+            fragment.math.is_some() || fragment.image || fragment.style.has_script()
+        })
     }
 
     /// Whether the tree contains a footnote reference.
@@ -665,7 +719,56 @@ impl InlineTextTree {
     /// Fragment attributes determine surrounding markers, while source-preserving
     /// inline constructs retain their stored spelling.
     pub fn serialize_markdown(&self) -> String {
-        self.markdown_offset_map().markdown
+        // Saving, reference scans and word counts need only the source text.
+        // Building two byte-offset vectors for every fragment here made those
+        // document-wide operations dominate ordinary typing and cursor redraws.
+        let mut output = String::new();
+        let mut index = 0;
+        while index < self.fragments.len() {
+            let fragment = &self.fragments[index];
+            if let Some(footnote) = &fragment.footnote {
+                output.push_str(&footnote.raw_markdown());
+                index += 1;
+                continue;
+            }
+            if let Some(math) = &fragment.math {
+                output.push_str(&math.source);
+                index += 1;
+                continue;
+            }
+            let link = fragment.link.as_ref();
+            let mut end = index + 1;
+            while end < self.fragments.len()
+                && self.fragments[end].link.as_ref() == link
+                && self.fragments[end].footnote.is_none()
+                && self.fragments[end].math.is_none()
+            {
+                end += 1;
+            }
+            if let Some(link) = link {
+                output.push_str(link.open_marker());
+            }
+            if matches!(link, Some(InlineLink::Autolink { .. })) {
+                for fragment in &self.fragments[index..end] {
+                    output.push_str(&fragment.text);
+                }
+            } else {
+                output.push_str(
+                    &serialize_fragment_run_markdown::<false>(&self.fragments[index..end]).markdown,
+                );
+            }
+            if let Some(link) = link {
+                if let Some(marker) = link.middle_marker() {
+                    output.push_str(marker);
+                }
+                if let Some(text) = link.editable_text() {
+                    output.push_str(&text);
+                }
+                output.push_str(link.close_marker());
+            }
+            index = end;
+        }
+        output
     }
 
     /// Serialize Markdown together with byte-offset maps in both directions.
@@ -750,8 +853,18 @@ impl InlineTextTree {
                 end += 1;
             }
 
-            let run_map =
-                serialize_fragment_run_markdown_with_offset_map(&self.fragments[index..end]);
+            let run_map = if matches!(link, Some(InlineLink::Autolink { .. })) {
+                // An autolink's label is its literal target, not inline Markdown.
+                // Escaping it adds backslashes that the parser retains on every
+                // reparse, causing exponential source and offset-map growth.
+                let target = self.fragments[index..end]
+                    .iter()
+                    .map(|fragment| fragment.text.as_str())
+                    .collect::<String>();
+                identity_text_with_offset_map::<true>(&target)
+            } else {
+                serialize_fragment_run_markdown::<true>(&self.fragments[index..end])
+            };
             if let Some(link) = link {
                 let run_visible_len = run_map.visible_to_markdown.len().saturating_sub(1);
                 let link_start = output.len();
@@ -824,9 +937,19 @@ impl InlineTextTree {
 }
 
 /// Serialize one run of fragments and map visible bytes to its Markdown bytes.
-fn serialize_fragment_run_markdown_with_offset_map(
+fn serialize_fragment_run_markdown<const OFFSETS: bool>(
     fragments: &[InlineFragment],
 ) -> InlineMarkdownOffsetMap {
+    if !OFFSETS
+        && let [fragment] = fragments
+        && fragment.style == InlineStyle::default()
+        && fragment.html_style.is_none()
+        && fragment.math.is_none()
+        && !fragment.image
+    {
+        // A plain paragraph has no delimiter choices to optimize.
+        return escape_literal_text_with_offset_map::<false>(&fragment.text);
+    }
     if fragments.is_empty() {
         return InlineMarkdownOffsetMap {
             markdown: String::new(),
@@ -837,12 +960,20 @@ fn serialize_fragment_run_markdown_with_offset_map(
 
     let stacks = choose_fragment_stacks(fragments);
     let mut output = String::new();
-    let total_visible_len = fragments
-        .iter()
-        .map(|fragment| fragment.text.len())
-        .sum::<usize>();
-    let mut visible_to_markdown = vec![0; total_visible_len + 1];
-    let mut markdown_to_visible = vec![0];
+    let total_visible_len = if OFFSETS {
+        fragments
+            .iter()
+            .map(|fragment| fragment.text.len())
+            .sum::<usize>()
+    } else {
+        0
+    };
+    let mut visible_to_markdown = if OFFSETS {
+        vec![0; total_visible_len + 1]
+    } else {
+        Vec::new()
+    };
+    let mut markdown_to_visible = if OFFSETS { vec![0] } else { Vec::new() };
     let mut current_stack: Vec<Delimiter> = Vec::new();
     let mut current_html_style: Option<HtmlInlineStyle> = None;
     let mut visible_cursor = 0usize;
@@ -850,7 +981,7 @@ fn serialize_fragment_run_markdown_with_offset_map(
     for (fragment, next_stack) in fragments.iter().zip(stacks.iter()) {
         if current_html_style != fragment.html_style {
             let transition = stack_transition_string(&current_stack, &[]);
-            push_markdown_marker(
+            push_markdown_marker::<OFFSETS>(
                 &mut output,
                 &mut markdown_to_visible,
                 visible_cursor,
@@ -859,7 +990,7 @@ fn serialize_fragment_run_markdown_with_offset_map(
             current_stack.clear();
 
             if current_html_style.is_some() {
-                push_markdown_marker(
+                push_markdown_marker::<OFFSETS>(
                     &mut output,
                     &mut markdown_to_visible,
                     visible_cursor,
@@ -869,7 +1000,7 @@ fn serialize_fragment_run_markdown_with_offset_map(
             if let Some(style) = fragment.html_style
                 && let Some(marker) = html_style_open_marker(style)
             {
-                push_markdown_marker(
+                push_markdown_marker::<OFFSETS>(
                     &mut output,
                     &mut markdown_to_visible,
                     visible_cursor,
@@ -882,42 +1013,48 @@ fn serialize_fragment_run_markdown_with_offset_map(
         let transition = stack_transition_string(&current_stack, next_stack);
         let transition_start = output.len();
         output.push_str(&transition);
-        markdown_to_visible.resize(output.len() + 1, visible_cursor);
-        for local in 0..=transition.len() {
-            markdown_to_visible[transition_start + local] = visible_cursor;
+        if OFFSETS {
+            markdown_to_visible.resize(output.len() + 1, visible_cursor);
+            for local in 0..=transition.len() {
+                markdown_to_visible[transition_start + local] = visible_cursor;
+            }
         }
 
         let escaped = if let Some(math) = fragment.math.as_ref() {
-            identity_text_with_offset_map(&math.source)
+            identity_text_with_offset_map::<OFFSETS>(&math.source)
+        } else if fragment.image {
+            identity_text_with_offset_map::<OFFSETS>(&fragment.text)
         } else if fragment.style.code {
-            escape_code_span_text_with_offset_map(&fragment.text)
+            escape_code_span_text_with_offset_map::<OFFSETS>(&fragment.text)
         } else {
-            escape_literal_text_with_offset_map(&fragment.text)
+            escape_literal_text_with_offset_map::<OFFSETS>(&fragment.text)
         };
         let escaped_start = output.len();
         output.push_str(escaped.markdown());
-        for local_visible in 0..=fragment.text.len() {
-            visible_to_markdown[visible_cursor + local_visible] =
-                escaped_start + escaped.visible_to_markdown_offset(local_visible);
-        }
-        markdown_to_visible.resize(output.len() + 1, visible_cursor);
-        for local_markdown in 0..=escaped.markdown().len() {
-            markdown_to_visible[escaped_start + local_markdown] =
-                visible_cursor + escaped.markdown_to_visible_offset(local_markdown);
+        if OFFSETS {
+            for local_visible in 0..=fragment.text.len() {
+                visible_to_markdown[visible_cursor + local_visible] =
+                    escaped_start + escaped.visible_to_markdown_offset(local_visible);
+            }
+            markdown_to_visible.resize(output.len() + 1, visible_cursor);
+            for local_markdown in 0..=escaped.markdown().len() {
+                markdown_to_visible[escaped_start + local_markdown] =
+                    visible_cursor + escaped.markdown_to_visible_offset(local_markdown);
+            }
         }
         visible_cursor += fragment.text.len();
         current_stack = next_stack.clone();
     }
 
     let transition = stack_transition_string(&current_stack, &[]);
-    push_markdown_marker(
+    push_markdown_marker::<OFFSETS>(
         &mut output,
         &mut markdown_to_visible,
         visible_cursor,
         &transition,
     );
     if current_html_style.is_some() {
-        push_markdown_marker(
+        push_markdown_marker::<OFFSETS>(
             &mut output,
             &mut markdown_to_visible,
             visible_cursor,
@@ -933,7 +1070,7 @@ fn serialize_fragment_run_markdown_with_offset_map(
 }
 
 /// Append a generated marker whose bytes all map to the current visible offset.
-fn push_markdown_marker(
+fn push_markdown_marker<const OFFSETS: bool>(
     output: &mut String,
     markdown_to_visible: &mut Vec<usize>,
     visible_cursor: usize,
@@ -944,18 +1081,28 @@ fn push_markdown_marker(
     }
     let marker_start = output.len();
     output.push_str(marker);
-    markdown_to_visible.resize(output.len() + 1, visible_cursor);
-    for local in 0..=marker.len() {
-        markdown_to_visible[marker_start + local] = visible_cursor;
+    if OFFSETS {
+        markdown_to_visible.resize(output.len() + 1, visible_cursor);
+        for local in 0..=marker.len() {
+            markdown_to_visible[marker_start + local] = visible_cursor;
+        }
     }
 }
 
 /// Build a byte-for-byte identity map for retained source text.
-fn identity_text_with_offset_map(text: &str) -> InlineMarkdownOffsetMap {
+fn identity_text_with_offset_map<const OFFSETS: bool>(text: &str) -> InlineMarkdownOffsetMap {
     InlineMarkdownOffsetMap {
         markdown: text.to_string(),
-        visible_to_markdown: (0..=text.len()).collect(),
-        markdown_to_visible: (0..=text.len()).collect(),
+        visible_to_markdown: if OFFSETS {
+            (0..=text.len()).collect()
+        } else {
+            Vec::new()
+        },
+        markdown_to_visible: if OFFSETS {
+            (0..=text.len()).collect()
+        } else {
+            Vec::new()
+        },
     }
 }
 
@@ -1014,6 +1161,7 @@ impl InlineTextTree {
                         link: fragment.link.clone(),
                         footnote: fragment.footnote.clone(),
                         math: None,
+                        image: false,
                     });
                 }
                 if split_offset < fragment_len {
@@ -1024,6 +1172,7 @@ impl InlineTextTree {
                         link: fragment.link.clone(),
                         footnote: fragment.footnote.clone(),
                         math: None,
+                        image: false,
                     });
                 }
             }
@@ -1197,6 +1346,7 @@ impl InlineTextTree {
                 link: inserted_attributes.link,
                 footnote: inserted_attributes.footnote,
                 math: inserted_attributes.math,
+                image: false,
             });
         }
         temp.append_tree(after);
@@ -1227,6 +1377,7 @@ impl InlineTextTree {
                 link: inserted_attributes.link,
                 footnote: inserted_attributes.footnote,
                 math: inserted_attributes.math,
+                image: false,
             });
         }
         temp.append_tree(after);
@@ -1318,7 +1469,9 @@ impl InlineTextTree {
                 && last.link == fragment.link
                 && last.footnote == fragment.footnote
                 && last.math.is_none()
+                && !last.image
                 && fragment.math.is_none()
+                && !fragment.image
             {
                 last.text.push_str(&fragment.text);
                 continue;
@@ -1490,6 +1643,8 @@ struct CharToken {
     style: InlineStyle,
     /// HTML style inherited from the input fragment.
     html_style: Option<HtmlInlineStyle>,
+    /// Existing link retained when an image's source is edited in place.
+    link: Option<InlineLink>,
     /// UTF-8 byte range in the input visible text.
     source_range: Range<usize>,
 }
@@ -1572,6 +1727,7 @@ impl NormalizeBuilder {
             && last.link.is_none()
             && last.footnote.is_none()
             && last.math.is_none()
+            && !last.image
         {
             last.text.push_str(&text);
             return;
@@ -1584,6 +1740,7 @@ impl NormalizeBuilder {
             link: None,
             footnote: None,
             math: None,
+            image: false,
         });
     }
 
@@ -1619,6 +1776,7 @@ impl NormalizeBuilder {
             link: None,
             footnote: None,
             math: Some(math),
+            image: false,
         });
     }
 }
@@ -1635,6 +1793,7 @@ fn flatten_tokens(fragments: &[InlineFragment]) -> Vec<CharToken> {
                 ch,
                 style: fragment.style,
                 html_style: fragment.html_style,
+                link: fragment.link.clone(),
                 source_range: visible_offset..visible_offset + len,
             });
             visible_offset += len;
@@ -1642,6 +1801,46 @@ fn flatten_tokens(fragments: &[InlineFragment]) -> Vec<CharToken> {
     }
 
     tokens
+}
+
+/// Keeps an image's alt, source and title atomic, including inside a link label.
+fn parse_inline_image(
+    tokens: &[CharToken],
+    index: usize,
+    extra_style: InlineStyle,
+    extra_html_style: Option<HtmlInlineStyle>,
+    builder: &mut NormalizeBuilder,
+) -> Option<usize> {
+    if tokens[index].style.code || extra_style.code || token_is_backslash_escaped(tokens, index) {
+        return None;
+    }
+    let tail = tokens_to_string(&tokens[index..]);
+    let (source, _, _) = super::image::parse_inline_image_at(&tail, 0)?;
+    let end = index + source.chars().count();
+    let source_start = tokens[index].source_range.start;
+    let normalized_start = builder.normalized_len;
+    for token in &tokens[index..end] {
+        for boundary in token.source_range.start..=token.source_range.end {
+            builder.visible_to_normalized[boundary] = normalized_start + boundary - source_start;
+        }
+    }
+    builder.normalized_len += source.len();
+    let mut fragment = InlineFragment {
+        text: source,
+        style: tokens[index].style,
+        html_style: tokens[index].html_style,
+        link: tokens[index].link.clone(),
+        footnote: None,
+        math: None,
+        image: true,
+    };
+    apply_extra_style_to_fragments(
+        std::slice::from_mut(&mut fragment),
+        extra_style,
+        extra_html_style,
+    );
+    builder.fragments.push(fragment);
+    Some(end)
 }
 
 /// Parse tokens until the expected delimiter closes or input ends.
@@ -1694,6 +1893,16 @@ fn parse_until(
                     closed: true,
                 };
             }
+        }
+
+        if !inside_code
+            && tokens[index].ch == '!'
+            && tokens.get(index + 1).is_some_and(|token| token.ch == '[')
+            && let Some(next_index) =
+                parse_inline_image(tokens, index, extra_style, extra_html_style, builder)
+        {
+            index = next_index;
+            continue;
         }
 
         if !inside_code
@@ -1976,6 +2185,7 @@ fn parse_footnote_reference(
             occurrence_index: 0,
         }),
         math: None,
+        image: false,
     }];
 
     let normalized_start = builder.normalized_len;
@@ -1997,7 +2207,9 @@ fn parse_footnote_reference(
             && last.link == fragment.link
             && last.footnote == fragment.footnote
             && last.math.is_none()
+            && !last.image
             && fragment.math.is_none()
+            && !fragment.image
         {
             last.text.push_str(&fragment.text);
         } else {
@@ -2069,7 +2281,9 @@ fn parse_inline_link(
             && last.link == fragment.link
             && last.footnote == fragment.footnote
             && last.math.is_none()
+            && !last.image
             && fragment.math.is_none()
+            && !fragment.image
         {
             last.text.push_str(&fragment.text);
         } else {
@@ -2101,6 +2315,7 @@ fn parse_autolink(
         }),
         footnote: None,
         math: None,
+        image: false,
     }];
 
     let normalized_start = builder.normalized_len;
@@ -2133,7 +2348,9 @@ fn parse_autolink(
             && last.link == fragment.link
             && last.footnote == fragment.footnote
             && last.math.is_none()
+            && !last.image
             && fragment.math.is_none()
+            && !fragment.image
         {
             last.text.push_str(&fragment.text);
         } else {
@@ -2375,7 +2592,7 @@ fn locate_inline_link(
     }
 }
 
-/// Locate a nonempty angle-bracket autolink that is not an HTML tag.
+/// Locate a nonempty angle-bracket target without whitespace or nested brackets.
 fn locate_autolink(tokens: &[CharToken], index: usize) -> Option<usize> {
     if tokens.get(index)?.ch != '<' {
         return None;
@@ -2384,9 +2601,8 @@ fn locate_autolink(tokens: &[CharToken], index: usize) -> Option<usize> {
     let mut cursor = index + 1;
     let end_index = loop {
         let token = tokens.get(cursor)?;
-        if token.ch == '\\' {
-            cursor += 2;
-            continue;
+        if token.ch.is_whitespace() || token.ch.is_control() || token.ch == '<' {
+            return None;
         }
         if token.ch == '>' {
             break cursor;
@@ -2834,6 +3050,7 @@ fn escaped_sequence_token_len(tokens: &[CharToken], index: usize) -> Option<usiz
         || matches_sequence(tokens, next_index, "]")
         || matches_sequence(tokens, next_index, "`")
         || matches_sequence(tokens, next_index, "^")
+        || matches_sequence(tokens, next_index, "!")
     {
         Some(1)
     } else {
@@ -2842,163 +3059,55 @@ fn escaped_sequence_token_len(tokens: &[CharToken], index: usize) -> Option<usiz
 }
 
 /// Escape literal text markers and map input bytes to serialized bytes.
-fn escape_literal_text_with_offset_map(text: &str) -> InlineMarkdownOffsetMap {
-    let mut escaped = String::new();
-    let mut visible_to_markdown = vec![0; text.len() + 1];
-    let mut markdown_to_visible = vec![0];
+fn escape_literal_text_with_offset_map<const OFFSETS: bool>(text: &str) -> InlineMarkdownOffsetMap {
+    let mut escaped = String::with_capacity(text.len());
+    let mut visible_to_markdown = if OFFSETS {
+        vec![0; text.len() + 1]
+    } else {
+        Vec::new()
+    };
+    let mut markdown_to_visible = if OFFSETS { vec![0] } else { Vec::new() };
     let mut index = 0;
 
     while index < text.len() {
-        visible_to_markdown[index] = escaped.len();
-        if text[index..].starts_with("</strong>") {
-            let start = escaped.len();
-            escaped.push('\\');
-            escaped.push_str("</strong>");
-            markdown_to_visible.resize(escaped.len() + 1, index);
-            for local in 0..=escaped.len() - start {
-                markdown_to_visible[start + local] = index;
-            }
-            index += 9;
-            continue;
-        }
-
-        if text[index..].starts_with("<strong>") {
-            let start = escaped.len();
-            escaped.push('\\');
-            escaped.push_str("<strong>");
-            markdown_to_visible.resize(escaped.len() + 1, index);
-            for local in 0..=escaped.len() - start {
-                markdown_to_visible[start + local] = index;
-            }
-            index += 8;
-            continue;
-        }
-
-        if text[index..].starts_with("</em>") {
-            let start = escaped.len();
-            escaped.push('\\');
-            escaped.push_str("</em>");
-            markdown_to_visible.resize(escaped.len() + 1, index);
-            for local in 0..=escaped.len() - start {
-                markdown_to_visible[start + local] = index;
-            }
-            index += 5;
-            continue;
-        }
-
-        if text[index..].starts_with("<em>") {
-            let start = escaped.len();
-            escaped.push('\\');
-            escaped.push_str("<em>");
-            markdown_to_visible.resize(escaped.len() + 1, index);
-            for local in 0..=escaped.len() - start {
-                markdown_to_visible[start + local] = index;
-            }
-            index += 4;
-            continue;
-        }
-
-        if text[index..].starts_with("</u>") {
-            let start = escaped.len();
-            escaped.push('\\');
-            escaped.push_str("</u>");
-            markdown_to_visible.resize(escaped.len() + 1, index);
-            for local in 0..=escaped.len() - start {
-                markdown_to_visible[start + local] = index;
-            }
-            index += 4;
-            continue;
-        }
-
-        if text[index..].starts_with("<u>") {
-            let start = escaped.len();
-            escaped.push('\\');
-            escaped.push_str("<u>");
-            markdown_to_visible.resize(escaped.len() + 1, index);
-            for local in 0..=escaped.len() - start {
-                markdown_to_visible[start + local] = index;
-            }
-            index += 3;
-            continue;
-        }
-
-        if text[index..].starts_with('\\') {
-            let start = escaped.len();
-            escaped.push_str("\\\\");
-            markdown_to_visible.resize(escaped.len() + 1, index);
-            for local in 0..=escaped.len() - start {
-                markdown_to_visible[start + local] = index;
-            }
-            index += 1;
-            continue;
-        }
-
-        if text[index..].starts_with('*') {
-            let start = escaped.len();
-            escaped.push_str("\\*");
-            markdown_to_visible.resize(escaped.len() + 1, index);
-            for local in 0..=escaped.len() - start {
-                markdown_to_visible[start + local] = index;
-            }
-            index += 1;
-            continue;
-        }
-
-        if text[index..].starts_with('_') {
-            let start = escaped.len();
-            escaped.push_str("\\_");
-            markdown_to_visible.resize(escaped.len() + 1, index);
-            for local in 0..=escaped.len() - start {
-                markdown_to_visible[start + local] = index;
-            }
-            index += 1;
-            continue;
-        }
-
-        if text[index..].starts_with('~') {
-            let start = escaped.len();
-            escaped.push_str("\\~");
-            markdown_to_visible.resize(escaped.len() + 1, index);
-            for local in 0..=escaped.len() - start {
-                markdown_to_visible[start + local] = index;
-            }
-            index += 1;
-            continue;
-        }
-
-        if text[index..].starts_with('^') {
-            let start = escaped.len();
-            escaped.push_str("\\^");
-            markdown_to_visible.resize(escaped.len() + 1, index);
-            for local in 0..=escaped.len() - start {
-                markdown_to_visible[start + local] = index;
-            }
-            index += 1;
-            continue;
-        }
-
-        if text[index..].starts_with('`') {
-            let start = escaped.len();
-            escaped.push_str("\\`");
-            markdown_to_visible.resize(escaped.len() + 1, index);
-            for local in 0..=escaped.len() - start {
-                markdown_to_visible[start + local] = index;
-            }
-            index += 1;
-            continue;
-        }
-
-        let ch = text[index..].chars().next().unwrap();
         let start = escaped.len();
-        escaped.push(ch);
-        markdown_to_visible.resize(escaped.len() + 1, index);
-        for local in 0..=escaped.len() - start {
-            markdown_to_visible[start + local] = index;
+        if OFFSETS {
+            visible_to_markdown[index] = start;
         }
-        index += ch.len_utf8();
+        let remaining = &text[index..];
+        let escaped_tag = if remaining.starts_with('<') {
+            ["</strong>", "<strong>", "</em>", "<em>", "</u>", "<u>"]
+                .into_iter()
+                .find(|tag| remaining.starts_with(tag))
+        } else {
+            None
+        };
+        let source_len = if let Some(tag) = escaped_tag {
+            escaped.push('\\');
+            escaped.push_str(tag);
+            tag.len()
+        } else {
+            let ch = remaining.chars().next().unwrap();
+            if matches!(ch, '\\' | '*' | '_' | '~' | '^' | '`')
+                || (ch == '!' && super::image::parse_inline_image_at(remaining, 0).is_some())
+            {
+                escaped.push('\\');
+            }
+            escaped.push(ch);
+            ch.len_utf8()
+        };
+        if OFFSETS {
+            markdown_to_visible.resize(escaped.len() + 1, index);
+            for local in 0..=escaped.len() - start {
+                markdown_to_visible[start + local] = index;
+            }
+        }
+        index += source_len;
     }
-    visible_to_markdown[text.len()] = escaped.len();
-    markdown_to_visible[escaped.len()] = text.len();
+    if OFFSETS {
+        visible_to_markdown[text.len()] = escaped.len();
+        markdown_to_visible[escaped.len()] = text.len();
+    }
 
     InlineMarkdownOffsetMap {
         markdown: escaped,
@@ -3008,7 +3117,9 @@ fn escape_literal_text_with_offset_map(text: &str) -> InlineMarkdownOffsetMap {
 }
 
 /// Pad code-span content when needed and map its visible byte offsets.
-fn escape_code_span_text_with_offset_map(text: &str) -> InlineMarkdownOffsetMap {
+fn escape_code_span_text_with_offset_map<const OFFSETS: bool>(
+    text: &str,
+) -> InlineMarkdownOffsetMap {
     let needs_padding = !text.is_empty()
         && !text.chars().all(|ch| ch == ' ')
         && (text.starts_with([' ', '`']) || text.ends_with([' ', '`']));
@@ -3023,14 +3134,22 @@ fn escape_code_span_text_with_offset_map(text: &str) -> InlineMarkdownOffsetMap 
         markdown.push(' ');
     }
 
-    let mut visible_to_markdown = vec![0; text.len() + 1];
+    let mut visible_to_markdown = if OFFSETS {
+        vec![0; text.len() + 1]
+    } else {
+        Vec::new()
+    };
     for (visible, markdown_offset) in visible_to_markdown.iter_mut().enumerate() {
         *markdown_offset = leading_padding + visible;
     }
 
     let content_start = leading_padding;
     let content_end = leading_padding + text.len();
-    let mut markdown_to_visible = vec![0; markdown.len() + 1];
+    let mut markdown_to_visible = if OFFSETS {
+        vec![0; markdown.len() + 1]
+    } else {
+        Vec::new()
+    };
     for (markdown_offset, visible) in markdown_to_visible.iter_mut().enumerate() {
         *visible = if markdown_offset <= content_start {
             0
@@ -3214,7 +3333,11 @@ pub(crate) fn can_use_markdown_script_delimiters(
 ) -> bool {
     // This guard is shared by serialization and inline projection. Markdown
     // script markers need a compatible ASCII owner immediately before the
-    // script fragment; otherwise both paths use <sup>/<sub>.
+    // script fragment and an ASCII body accepted by the parser; otherwise
+    // both paths use <sup>/<sub> so Unicode edits retain their script style.
+    if fragment.text.is_empty() || !fragment.text.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+        return false;
+    }
     let Some(previous) = previous_fragment else {
         return false;
     };
@@ -3231,7 +3354,9 @@ pub(crate) fn can_use_markdown_script_delimiters(
         && previous.footnote.is_none()
         && fragment.footnote.is_none()
         && previous.math.is_none()
+        && !previous.image
         && fragment.math.is_none()
+        && !fragment.image
         && styles_match_ignoring_script(previous.style, fragment.style)
 }
 
@@ -3428,6 +3553,124 @@ mod tests {
         InlineScript, InlineStyle, InlineTextTree, LinkReferenceDefinitions, StyleFlag,
     };
     use crate::components::HtmlCssColor;
+
+    #[test]
+    fn linked_inline_image_keeps_its_source_and_outer_link() {
+        for source in [
+            "图片也可以出现在链接里：[![嵌套图片](https://via.placeholder.com/120/2094f3?text=Link \"嵌套图片\")](https://example.com)",
+            "[before ![**图**](image_with_underscores.png \"标题\") after ![二](two.png)](https://example.com)",
+            "prefix ![plain](x.png) suffix",
+            "[![图 [内层]](image_(1).png \"标题 (含括号)\")](https://example.com)",
+        ] {
+            let mut tree = InlineTextTree::from_markdown(source);
+            for _ in 0..4 {
+                assert!(tree.has_mixed_inline_visuals());
+                let cache = tree.render_cache();
+                let images = cache
+                    .spans()
+                    .iter()
+                    .filter(|span| span.image)
+                    .collect::<Vec<_>>();
+                assert!(!images.is_empty());
+                for span in images {
+                    let syntax = super::super::image::parse_standalone_image(
+                        &cache.visible_text()[span.range.clone()],
+                    )
+                    .unwrap();
+                    assert!(syntax.resolve_target(&Default::default()).is_some());
+                    if source.starts_with('[') || source.starts_with("图片") {
+                        assert_eq!(
+                            span.link.as_ref().unwrap().open_target,
+                            "https://example.com"
+                        );
+                    }
+                }
+                assert_eq!(tree.serialize_markdown(), source);
+                let map = tree.markdown_offset_map();
+                assert_eq!(map.markdown(), source);
+                for offset in cache
+                    .visible_text()
+                    .char_indices()
+                    .map(|(offset, _)| offset)
+                    .chain([cache.visible_len()])
+                {
+                    assert_eq!(
+                        map.markdown_to_visible_offset(map.visible_to_markdown_offset(offset)),
+                        offset
+                    );
+                }
+                tree = InlineTextTree::from_markdown(&tree.serialize_markdown());
+            }
+        }
+    }
+
+    #[test]
+    fn inline_image_syntax_is_literal_in_code_and_after_an_escape() {
+        for source in ["`![alt](x.png)`", r"\![alt](x.png)"] {
+            let mut tree = InlineTextTree::from_markdown(source);
+            for _ in 0..3 {
+                assert!(!tree.has_mixed_inline_visuals());
+                assert!(tree.render_cache().spans().iter().all(|span| !span.image));
+                assert_eq!(tree.serialize_markdown(), source);
+                tree = InlineTextTree::from_markdown(&tree.serialize_markdown());
+            }
+        }
+    }
+
+    #[test]
+    fn editing_inline_image_source_retains_its_enclosing_link() {
+        let source = "[![图](a.png)](https://example.com)";
+        let tree = InlineTextTree::from_markdown(source);
+        let start = tree.visible_text().find("a.png").unwrap();
+        let result = tree.replace_visible_range(
+            start..start + 5,
+            "b.png",
+            tree.attributes_for_insertion_at(start),
+        );
+        assert_eq!(
+            result.tree.serialize_markdown(),
+            "[![图](b.png)](https://example.com)"
+        );
+        assert!(result.tree.render_cache().spans().iter().any(|span| {
+            span.image
+                && span
+                    .link
+                    .as_ref()
+                    .is_some_and(|link| link.open_target == "https://example.com")
+        }));
+    }
+
+    #[test]
+    fn text_only_serialization_matches_mapped_serialization() {
+        let fixture = include_str!("../../../test.md");
+        for source in fixture.lines().chain([
+            fixture,
+            "**粗体 *嵌套* `code`** [链接][ref] ![图](a.png) $x^2$ [^note]",
+            "<https://example.com/a_b?q=1&x=2> <me@example.com>",
+            "[**粗体** and *斜体*](https://example.com \"标题\")",
+            "<span style=\"color: red; background-color: blue\">你好 **bold**</span>",
+            "H~2~O x^2^ <u>下划线</u> ~~删除~~ `` `code` ``",
+        ]) {
+            let mut tree = InlineTextTree::from_markdown(source);
+            assert_eq!(
+                tree.serialize_markdown(),
+                tree.markdown_offset_map().markdown(),
+                "{source}"
+            );
+            tree.apply_footnote_reference_state(|_| Some((12, 3)));
+            assert_eq!(
+                tree.serialize_markdown(),
+                tree.markdown_offset_map().markdown(),
+                "resolved: {source}"
+            );
+            let literal = InlineTextTree::plain(source);
+            assert_eq!(
+                literal.serialize_markdown(),
+                literal.markdown_offset_map().markdown(),
+                "literal: {source}"
+            );
+        }
+    }
 
     #[test]
     fn parses_supported_styles_and_serializes_canonically() {
@@ -3688,6 +3931,44 @@ mod tests {
         assert_eq!(tree.visible_text(), "x2");
         assert_eq!(cache.style_at(1).script, InlineScript::Superscript);
         assert_eq!(tree.serialize_markdown(), "x^2^");
+    }
+
+    #[test]
+    fn source_parse_offsets_include_code_space_and_line_ending_cleanup() {
+        for source in [
+            "` x `Z",
+            "` \r\nx\r `Z",
+            "[link](https://example.com) ` x `Z",
+        ] {
+            let parsed = InlineTextTree::parse_markdown_with_link_references(
+                source,
+                &LinkReferenceDefinitions::default(),
+            );
+            let visible = parsed.tree.visible_text();
+            assert_eq!(parsed.map_offset(source.len()), visible.len());
+            let x = source.rfind('x').unwrap();
+            assert_eq!(
+                parsed.map_range(&(x..x + 1)),
+                visible.rfind('x').unwrap()..visible.rfind('x').unwrap() + 1
+            );
+            assert_eq!(parsed.tree, InlineTextTree::from_markdown(source));
+        }
+    }
+
+    #[test]
+    fn unicode_script_edits_roundtrip_through_html_delimiters() {
+        for (source, expected) in [
+            ("x^2^", "x<sup>2中文😀</sup>"),
+            ("H~2~", "H<sub>2中文😀</sub>"),
+        ] {
+            let tree = InlineTextTree::from_markdown(source);
+            let end = tree.visible_len();
+            let edited = tree
+                .replace_visible_range(end..end, "中文😀", tree.attributes_for_insertion_at(end))
+                .tree;
+            assert_eq!(edited.serialize_markdown(), expected);
+            assert_eq!(InlineTextTree::from_markdown(expected), edited);
+        }
     }
 
     #[test]
@@ -4073,6 +4354,48 @@ mod tests {
     }
 
     #[test]
+    fn autolink_targets_round_trip_without_markdown_escaping() {
+        for markdown in [
+            r"<https://example.com/a_b*c~d^e`f>",
+            r"<https://example.com/路径\file\>",
+            r"<ref_2>",
+        ] {
+            let mut tree = InlineTextTree::from_markdown(markdown);
+            let target = &markdown[1..markdown.len() - 1];
+            for _ in 0..16 {
+                assert_eq!(tree.visible_text(), target);
+                assert_eq!(tree.render_cache().link_at(0), Some(target));
+                let map = tree.markdown_offset_map();
+                assert_eq!(map.markdown(), markdown);
+                for offset in 0..=target.len() {
+                    assert_eq!(map.visible_to_markdown_offset(offset), offset + 1);
+                    assert_eq!(map.markdown_to_visible_offset(offset + 1), offset);
+                }
+                tree = InlineTextTree::from_markdown(map.markdown());
+            }
+        }
+    }
+
+    #[test]
+    fn angle_brackets_with_whitespace_stay_literal_across_reparses() {
+        for markdown in [r"尖括号：\< \>", "<two words>", "<a\nb>", "<a\tb>"] {
+            let mut tree = InlineTextTree::from_markdown(markdown);
+            let visible = tree.visible_text();
+            let canonical = tree.serialize_markdown();
+            for _ in 0..16 {
+                assert!(
+                    tree.fragments
+                        .iter()
+                        .all(|fragment| fragment.link.is_none())
+                );
+                assert_eq!(tree.visible_text(), visible);
+                assert_eq!(tree.serialize_markdown(), canonical);
+                tree = InlineTextTree::from_markdown(&canonical);
+            }
+        }
+    }
+
+    #[test]
     fn parses_mailto_autolinks_and_preserves_syntax() {
         let markdown = "<mailto:test@example.com>";
         let tree = InlineTextTree::from_markdown(markdown);
@@ -4311,6 +4634,7 @@ mod tests {
                 link: None,
                 footnote: None,
                 math: None,
+                image: false,
             }]);
             let serialized = tree.serialize_markdown();
             let reparsed = InlineTextTree::from_markdown(&serialized);

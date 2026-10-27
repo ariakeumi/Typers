@@ -7,7 +7,7 @@ use std::sync::Arc;
 /// GPUI's platform system-font alias, also recognized by CSS export.
 pub(crate) const SYSTEM_UI_FONT: &str = ".SystemUIFont";
 /// Default family list for document text.
-pub(crate) const DEFAULT_BODY_STACK: &str = ".SystemUIFont";
+pub(crate) const DEFAULT_BODY_STACK: &str = "Open Sans, Clear Sans, Helvetica Neue, Helvetica, Arial, PingFang SC, Microsoft YaHei, sans-serif";
 /// Default family list for application controls.
 pub(crate) const DEFAULT_UI_STACK: &str = ".SystemUIFont";
 /// Cross-platform default family list for code text.

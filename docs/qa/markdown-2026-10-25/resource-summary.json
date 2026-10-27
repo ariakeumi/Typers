@@ -1,0 +1,110 @@
+[
+  {
+    "phase": "rendered_idle_30s",
+    "samples": 56,
+    "duration_s": 29.49,
+    "cpu_mean": 3.04,
+    "cpu_p95": 3.41,
+    "cpu_max": 3.79,
+    "rss_start_mib": 203.062,
+    "rss_end_mib": 203.062,
+    "rss_max_mib": 203.062,
+    "footprint_end_mib": 126.72
+  },
+  {
+    "phase": "scroll_cycle_1",
+    "samples": 45,
+    "duration_s": 23.26,
+    "cpu_mean": 8.73,
+    "cpu_p95": 16.52,
+    "cpu_max": 19.17,
+    "rss_start_mib": 203.078,
+    "rss_end_mib": 204.609,
+    "rss_max_mib": 204.609,
+    "footprint_end_mib": 127.642
+  },
+  {
+    "phase": "scroll_cycle_2",
+    "samples": 46,
+    "duration_s": 23.74,
+    "cpu_mean": 8.19,
+    "cpu_p95": 16.91,
+    "cpu_max": 18.68,
+    "rss_start_mib": 204.609,
+    "rss_end_mib": 204.641,
+    "rss_max_mib": 204.641,
+    "footprint_end_mib": 121.126
+  },
+  {
+    "phase": "scroll_cycle_3",
+    "samples": 32,
+    "duration_s": 16.33,
+    "cpu_mean": 10.43,
+    "cpu_p95": 15.58,
+    "cpu_max": 16.7,
+    "rss_start_mib": 204.641,
+    "rss_end_mib": 204.641,
+    "rss_max_mib": 204.641,
+    "footprint_end_mib": 121.126
+  },
+  {
+    "phase": "post_scroll_idle_30s",
+    "samples": 57,
+    "duration_s": 29.99,
+    "cpu_mean": 3.14,
+    "cpu_p95": 3.66,
+    "cpu_max": 4.09,
+    "rss_start_mib": 204.641,
+    "rss_end_mib": 204.641,
+    "rss_max_mib": 204.641,
+    "footprint_end_mib": 121.126
+  },
+  {
+    "phase": "mode_toggle_20",
+    "samples": 21,
+    "duration_s": 10.7,
+    "cpu_mean": 13.46,
+    "cpu_p95": 15.1,
+    "cpu_max": 15.8,
+    "rss_start_mib": 205.141,
+    "rss_end_mib": 205.562,
+    "rss_max_mib": 205.562,
+    "footprint_end_mib": 122.454
+  },
+  {
+    "phase": "source_idle_30s",
+    "samples": 57,
+    "duration_s": 30.0,
+    "cpu_mean": 3.21,
+    "cpu_p95": 3.59,
+    "cpu_max": 3.72,
+    "rss_start_mib": 205.562,
+    "rss_end_mib": 205.562,
+    "rss_max_mib": 205.562,
+    "footprint_end_mib": 122.454
+  },
+  {
+    "phase": "source_keyboard_61",
+    "samples": 46,
+    "duration_s": 23.77,
+    "cpu_mean": 8.31,
+    "cpu_p95": 10.61,
+    "cpu_max": 11.54,
+    "rss_start_mib": 205.562,
+    "rss_end_mib": 206.094,
+    "rss_max_mib": 206.094,
+    "footprint_end_mib": 122.939
+  },
+  {
+    "phase": "source_post_input_idle",
+    "samples": 57,
+    "duration_s": 29.93,
+    "cpu_mean": 3.27,
+    "cpu_p95": 4.1,
+    "cpu_max": 9.87,
+    "rss_start_mib": 206.094,
+    "rss_end_mib": 206.062,
+    "rss_max_mib": 206.109,
+    "footprint_end_mib": 122.939
+  }
+]

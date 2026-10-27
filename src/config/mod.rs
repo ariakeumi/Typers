@@ -32,6 +32,12 @@ impl VelotypeConfigDirs {
     /// language and theme packs are stored under the OS location returned by
     /// `directories::ProjectDirs`.
     pub(crate) fn from_system() -> anyhow::Result<Self> {
+        // Portable profiles also let previews and integration runs keep their
+        // preferences and recent-file history separate from everyday writing.
+        if let Some(root) = std::env::var_os("VELOTYPE_CONFIG_DIR").filter(|root| !root.is_empty())
+        {
+            return Ok(Self { root: root.into() });
+        }
         let dirs = ProjectDirs::from("com", "manyougz", "Velotype")
             .context("failed to resolve the Velotype config directory")?;
         Ok(Self {

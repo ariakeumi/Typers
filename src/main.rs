@@ -1,4 +1,4 @@
-//! Velotype - a block-based Markdown editor built with GPUI.
+//! Typers - a block-based Markdown editor built with GPUI.
 //!
 //! Reads file paths from command-line arguments and opens one GPUI window per
 //! file. With no arguments, startup preferences select a recent file or an
@@ -72,6 +72,30 @@ impl AssetSource for VelotypeAssets {
     /// Returns embedded bytes for known icon paths, or `None` for other assets.
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
         match path {
+            "icon/preferences/general.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icon/preferences/general.svg"
+            )))),
+            "icon/preferences/file.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icon/preferences/file.svg"
+            )))),
+            "icon/preferences/appearance.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icon/preferences/appearance.svg"
+            )))),
+            "icon/preferences/image.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icon/preferences/image.svg"
+            )))),
+            "icon/preferences/keyboard.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icon/preferences/keyboard.svg"
+            )))),
+            "icon/preferences/status-bar.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icon/preferences/status-bar.svg"
+            )))),
+            "icon/preferences/chevrons.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icon/preferences/chevrons.svg"
+            )))),
+            "icon/workspace/sidebar.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icon/workspace/sidebar.svg"
+            )))),
             "icon/workspace/folder.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
                 "../assets/icon/workspace/folder.svg"
             )))),
@@ -147,12 +171,12 @@ fn main() {
                 break;
             }
             "--version" | "-v" => {
-                println!("velotype {}", env!("CARGO_PKG_VERSION"));
+                println!("Typers {}", env!("CARGO_PKG_VERSION"));
                 return;
             }
             "--help" | "-h" => {
                 println!(
-                    "velotype {} - A block-based Markdown editor",
+                    "Typers {} - A block-based Markdown editor",
                     env!("CARGO_PKG_VERSION")
                 );
                 println!();
@@ -200,6 +224,9 @@ fn main() {
             .cloned()
             .collect();
 
+        // This launcher exits immediately; the editor is intentionally
+        // detached and reparented to the operating system.
+        #[allow(clippy::zombie_processes)]
         Command::new(exe_path)
             .args(&non_detach_args[1..])
             .spawn()
@@ -236,6 +263,14 @@ fn main() {
         });
         I18nManager::init_with_language_id(cx, &preferences.default_language_id);
         ThemeManager::init_with_theme_id(cx, &preferences.default_theme_id);
+        if let Err(err) = cx.text_system().add_fonts(vec![
+            Cow::Borrowed(include_bytes!("../assets/fonts/OpenSans-Regular.ttf")),
+            Cow::Borrowed(include_bytes!("../assets/fonts/OpenSans-Italic.ttf")),
+            Cow::Borrowed(include_bytes!("../assets/fonts/OpenSans-Bold.ttf")),
+            Cow::Borrowed(include_bytes!("../assets/fonts/OpenSans-BoldItalic.ttf")),
+        ]) {
+            eprintln!("failed to load bundled writing fonts: {err}");
+        }
         fonts::FontSettings::init(cx, preferences.fonts.clone());
         config::EditorSettings::init(cx, preferences.show_table_headers);
         net::install_http_client(cx);
@@ -246,7 +281,7 @@ fn main() {
         #[cfg(target_os = "macos")]
         cx.spawn(async move |cx| {
             while let Some(path) = open_file_rx.next().await {
-                let _ = cx.update(move |cx| {
+                cx.update(move |cx| {
                     if let Err(err) = app_menu::open_file_in_new_window(cx, &path) {
                         eprintln!("failed to open '{}': {err}", path.display());
                     }
@@ -265,7 +300,7 @@ fn main() {
                         .timer(std::time::Duration::from_millis(150))
                         .await;
                     if !open_file_requested.load(Ordering::SeqCst) {
-                        let _ = cx.update(move |cx| open_startup_window(cx, startup_open));
+                        cx.update(move |cx| open_startup_window(cx, startup_open));
                     }
                 })
                 .detach();

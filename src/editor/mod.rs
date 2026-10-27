@@ -44,6 +44,7 @@ mod tree;
 mod update;
 mod window_state;
 mod workspace;
+pub(crate) mod writing;
 
 use self::status_bar::StatusBarState;
 use self::workspace::WorkspaceState;
@@ -148,6 +149,8 @@ pub struct Editor {
     workspace: WorkspaceState,
     /// Hover state for status-bar controls.
     status_bar: StatusBarState,
+    /// Search fields, writing modes, and document statistics.
+    writing: writing::WritingState,
     /// Currently open insert or table-axis context menu.
     context_menu: Option<ContextMenuState>,
     /// Table insertion dialog state, if open.
@@ -201,6 +204,8 @@ pub struct Editor {
     pending_undo_capture: Option<PendingUndoCapture>,
     /// Last stable selection expressed in canonical source byte offsets.
     last_selection_snapshot: UndoSelectionSnapshot,
+    /// Source mappings retained across viewport-only frames.
+    source_selection_mappings: std::cell::RefCell<Option<(uuid::Uuid, Vec<SourceTargetMapping>)>>,
     /// Source text paired with the stable selection for the next undo capture.
     last_stable_source_text: String,
     /// Suppresses recursive history capture while restoring an entry.
@@ -444,7 +449,7 @@ impl Editor {
             pending_picgo_uploads: HashMap::new(),
             unsaved_image_assets_dir: None,
             pending_window_edited: false,
-            pending_window_title_refresh: false,
+            pending_window_title_refresh: true,
             document_dirty: false,
             file_path,
             scroll_handle: ScrollHandle::new(),
@@ -465,6 +470,7 @@ impl Editor {
             info_dialog: None,
             workspace: WorkspaceState::default(),
             status_bar: StatusBarState::default(),
+            writing: writing::WritingState::default(),
             context_menu: None,
             table_insert_dialog: None,
             context_menu_submenu_close_task: None,
@@ -489,6 +495,7 @@ impl Editor {
             redo_history: Vec::new(),
             pending_undo_capture: None,
             last_selection_snapshot: Self::empty_selection_snapshot(),
+            source_selection_mappings: std::cell::RefCell::default(),
             last_stable_source_text: normalized,
             history_restore_in_progress: false,
             image_reference_definitions: Arc::default(),

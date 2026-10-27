@@ -191,6 +191,7 @@ impl Editor {
             event,
             BlockEvent::Changed
                 | BlockEvent::RequestNewline { .. }
+                | BlockEvent::RequestInsertParagraphBefore
                 | BlockEvent::RequestEnterCalloutBody
                 | BlockEvent::RequestQuoteBreak
                 | BlockEvent::RequestCalloutBreak
@@ -242,6 +243,37 @@ impl Editor {
             cx.notify();
         });
         self.focus_block(block.entity_id());
+    }
+
+    /// Focuses an editable edge, using a cell rather than a table container.
+    fn focus_block_edge(
+        &mut self,
+        block: &Entity<super::Block>,
+        at_end: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let target = if block.read(cx).kind() == BlockKind::Table {
+            let Some(runtime) = block.read(cx).table_runtime.as_ref() else {
+                return;
+            };
+            let cell = if at_end {
+                runtime.rows.last().unwrap_or(&runtime.header).last()
+            } else {
+                runtime.header.first()
+            };
+            let Some(cell) = cell else {
+                return;
+            };
+            cell.clone()
+        } else {
+            block.clone()
+        };
+        target.update(cx, |target, cx| {
+            let offset = if at_end { target.visible_len() } else { 0 };
+            target.move_to(offset, cx);
+        });
+        self.focus_block(target.entity_id());
+        cx.notify();
     }
 
     /// Uses the document directory or current working directory for pasted assets.
@@ -1946,6 +1978,24 @@ impl Editor {
                 self.finalize_pending_undo_capture(cx);
                 cx.notify();
             }
+            BlockEvent::RequestInsertParagraphBefore => {
+                let Some(location) = self.document.find_block_location(block.entity_id()) else {
+                    return;
+                };
+                self.prepare_undo_capture(crate::components::UndoCaptureKind::NonCoalescible, cx);
+                let paragraph = Self::new_block(cx, BlockRecord::paragraph(String::new()));
+                self.document.insert_blocks_at(
+                    location.parent,
+                    location.index,
+                    vec![paragraph],
+                    cx,
+                );
+                self.rebuild_image_runtimes(cx);
+                self.focus_block(block.entity_id());
+                self.mark_dirty(cx);
+                self.finalize_pending_undo_capture(cx);
+                cx.notify();
+            }
             BlockEvent::RequestEnterCalloutBody => {
                 let needs_body = block.read(cx).children.is_empty();
                 if needs_body {
@@ -2024,6 +2074,13 @@ impl Editor {
                     return;
                 }
                 let prev = visible_before[current_visible_index - 1].entity.clone();
+                // Widgets own their own content and serialization. Appending a
+                // paragraph to a table or separator silently drops its text;
+                // other widgets would reinterpret it as code, HTML, or math.
+                if prev.read(cx).kind().is_atomic_structural() {
+                    self.focus_block_edge(&prev, true, cx);
+                    return;
+                }
                 let quote_related = self.block_is_quote_structure_related(&block, cx)
                     || self.block_is_quote_structure_related(&prev, cx);
                 self.prepare_undo_capture(crate::components::UndoCaptureKind::NonCoalescible, cx);
@@ -2552,7 +2609,9 @@ impl Editor {
                 }
 
                 if let Some(focus_id) = focus_candidate {
-                    self.focus_block(focus_id);
+                    if let Some(target) = self.document.block_entity_by_id(focus_id) {
+                        self.focus_block_edge(&target, current_visible_index > 0, cx);
+                    }
                 } else if let Some(first_root) = self.document.first_root() {
                     self.focus_block(first_root.entity_id());
                 }
@@ -2588,6 +2647,171 @@ mod tests {
         ExitCodeBlock, InlineTextTree, Newline,
     };
     use gpui::{App, AppContext, Entity, TestAppContext};
+
+    #[gpui::test]
+    async fn deleting_empty_paragraph_after_table_focuses_last_cell(cx: &mut TestAppContext) {
+        let editor =
+            cx.new(|cx| Editor::from_markdown(cx, "| A |\n| --- |\n| 中文😀 |".into(), None));
+        editor.update(cx, |editor, cx| {
+            let table = editor.document.first_root().unwrap().clone();
+            let cell = table.read(cx).table_runtime.as_ref().unwrap().rows[0][0].clone();
+            let empty = Editor::new_block(cx, BlockRecord::paragraph(String::new()));
+            editor
+                .document
+                .insert_blocks_at(None, 1, vec![empty.clone()], cx);
+            editor.on_block_event(empty, &BlockEvent::RequestDelete, cx);
+            assert_eq!(editor.pending_focus, Some(cell.entity_id()));
+            assert_eq!(cell.read(cx).cursor_offset(), "中文😀".len());
+            assert_eq!(editor.document.root_count(), 1);
+        });
+    }
+
+    #[gpui::test]
+    async fn backspace_before_paragraph_keeps_atomic_predecessor_and_text(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        for preceding in [
+            "| A | B |\n| --- | --- |\n| 1 | 中文😀 |",
+            "---",
+            "$$\nx^2\n$$",
+            "```mermaid\ngraph TD; A-->B;\n```",
+            "```js\nconst a = 1;\n```",
+            "<!-- 注释 -->",
+            "<div>HTML 内容</div>",
+        ] {
+            let editor = cx.new(|cx| {
+                Editor::from_markdown(cx, format!("{preceding}\n\n正文不能丢失😀"), None)
+            });
+            let original = editor.read_with(cx, |editor, cx| editor.current_document_source(cx));
+            cx.update(|window, cx| {
+                editor.update(cx, |editor, cx| {
+                    let paragraph = editor
+                        .document
+                        .visible_blocks()
+                        .last()
+                        .unwrap()
+                        .entity
+                        .clone();
+                    paragraph.update(cx, |block, cx| {
+                        block.move_to(0, cx);
+                        block.on_delete_back(&DeleteBack, window, cx);
+                    });
+                });
+            });
+            editor.read_with(cx, |editor, cx| {
+                assert_eq!(editor.current_document_source(cx), original, "{preceding}");
+                assert_eq!(editor.document.root_count(), 2, "{preceding}");
+                let previous = editor.document.first_root().unwrap();
+                let target = previous
+                    .read(cx)
+                    .table_runtime
+                    .as_ref()
+                    .map(|table| {
+                        table
+                            .rows
+                            .last()
+                            .unwrap_or(&table.header)
+                            .last()
+                            .unwrap()
+                            .clone()
+                    })
+                    .unwrap_or_else(|| previous.clone());
+                assert_eq!(
+                    editor.active_entity_id,
+                    Some(target.entity_id()),
+                    "{preceding}"
+                );
+                let target = target.read(cx);
+                assert_eq!(target.cursor_offset(), target.visible_len(), "{preceding}");
+                assert!(
+                    editor.undo_history.is_empty(),
+                    "navigation must not add undo"
+                );
+            });
+        }
+    }
+
+    #[gpui::test]
+    async fn backspace_after_clearing_paragraph_continues_at_previous_end(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        for previous in ["abc", "上一行文字", "**上一行**文字"] {
+            let editor = cx.new(|cx| Editor::from_markdown(cx, format!("{previous}\n\nx"), None));
+            let previous_id = editor.update(cx, |editor, cx| {
+                let previous = editor.document.visible_blocks()[0].entity.clone();
+                previous.update(cx, |block, cx| block.move_to(0, cx));
+                let current = editor.document.visible_blocks()[1].entity.clone();
+                current.update(cx, |block, cx| block.move_to(block.visible_len(), cx));
+                editor.focus_block(current.entity_id());
+                previous.entity_id()
+            });
+
+            // Delete the last character, then remove the now-empty paragraph.
+            for _ in 0..2 {
+                cx.update(|window, cx| {
+                    editor.update(cx, |editor, cx| {
+                        let current = editor
+                            .document
+                            .visible_blocks()
+                            .last()
+                            .unwrap()
+                            .entity
+                            .clone();
+                        current.update(cx, |block, cx| {
+                            block.on_delete_back(&DeleteBack, window, cx);
+                        });
+                    });
+                });
+            }
+
+            let expected_text = editor.update(cx, |editor, cx| {
+                assert_eq!(editor.document.root_count(), 1);
+                assert_eq!(editor.pending_focus, Some(previous_id));
+                let previous = editor.document.first_root().unwrap().read(cx);
+                assert_eq!(previous.cursor_offset(), previous.visible_len());
+                assert!(previous.selected_range.is_empty());
+                let end = previous.previous_boundary(previous.cursor_offset());
+                previous.display_text()[..end].to_string()
+            });
+
+            // A further Backspace deletes the previous paragraph's final character.
+            cx.update(|window, cx| {
+                editor.update(cx, |editor, cx| {
+                    let previous = editor.document.first_root().unwrap().clone();
+                    previous.update(cx, |block, cx| {
+                        block.on_delete_back(&DeleteBack, window, cx);
+                    });
+                });
+            });
+            editor.update(cx, |editor, cx| {
+                assert_eq!(
+                    editor
+                        .document
+                        .first_root()
+                        .unwrap()
+                        .read(cx)
+                        .display_text(),
+                    expected_text
+                );
+            });
+        }
+    }
+
+    #[gpui::test]
+    async fn deleting_first_empty_paragraph_places_caret_at_next_start(cx: &mut TestAppContext) {
+        let editor = cx.new(|cx| Editor::from_markdown(cx, "下一行文字".to_string(), None));
+        editor.update(cx, |editor, cx| {
+            let next = editor.document.first_root().unwrap().clone();
+            next.update(cx, |block, cx| block.move_to(block.visible_len(), cx));
+            let empty = Editor::new_block(cx, BlockRecord::paragraph(String::new()));
+            editor
+                .document
+                .insert_blocks_at(None, 0, vec![empty.clone()], cx);
+            editor.on_block_event(empty, &BlockEvent::RequestDelete, cx);
+
+            assert_eq!(editor.document.root_count(), 1);
+            assert_eq!(editor.pending_focus, Some(next.entity_id()));
+            assert_eq!(next.read(cx).selected_range, 0..0);
+        });
+    }
 
     #[gpui::test]
     async fn request_quote_break_creates_new_root_leaf_quote_group(cx: &mut TestAppContext) {
@@ -3031,6 +3255,127 @@ mod tests {
             assert_eq!(visible[2].entity.read(cx).render_depth, 1);
             assert_eq!(editor.document.markdown_text(cx), "- item\n  \n  ");
         });
+    }
+
+    #[gpui::test]
+    async fn enter_at_heading_start_preserves_level_content_and_focus(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        for level in 1..=6 {
+            for title in ["**标题**与[链接](https://example.com)", "`代码`标题"] {
+                let source = format!("{} {title}\n\n正文", "#".repeat(level));
+                let editor = cx.new(|cx| Editor::from_markdown(cx, source.clone(), None));
+                let heading = editor.read_with(cx, |editor, _| {
+                    editor.document.first_root().unwrap().clone()
+                });
+                cx.update(|window, cx| {
+                    editor.update(cx, |editor, cx| {
+                        editor.focus_block(heading.entity_id());
+                        heading.update(cx, |block, block_cx| {
+                            block.move_to(0, block_cx);
+                            block.on_newline(&Newline, window, block_cx);
+                        });
+                    });
+                });
+
+                editor.update(cx, |editor, cx| {
+                    let roots = editor.document.root_blocks();
+                    assert_eq!(roots.len(), 3);
+                    assert_eq!(roots[0].read(cx).kind(), BlockKind::Paragraph);
+                    assert!(roots[0].read(cx).is_empty());
+                    assert_eq!(roots[1].entity_id(), heading.entity_id());
+                    assert_eq!(
+                        roots[1].read(cx).kind(),
+                        BlockKind::Heading { level: level as u8 }
+                    );
+                    assert_eq!(roots[1].read(cx).record.title.serialize_markdown(), title);
+                    assert_eq!(roots[1].read(cx).selected_range, 0..0);
+                    assert_eq!(roots[2].read(cx).display_text(), "正文");
+                    assert_eq!(editor.pending_focus, Some(heading.entity_id()));
+                    assert_eq!(editor.document.markdown_text(cx), format!("\n{source}"));
+
+                    editor.undo_document(cx);
+                    assert_eq!(editor.document.markdown_text(cx), source);
+                    assert_eq!(editor.document.root_count(), 2);
+                    editor.redo_document(cx);
+                    assert_eq!(editor.document.markdown_text(cx), format!("\n{source}"));
+                    assert_eq!(editor.document.root_count(), 3);
+                });
+            }
+        }
+    }
+
+    #[gpui::test]
+    async fn enter_at_quoted_heading_start_inserts_paragraph_in_same_quote(
+        cx: &mut TestAppContext,
+    ) {
+        let cx = cx.add_empty_window();
+        let editor = cx
+            .new(|cx| Editor::from_markdown(cx, "> before\n>\n> ## 标题\n>\n> after".into(), None));
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                let heading = editor
+                    .document
+                    .visible_blocks()
+                    .iter()
+                    .find(|row| matches!(row.entity.read(cx).kind(), BlockKind::Heading { .. }))
+                    .unwrap()
+                    .entity
+                    .clone();
+                editor.focus_block(heading.entity_id());
+                heading.update(cx, |block, block_cx| {
+                    block.move_to(0, block_cx);
+                    block.on_newline(&Newline, window, block_cx);
+                });
+            });
+        });
+        editor.read_with(cx, |editor, cx| {
+            let visible = editor.document.visible_blocks();
+            let index = visible
+                .iter()
+                .position(|row| row.entity.read(cx).display_text() == "标题")
+                .expect("heading retained");
+            let heading = visible[index].entity.read(cx);
+            let blank = visible[index - 1].entity.read(cx);
+            assert_eq!(heading.kind(), BlockKind::Heading { level: 2 });
+            assert_eq!(heading.quote_depth, 1);
+            assert_eq!(heading.selected_range, 0..0);
+            assert_eq!(blank.kind(), BlockKind::Paragraph);
+            assert!(blank.is_empty());
+            assert_eq!(blank.quote_depth, 1);
+            assert_eq!(
+                editor.pending_focus,
+                Some(visible[index].entity.entity_id())
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn enter_inside_or_at_end_of_heading_keeps_paragraph_split(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        for (source, cursor, leading, trailing) in [
+            ("## 标题内容", "标题".len(), "标题", "内容"),
+            ("## 标题", "标题".len(), "标题", ""),
+        ] {
+            let editor = cx.new(|cx| Editor::from_markdown(cx, source.into(), None));
+            cx.update(|window, cx| {
+                editor.update(cx, |editor, cx| {
+                    let heading = editor.document.first_root().unwrap().clone();
+                    heading.update(cx, |block, block_cx| {
+                        block.move_to(cursor, block_cx);
+                        block.on_newline(&Newline, window, block_cx);
+                    });
+                });
+            });
+            editor.read_with(cx, |editor, cx| {
+                let roots = editor.document.root_blocks();
+                assert_eq!(roots.len(), 2);
+                assert_eq!(roots[0].read(cx).kind(), BlockKind::Heading { level: 2 });
+                assert_eq!(roots[0].read(cx).display_text(), leading);
+                assert_eq!(roots[1].read(cx).kind(), BlockKind::Paragraph);
+                assert_eq!(roots[1].read(cx).display_text(), trailing);
+                assert_eq!(editor.pending_focus, Some(roots[1].entity_id()));
+            });
+        }
     }
 
     #[gpui::test]
@@ -4578,7 +4923,7 @@ mod tests {
             assert_eq!(visible[1].entity.read(cx).kind(), BlockKind::Paragraph);
             assert_eq!(visible[1].entity.read(cx).display_text(), "b");
             assert_eq!(visible[1].entity.read(cx).render_depth, 1);
-            assert_eq!(editor.document.markdown_text(cx), "1. a\n\n  b");
+            assert_eq!(editor.document.markdown_text(cx), "1. a\n\n   b");
         });
 
         let task = cx.new(|cx| Editor::from_markdown(cx, "- [ ] a\n  - [ ] b".to_string(), None));

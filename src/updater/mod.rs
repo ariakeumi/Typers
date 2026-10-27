@@ -291,7 +291,7 @@ impl UpdateManager {
 
 /// Requires saved documents in every editor before launching the installer.
 pub(crate) fn request_install(window: &mut Window, cx: &mut App) {
-    window.defer(cx, |window, cx| begin_install(window, cx));
+    window.defer(cx, begin_install);
 }
 
 fn begin_install(window: &mut Window, cx: &mut App) {

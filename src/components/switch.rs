@@ -6,6 +6,8 @@ use gpui::{prelude::FluentBuilder, *};
 
 use crate::theme::ThemeManager;
 
+type SwitchClickHandler = dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static;
+
 /// A controlled toggle whose owner updates the checked state after clicks.
 #[derive(IntoElement)]
 pub(crate) struct Switch {
@@ -16,7 +18,7 @@ pub(crate) struct Switch {
     /// Visual disabled state; does not suppress the attached click handler.
     disabled: bool,
     /// Optional click callback; the switch does not mutate its own value.
-    on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
+    on_click: Option<Box<SwitchClickHandler>>,
 }
 
 impl Switch {
@@ -83,7 +85,7 @@ impl RenderOnce for Switch {
                 let toggle_state = toggle_state.clone();
                 async move |cx| {
                     cx.background_executor().timer(duration).await;
-                    _ = toggle_state.update(cx, |state, _| *state = checked);
+                    toggle_state.update(cx, |state, _| *state = checked);
                 }
             })
             .detach();

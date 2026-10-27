@@ -1,0 +1,254 @@
+sandbox_extension_issue_file_to_process failed for /tmp/typers-link-crash/CrashRepro.app: 1 (Operation not permitted)
+2026-10-26 00:49:29.637 velotype[62092:1169556] Warning: Window move completed without beginning
+2026-10-26 01:03:14.106 velotype[62092:1169556] Warning: Window move completed without beginning
+
+thread 'main' (1169556) panicked at src/editor/selection.rs:1270:42:
+end byte index 5 is not a char boundary; it is inside '粗' (bytes 3..6 of string)
+stack backtrace:
+   0:        0x102e68c80 - std[9bc579fd67db55b0]::backtrace_rs::backtrace::libunwind::trace
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/../../backtrace/src/backtrace/libunwind.rs:117:9
+   1:        0x102e68c80 - std[9bc579fd67db55b0]::backtrace_rs::backtrace::trace_unsynchronized::<std[9bc579fd67db55b0]::sys::backtrace::_print_fmt::{closure#1}>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/../../backtrace/src/backtrace/mod.rs:66:14
+   2:        0x102e68c80 - std[9bc579fd67db55b0]::sys::backtrace::_print_fmt
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/sys/backtrace.rs:74:9
+   3:        0x102e68c80 - <<std[9bc579fd67db55b0]::sys::backtrace::BacktraceLock>::print::DisplayBacktrace as core[2525d0a98ae2f2bb]::fmt::Display>::fmt
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/sys/backtrace.rs:44:26
+   4:        0x102e80d88 - <core[2525d0a98ae2f2bb]::fmt::rt::Argument>::fmt
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/fmt/rt.rs:152:76
+   5:        0x102e80d88 - core[2525d0a98ae2f2bb]::fmt::write
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/fmt/mod.rs:1687:22
+   6:        0x102e6edf4 - core[2525d0a98ae2f2bb]::io::write::default_write_fmt::<std[9bc579fd67db55b0]::sys::stdio::unix::Stderr>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/io/write.rs:402:11
+   7:        0x102e6edf4 - <std[9bc579fd67db55b0]::sys::stdio::unix::Stderr as core[2525d0a98ae2f2bb]::io::write::Write>::write_fmt
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/io/write.rs:335:13
+   8:        0x102e47ec0 - <std[9bc579fd67db55b0]::sys::backtrace::BacktraceLock>::print
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/sys/backtrace.rs:47:25
+   9:        0x102e47ec0 - std[9bc579fd67db55b0]::panicking::default_hook::{closure#0}
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:292:27
+  10:        0x102e60330 - std[9bc579fd67db55b0]::panicking::default_hook
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:319:9
+  11:        0x102e607e8 - std[9bc579fd67db55b0]::panicking::panic_with_hook
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:815:13
+  12:        0x102e47f44 - std[9bc579fd67db55b0]::panicking::panic_handler::{closure#0}
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:688:13
+  13:        0x102e3fe08 - std[9bc579fd67db55b0]::sys::backtrace::__rust_end_short_backtrace::<std[9bc579fd67db55b0]::panicking::panic_handler::{closure#0}, !>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/sys/backtrace.rs:182:18
+  14:        0x102e48bd0 - __rustc[3d2f79520d6fa809]::rust_begin_unwind
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:679:5
+  15:        0x102f11638 - core[2525d0a98ae2f2bb]::panicking::panic_fmt
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panicking.rs:80:14
+  16:        0x102e811d4 - core[2525d0a98ae2f2bb]::str::slice_error_fail_rt
+  17:        0x102f1121c - core[2525d0a98ae2f2bb]::str::slice_error_fail
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/str/mod.rs:70:5
+  18:        0x1013effb4 - <core[2525d0a98ae2f2bb]::range::Range<usize> as core[2525d0a98ae2f2bb]::slice::index::SliceIndex<str>>::index
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/str/traits.rs:335:21
+  19:        0x101360d70 - <core[2525d0a98ae2f2bb]::ops::range::Range<usize> as core[2525d0a98ae2f2bb]::slice::index::SliceIndex<str>>::index
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/str/traits.rs:248:34
+  20:        0x1013f0db8 - <alloc[654f9ea51da0cd84]::string::String as core[2525d0a98ae2f2bb]::ops::index::Index<core[2525d0a98ae2f2bb]::ops::range::Range<usize>>>::index
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/string.rs:2839:15
+  21:        0x100c71bcc - <velotype[725bf5527347ea06]::editor::Editor>::selected_markdown_text
+                               at /Users/umi/Documents/typer/src/editor/selection.rs:1270:42
+  22:        0x100c38498 - <velotype[725bf5527347ea06]::editor::Editor>::render_status_bar
+                               at /Users/umi/Documents/typer/src/editor/status_bar.rs:109:40
+  23:        0x100c98f74 - <velotype[725bf5527347ea06]::editor::Editor as gpui[96134366e811635a]::element::Render>::render
+                               at /Users/umi/Documents/typer/src/editor/render.rs:2386:51
+  24:        0x10104d398 - gpui[96134366e811635a]::view::any_view::render::<velotype[725bf5527347ea06]::editor::Editor>::{closure#0}
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/view.rs:185:41
+  25:        0x100fe45a4 - <gpui[96134366e811635a]::app::App as gpui[96134366e811635a]::AppContext>::update_entity::<velotype[725bf5527347ea06]::editor::Editor, gpui[96134366e811635a]::element::AnyElement, gpui[96134366e811635a]::view::any_view::render<velotype[725bf5527347ea06]::editor::Editor>::{closure#0}>::{closure#0}
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:3272:25
+  26:        0x1024fedc4 - <gpui[96134366e811635a]::app::App>::update_entity_erased::{closure#0}
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:3209:13
+  27:        0x1024fedc4 - <gpui[96134366e811635a]::app::App>::update::<(), <gpui[96134366e811635a]::app::App>::update_entity_erased::{closure#0}>
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:1315:22
+  28:        0x1024fedc4 - <gpui[96134366e811635a]::app::App>::update_entity_erased
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:3207:14
+  29:        0x100ca0690 - <gpui[96134366e811635a]::app::App as gpui[96134366e811635a]::AppContext>::update_entity::<velotype[725bf5527347ea06]::editor::Editor, gpui[96134366e811635a]::element::AnyElement, gpui[96134366e811635a]::view::any_view::render<velotype[725bf5527347ea06]::editor::Editor>::{closure#0}>
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:3271:14
+  30:        0x100ca0690 - <gpui[96134366e811635a]::app::entity_map::Entity<velotype[725bf5527347ea06]::editor::Editor>>::update::<gpui[96134366e811635a]::element::AnyElement, gpui[96134366e811635a]::app::App, gpui[96134366e811635a]::view::any_view::render<velotype[725bf5527347ea06]::editor::Editor>::{closure#0}>
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app/entity_map.rs:502:12
+  31:        0x10104c3c4 - gpui[96134366e811635a]::view::any_view::render::<velotype[725bf5527347ea06]::editor::Editor>
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/view.rs:185:14
+  32:        0x10258e820 - <gpui[96134366e811635a]::view::AnyView as gpui[96134366e811635a]::view::View>::render
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/view.rs:100:9
+  33:        0x10258e820 - <gpui[96134366e811635a]::view::ViewElement<gpui[96134366e811635a]::view::AnyView> as gpui[96134366e811635a]::element::Element>::request_layout::{closure#0}
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/view.rs:361:56
+  34:        0x1025a1cd4 - gpui[96134366e811635a]::view::request_layout_view::{closure#0}
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/view.rs:485:35
+  35:        0x1025a1cd4 - <gpui[96134366e811635a]::window::Window>::with_rendered_view::<(gpui[96134366e811635a]::taffy::LayoutId, core[2525d0a98ae2f2bb]::option::Option<gpui[96134366e811635a]::element::AnyElement>), gpui[96134366e811635a]::view::request_layout_view::{closure#0}>
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/window.rs:5363:22
+  36:        0x1025a1cd4 - gpui[96134366e811635a]::view::request_layout_view
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/view.rs:475:12
+  37:        0x10259af6c - <gpui[96134366e811635a]::view::ViewElement<gpui[96134366e811635a]::view::AnyView> as gpui[96134366e811635a]::element::Element>::request_layout
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/view.rs:356:26
+  38:        0x10259af6c - <gpui[96134366e811635a]::element::Drawable<gpui[96134366e811635a]::view::ViewElement<gpui[96134366e811635a]::view::AnyView>>>::request_layout
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/element.rs:383:64
+  39:        0x1024a0e90 - <gpui[96134366e811635a]::element::AnyElement>::request_layout
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/element.rs:671:16
+  40:        0x1024a0e90 - <gpui[96134366e811635a]::window::Window>::draw_roots
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/window.rs:3703:43
+  41:        0x1024aff34 - <gpui[96134366e811635a]::window::Window>::draw
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/window.rs:3462:18
+  42:        0x1024a7490 - <gpui[96134366e811635a]::window::Window>::dispatch_key_event
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/window.rs:6011:18
+  43:        0x1024a7490 - <gpui[96134366e811635a]::window::Window>::dispatch_event
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/window.rs:5730:18
+  44:        0x1024e94d0 - <gpui[96134366e811635a]::app::App>::update_window_id::<gpui[96134366e811635a]::window::DispatchEventResult, <gpui[96134366e811635a]::window::Window>::new::{closure#21}::{closure#0}>::{closure#0}
+  45:        0x1024fef94 - <gpui[96134366e811635a]::app::App>::update_window_erased::{closure#0}
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:3154:13
+  46:        0x1024fef94 - <gpui[96134366e811635a]::app::App>::update::<(), <gpui[96134366e811635a]::app::App>::update_window_erased::{closure#0}>
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:1315:22
+  47:        0x1024fef94 - <gpui[96134366e811635a]::app::App>::update_window_erased
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:3145:14
+  48:        0x1024e6b5c - <gpui[96134366e811635a]::app::App>::update_window_id::<gpui[96134366e811635a]::window::DispatchEventResult, <gpui[96134366e811635a]::window::Window>::new::{closure#21}::{closure#0}>
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:2207:14
+  49:        0x1024e6b5c - <gpui[96134366e811635a]::app::App as gpui[96134366e811635a]::AppContext>::update_window::<gpui[96134366e811635a]::window::DispatchEventResult, <gpui[96134366e811635a]::window::Window>::new::{closure#21}::{closure#0}>
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:3301:14
+  50:        0x1024960d4 - <gpui[96134366e811635a]::app::async_context::AsyncApp as gpui[96134366e811635a]::AppContext>::update_window::<gpui[96134366e811635a]::window::DispatchEventResult, <gpui[96134366e811635a]::window::Window>::new::{closure#21}::{closure#0}>
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app/async_context.rs:97:14
+  51:        0x1024960d4 - <gpui[96134366e811635a]::window::AnyWindowHandle>::update::<gpui[96134366e811635a]::app::async_context::AsyncApp, gpui[96134366e811635a]::window::DispatchEventResult, <gpui[96134366e811635a]::window::Window>::new::{closure#21}::{closure#0}>
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/window.rs:7553:12
+  52:        0x1024960d4 - <gpui[96134366e811635a]::window::Window>::new::{closure#21}
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/window.rs:2045:22
+  53:        0x1010a2908 - <alloc[654f9ea51da0cd84]::boxed::Box<dyn core[2525d0a98ae2f2bb]::ops::function::FnMut<(gpui[96134366e811635a]::interactive::PlatformInput,), Output = gpui[96134366e811635a]::window::DispatchEventResult>> as core[2525d0a98ae2f2bb]::ops::function::FnMut<(gpui[96134366e811635a]::interactive::PlatformInput,)>>::call_mut
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/boxed.rs:2327:9
+  54:        0x1010a2908 - gpui_macos[91d661c0b17f7169]::window::handle_key_event::{closure#0}
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-macos-0.3.9/src/window.rs:2662:14
+  55:        0x1010a9780 - gpui_macos[91d661c0b17f7169]::window::handle_key_event
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-macos-0.3.9/src/window.rs:2782:13
+  56:        0x1964f2cac - <unknown>
+  57:        0x1964f2900 - <unknown>
+  58:        0x196c180f8 - <unknown>
+  59:        0x19675a488 - <unknown>
+  60:        0x1963c599c - <unknown>
+  61:        0x1011c3e74 - <() as objc[29adb29d5682fa8e]::message::MessageArguments>::invoke::<()>
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc-0.2.7/src/message/mod.rs:128:17
+  62:        0x1011c3470 - objc[29adb29d5682fa8e]::message::platform::send_unverified::<objc[29adb29d5682fa8e]::runtime::Object, (), ()>
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc-0.2.7/src/message/apple/mod.rs:27:9
+  63:        0x1011ba490 - objc[29adb29d5682fa8e]::message::send_message::<objc[29adb29d5682fa8e]::runtime::Object, (), ()>
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc-0.2.7/src/message/mod.rs:178:5
+  64:        0x1011ba490 - <*mut objc[29adb29d5682fa8e]::runtime::Object as cocoa[ea90a3b4271bb78]::appkit::NSApplication>::run
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cocoa-0.26.1/src/appkit.rs:629:9
+  65:        0x1010c8fe4 - <gpui_macos[91d661c0b17f7169]::platform::MacPlatform as gpui[96134366e811635a]::platform::Platform>::run
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-macos-0.3.9/src/platform.rs:584:17
+  66:        0x100fd04f4 - <gpui[96134366e811635a]::app::Application>::run::<velotype[725bf5527347ea06]::main::{closure#4}>
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:255:18
+  67:        0x100cea310 - velotype[725bf5527347ea06]::main
+                               at /Users/umi/Documents/typer/src/main.rs:259:9
+  68:        0x100b3760c - <fn() as core[2525d0a98ae2f2bb]::ops::function::FnOnce<()>>::call_once
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250:5
+  69:        0x100e854a8 - std[9bc579fd67db55b0]::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/sys/backtrace.rs:166:18
+  70:        0x100df9fe0 - std[9bc579fd67db55b0]::rt::lang_start::<()>::{closure#0}
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:206:18
+  71:        0x102e5ed24 - <&dyn core[2525d0a98ae2f2bb]::ops::function::Fn<(), Output = i32> + core[2525d0a98ae2f2bb]::panic::unwind_safe::RefUnwindSafe + core[2525d0a98ae2f2bb]::marker::Sync as core[2525d0a98ae2f2bb]::ops::function::FnOnce<()>>::call_once
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:287:21
+  72:        0x102e5ed24 - std[9bc579fd67db55b0]::panicking::catch_unwind::do_call::<&dyn core[2525d0a98ae2f2bb]::ops::function::Fn<(), Output = i32> + core[2525d0a98ae2f2bb]::panic::unwind_safe::RefUnwindSafe + core[2525d0a98ae2f2bb]::marker::Sync, i32>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:576:43
+  73:        0x102e5ed24 - std[9bc579fd67db55b0]::panicking::catch_unwind::<i32, &dyn core[2525d0a98ae2f2bb]::ops::function::Fn<(), Output = i32> + core[2525d0a98ae2f2bb]::panic::unwind_safe::RefUnwindSafe + core[2525d0a98ae2f2bb]::marker::Sync>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:544:19
+  74:        0x102e5ed24 - std[9bc579fd67db55b0]::panic::catch_unwind::<&dyn core[2525d0a98ae2f2bb]::ops::function::Fn<(), Output = i32> + core[2525d0a98ae2f2bb]::panic::unwind_safe::RefUnwindSafe + core[2525d0a98ae2f2bb]::marker::Sync, i32>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panic.rs:359:14
+  75:        0x102e5ed24 - std[9bc579fd67db55b0]::rt::lang_start_internal::{closure#0}
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:175:24
+  76:        0x102e5ed24 - std[9bc579fd67db55b0]::panicking::catch_unwind::do_call::<std[9bc579fd67db55b0]::rt::lang_start_internal::{closure#0}, isize>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:576:43
+  77:        0x102e5ed24 - std[9bc579fd67db55b0]::panicking::catch_unwind::<isize, std[9bc579fd67db55b0]::rt::lang_start_internal::{closure#0}>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:544:19
+  78:        0x102e5ed24 - std[9bc579fd67db55b0]::panic::catch_unwind::<std[9bc579fd67db55b0]::rt::lang_start_internal::{closure#0}, isize>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panic.rs:359:14
+  79:        0x102e5ed24 - std[9bc579fd67db55b0]::rt::lang_start_internal
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:171:5
+  80:        0x100df9fb8 - std[9bc579fd67db55b0]::rt::lang_start::<()>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:205:5
+  81:        0x100ceb068 - _main
+
+thread 'main' (1169556) panicked at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panicking.rs:225:5:
+panic in a function that cannot unwind
+stack backtrace:
+   0:        0x102e68c80 - std[9bc579fd67db55b0]::backtrace_rs::backtrace::libunwind::trace
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/../../backtrace/src/backtrace/libunwind.rs:117:9
+   1:        0x102e68c80 - std[9bc579fd67db55b0]::backtrace_rs::backtrace::trace_unsynchronized::<std[9bc579fd67db55b0]::sys::backtrace::_print_fmt::{closure#1}>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/../../backtrace/src/backtrace/mod.rs:66:14
+   2:        0x102e68c80 - std[9bc579fd67db55b0]::sys::backtrace::_print_fmt
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/sys/backtrace.rs:74:9
+   3:        0x102e68c80 - <<std[9bc579fd67db55b0]::sys::backtrace::BacktraceLock>::print::DisplayBacktrace as core[2525d0a98ae2f2bb]::fmt::Display>::fmt
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/sys/backtrace.rs:44:26
+   4:        0x102e80d88 - <core[2525d0a98ae2f2bb]::fmt::rt::Argument>::fmt
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/fmt/rt.rs:152:76
+   5:        0x102e80d88 - core[2525d0a98ae2f2bb]::fmt::write
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/fmt/mod.rs:1687:22
+   6:        0x102e6edf4 - core[2525d0a98ae2f2bb]::io::write::default_write_fmt::<std[9bc579fd67db55b0]::sys::stdio::unix::Stderr>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/io/write.rs:402:11
+   7:        0x102e6edf4 - <std[9bc579fd67db55b0]::sys::stdio::unix::Stderr as core[2525d0a98ae2f2bb]::io::write::Write>::write_fmt
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/io/write.rs:335:13
+   8:        0x102e47ec0 - <std[9bc579fd67db55b0]::sys::backtrace::BacktraceLock>::print
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/sys/backtrace.rs:47:25
+   9:        0x102e47ec0 - std[9bc579fd67db55b0]::panicking::default_hook::{closure#0}
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:292:27
+  10:        0x102e60330 - std[9bc579fd67db55b0]::panicking::default_hook
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:319:9
+  11:        0x102e607e8 - std[9bc579fd67db55b0]::panicking::panic_with_hook
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:815:13
+  12:        0x102e47f70 - std[9bc579fd67db55b0]::panicking::panic_handler::{closure#0}
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:681:13
+  13:        0x102e3fe08 - std[9bc579fd67db55b0]::sys::backtrace::__rust_end_short_backtrace::<std[9bc579fd67db55b0]::panicking::panic_handler::{closure#0}, !>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/sys/backtrace.rs:182:18
+  14:        0x102e48bd0 - __rustc[3d2f79520d6fa809]::rust_begin_unwind
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:679:5
+  15:        0x102f11458 - core[2525d0a98ae2f2bb]::panicking::panic_nounwind_fmt::runtime
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panicking.rs:122:22
+  16:        0x102f11458 - core[2525d0a98ae2f2bb]::panicking::panic_nounwind_fmt
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/intrinsics/mod.rs:2636:9
+  17:        0x102f113a4 - core[2525d0a98ae2f2bb]::panicking::panic_nounwind
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panicking.rs:225:5
+  18:        0x102f11534 - core[2525d0a98ae2f2bb]::panicking::panic_cannot_unwind
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panicking.rs:350:5
+  19:        0x1010aa760 - gpui_macos[91d661c0b17f7169]::window::handle_key_event
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-macos-0.3.9/src/window.rs:2648:1
+  20:        0x1964f2cac - <unknown>
+  21:        0x1964f2900 - <unknown>
+  22:        0x196c180f8 - <unknown>
+  23:        0x19675a488 - <unknown>
+  24:        0x1963c599c - <unknown>
+  25:        0x1011c3e74 - <() as objc[29adb29d5682fa8e]::message::MessageArguments>::invoke::<()>
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc-0.2.7/src/message/mod.rs:128:17
+  26:        0x1011c3470 - objc[29adb29d5682fa8e]::message::platform::send_unverified::<objc[29adb29d5682fa8e]::runtime::Object, (), ()>
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc-0.2.7/src/message/apple/mod.rs:27:9
+  27:        0x1011ba490 - objc[29adb29d5682fa8e]::message::send_message::<objc[29adb29d5682fa8e]::runtime::Object, (), ()>
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc-0.2.7/src/message/mod.rs:178:5
+  28:        0x1011ba490 - <*mut objc[29adb29d5682fa8e]::runtime::Object as cocoa[ea90a3b4271bb78]::appkit::NSApplication>::run
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cocoa-0.26.1/src/appkit.rs:629:9
+  29:        0x1010c8fe4 - <gpui_macos[91d661c0b17f7169]::platform::MacPlatform as gpui[96134366e811635a]::platform::Platform>::run
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-macos-0.3.9/src/platform.rs:584:17
+  30:        0x100fd04f4 - <gpui[96134366e811635a]::app::Application>::run::<velotype[725bf5527347ea06]::main::{closure#4}>
+                               at /Users/umi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.9/src/app.rs:255:18
+  31:        0x100cea310 - velotype[725bf5527347ea06]::main
+                               at /Users/umi/Documents/typer/src/main.rs:259:9
+  32:        0x100b3760c - <fn() as core[2525d0a98ae2f2bb]::ops::function::FnOnce<()>>::call_once
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250:5
+  33:        0x100e854a8 - std[9bc579fd67db55b0]::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/sys/backtrace.rs:166:18
+  34:        0x100df9fe0 - std[9bc579fd67db55b0]::rt::lang_start::<()>::{closure#0}
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:206:18
+  35:        0x102e5ed24 - <&dyn core[2525d0a98ae2f2bb]::ops::function::Fn<(), Output = i32> + core[2525d0a98ae2f2bb]::panic::unwind_safe::RefUnwindSafe + core[2525d0a98ae2f2bb]::marker::Sync as core[2525d0a98ae2f2bb]::ops::function::FnOnce<()>>::call_once
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:287:21
+  36:        0x102e5ed24 - std[9bc579fd67db55b0]::panicking::catch_unwind::do_call::<&dyn core[2525d0a98ae2f2bb]::ops::function::Fn<(), Output = i32> + core[2525d0a98ae2f2bb]::panic::unwind_safe::RefUnwindSafe + core[2525d0a98ae2f2bb]::marker::Sync, i32>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:576:43
+  37:        0x102e5ed24 - std[9bc579fd67db55b0]::panicking::catch_unwind::<i32, &dyn core[2525d0a98ae2f2bb]::ops::function::Fn<(), Output = i32> + core[2525d0a98ae2f2bb]::panic::unwind_safe::RefUnwindSafe + core[2525d0a98ae2f2bb]::marker::Sync>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:544:19
+  38:        0x102e5ed24 - std[9bc579fd67db55b0]::panic::catch_unwind::<&dyn core[2525d0a98ae2f2bb]::ops::function::Fn<(), Output = i32> + core[2525d0a98ae2f2bb]::panic::unwind_safe::RefUnwindSafe + core[2525d0a98ae2f2bb]::marker::Sync, i32>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panic.rs:359:14
+  39:        0x102e5ed24 - std[9bc579fd67db55b0]::rt::lang_start_internal::{closure#0}
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:175:24
+  40:        0x102e5ed24 - std[9bc579fd67db55b0]::panicking::catch_unwind::do_call::<std[9bc579fd67db55b0]::rt::lang_start_internal::{closure#0}, isize>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:576:43
+  41:        0x102e5ed24 - std[9bc579fd67db55b0]::panicking::catch_unwind::<isize, std[9bc579fd67db55b0]::rt::lang_start_internal::{closure#0}>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:544:19
+  42:        0x102e5ed24 - std[9bc579fd67db55b0]::panic::catch_unwind::<std[9bc579fd67db55b0]::rt::lang_start_internal::{closure#0}, isize>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panic.rs:359:14
+  43:        0x102e5ed24 - std[9bc579fd67db55b0]::rt::lang_start_internal
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:171:5
+  44:        0x100df9fb8 - std[9bc579fd67db55b0]::rt::lang_start::<()>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:205:5
+  45:        0x100ceb068 - _main
+thread caused non-unwinding panic. aborting.

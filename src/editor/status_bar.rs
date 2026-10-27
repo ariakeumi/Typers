@@ -105,15 +105,50 @@ impl Editor {
         }
 
         if prefs.show_word_count {
-            let text = self.serialized_document_text(cx);
-            let total_count = count_words(&text);
+            let total_count = self.writing_statistics(cx).words;
             let selection_count = self.selected_markdown_text(cx).as_deref().map(count_words);
             right_items.push(render_word_count(
                 selection_count,
                 total_count,
                 theme,
                 strings,
+                cx,
             ));
+        }
+
+        if self.writing.read_only {
+            left_items.push(
+                div()
+                    .text_size(px(d.status_bar_text_size))
+                    .text_color(c.status_bar_text_dim)
+                    .child(super::writing::localized(cx, "Read only", "只读"))
+                    .into_any_element(),
+            );
+        }
+        if self.writing.focus_mode || self.writing.typewriter_mode {
+            let label = match (self.writing.focus_mode, self.writing.typewriter_mode) {
+                (true, true) => {
+                    super::writing::localized(cx, "Focus · Typewriter", "专注 · 打字机")
+                }
+                (true, false) => super::writing::localized(cx, "Focus", "专注"),
+                _ => super::writing::localized(cx, "Typewriter", "打字机"),
+            };
+            left_items.push(
+                div()
+                    .text_size(px(d.status_bar_text_size))
+                    .text_color(c.status_bar_text_dim)
+                    .child(label)
+                    .into_any_element(),
+            );
+        }
+        if self.writing.zoom_steps != 0 {
+            right_items.push(
+                div()
+                    .text_size(px(d.status_bar_text_size))
+                    .text_color(c.status_bar_text_dim)
+                    .child(format!("{}%", 100 + self.writing.zoom_steps as i32 * 10))
+                    .into_any_element(),
+            );
         }
 
         for button in &prefs.custom_buttons {
@@ -135,8 +170,6 @@ impl Editor {
             .justify_between()
             .px(px(d.status_bar_padding_x))
             .bg(c.status_bar_background)
-            .border_t(px(1.0))
-            .border_color(c.dialog_border)
             .child(
                 div()
                     .flex()
@@ -178,9 +211,9 @@ impl Editor {
 /// Builds the workspace drawer toggle and its hover/click handlers.
 fn render_sidebar_toggle(
     state: &mut StatusBarState,
-    _is_open: bool,
+    is_open: bool,
     theme: &Theme,
-    strings: &I18nStrings,
+    _strings: &I18nStrings,
     cx: &mut Context<Editor>,
 ) -> AnyElement {
     let c = &theme.colors;
@@ -201,7 +234,16 @@ fn render_sidebar_toggle(
         .cursor_pointer()
         .text_size(px(d.status_bar_text_size))
         .text_color(c.status_bar_text)
-        .child(strings.status_bar_files.clone())
+        .child(
+            svg()
+                .path("icon/workspace/sidebar.svg")
+                .size(px(14.0))
+                .text_color(if is_open {
+                    c.text_default
+                } else {
+                    c.status_bar_text
+                }),
+        )
         .on_hover(cx.listener(
             |editor: &mut Editor,
              hovered: &bool,
@@ -233,10 +275,8 @@ fn render_mode_switch(
     let c = &theme.colors;
     let d = &theme.dimensions;
 
-    let label = match view_mode {
-        super::ViewMode::Source => strings.status_bar_mode_rendered.clone(),
-        super::ViewMode::Rendered => strings.status_bar_mode_source.clone(),
-    };
+    let _ = strings;
+    let label = "</>";
 
     div()
         .id("status-bar-mode-switch")
@@ -252,7 +292,11 @@ fn render_mode_switch(
         })
         .cursor_pointer()
         .text_size(px(d.status_bar_text_size))
-        .text_color(c.status_bar_text)
+        .text_color(if view_mode == super::ViewMode::Source {
+            c.text_default
+        } else {
+            c.status_bar_text
+        })
         .child(label)
         .on_hover(cx.listener(
             |editor: &mut Editor,
@@ -279,7 +323,7 @@ fn render_cursor((line, col): (usize, usize), theme: &Theme) -> AnyElement {
     let c = &theme.colors;
     let d = &theme.dimensions;
 
-    let label = format!("{} : {}", &line.to_string(), &col.to_string());
+    let label = format!("{line} : {col}");
 
     div()
         .text_size(px(d.status_bar_text_size))
@@ -294,6 +338,7 @@ fn render_word_count(
     total_count: usize,
     theme: &Theme,
     strings: &I18nStrings,
+    cx: &mut Context<Editor>,
 ) -> AnyElement {
     let c = &theme.colors;
     let d = &theme.dimensions;
@@ -308,6 +353,17 @@ fn render_word_count(
     };
 
     div()
+        .id("status-bar-word-count")
+        .px(px(6.0))
+        .h(px(d.status_bar_height - 4.0))
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .hover(|style| style.bg(c.status_bar_button_hover))
+        .on_click(cx.listener(|editor, _, _, cx| {
+            editor.writing.statistics_open = !editor.writing.statistics_open;
+            cx.notify();
+        }))
         .text_size(px(d.status_bar_text_size))
         .text_color(c.status_bar_text_dim)
         .child(label)

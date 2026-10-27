@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="1">
-    <title>Velotype</title>
-    <welcome>Velotype is a block-based Markdown editor built with Rust and GPUI.</welcome>
+    <title>Typers</title>
+    <welcome>Typers is a block-based Markdown editor built with Rust and GPUI.</welcome>
     <options customize="never" require-scripts="true" rootVolumeOnly="true"/>
     <volume-check>
         <allowed-os-versions>
@@ -10,12 +10,12 @@
     </volume-check>
     <choices-outline>
         <line choice="default">
-            <line choice="Velotype"/>
+            <line choice="Typers"/>
         </line>
     </choices-outline>
     <choice id="default"/>
-    <choice id="Velotype" title="Install Velotype" description="Install Velotype to /Applications">
-        <pkg-ref id="com.manyougz.Velotype"/>
+    <choice id="Typers" title="Install Typers" description="Install Typers to /Applications">
+        <pkg-ref id="com.ariakeumi.Typers"/>
     </choice>
-    <pkg-ref id="com.manyougz.Velotype" version="__VELOTYPE_VERSION__" onConclusion="none">#Velotype-component.pkg</pkg-ref>
+    <pkg-ref id="com.ariakeumi.Typers" version="__VELOTYPE_VERSION__" onConclusion="none">#Typers-component.pkg</pkg-ref>
 </installer-gui-script>

@@ -371,12 +371,10 @@ fn extract_archive(archive: &Path, output: &Path, os: &str, cancelled: &AtomicBo
                 matches!(kind, 0 | 0o100000 | 0o040000),
                 "archive links and special entries rejected"
             );
-            extract(
-                &entry.name()?.into_owned(),
-                entry.is_dir(),
-                entry.size(),
-                &mut entry,
-            )?;
+            // Keep the owned name outside the call: extraction also borrows
+            // the archive entry mutably to stream its contents.
+            let name = entry.name()?.into_owned();
+            extract(&name, entry.is_dir(), entry.size(), &mut entry)?;
         }
     }
     Ok(())
@@ -467,9 +465,9 @@ mod tests {
         let cancelled = AtomicBool::new(false);
         let options = zip::write::FileOptions::<()>::default();
         let mut writer = zip::ZipWriter::new(File::create(&archive).unwrap());
-        writer.start_file("velotype.exe", options.clone()).unwrap();
+        writer.start_file("velotype.exe", options).unwrap();
         writer.write_all(b"binary").unwrap();
-        writer.start_file("README.md", options.clone()).unwrap();
+        writer.start_file("README.md", options).unwrap();
         writer.write_all(b"ignored").unwrap();
         writer.finish().unwrap();
         extract_archive(&archive, &output, "windows", &cancelled).unwrap();
@@ -478,7 +476,7 @@ mod tests {
 
         let mut writer = zip::ZipWriter::new(File::create(&archive).unwrap());
         writer
-            .add_symlink("velotype.exe", "../outside", options.clone())
+            .add_symlink("velotype.exe", "../outside", options)
             .unwrap();
         writer.finish().unwrap();
         assert!(extract_archive(&archive, &output, "windows", &cancelled).is_err());

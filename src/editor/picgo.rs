@@ -204,7 +204,7 @@ mod tests {
     fn clipboard_files_are_cleaned_up() {
         let source = PastedImageSource::ClipboardImage(gpui::Image {
             format: ImageFormat::Png,
-            bytes: vec![1, 2, 3].into(),
+            bytes: vec![1, 2, 3],
             id: 1,
         });
         let (paths, temporary) = upload_paths(&[source]).unwrap();

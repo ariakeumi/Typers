@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create a macOS PKG installer for Velotype
+# Create a macOS PKG installer for Typers
 # Usage: ./scripts/create_pkg_dist.sh <version>
 
 set -euo pipefail
@@ -16,10 +16,10 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$PROJECT_ROOT/dist"
 RESOURCES_DIR="$PROJECT_ROOT/resources/macos"
 
-APP_NAME="Velotype"
+APP_NAME="Typers"
 APP_BUNDLE="${APP_NAME}.app"
 BINARY_NAME="velotype"
-BUNDLE_ID="com.manyougz.Velotype"
+BUNDLE_ID="com.ariakeumi.Typers"
 
 PKG_DIR="$DIST_DIR/pkg"
 PKG_NAME="${APP_NAME}-${VERSION}.pkg"

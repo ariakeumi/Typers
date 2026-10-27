@@ -13,4 +13,4 @@ them through the GPUI asset source at build time.
 | `titlebar/chrome-restore.svg` | [`codicon:chrome-restore`](https://icon-sets.iconify.design/codicon/chrome-restore/) | Codicons by Microsoft Corporation | CC BY 4.0 |
 
 The exported SVGs keep `fill="currentColor"` so the app can color icons with the
-active Velotype theme.
+active Typers theme.

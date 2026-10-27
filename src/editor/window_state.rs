@@ -193,7 +193,8 @@ impl Editor {
         let available_content_width = (viewport_width - dimensions.editor_padding * 2.0).max(1.0);
         let centered_ratio = Self::centered_column_ratio(viewport_width, dimensions);
         (available_content_width * centered_ratio)
-            .max(320.0)
+            .min(dimensions.editor_max_width.max(1.0))
+            .max(1.0)
             .min(available_content_width)
     }
 
@@ -205,15 +206,16 @@ impl Editor {
         strings: &crate::i18n::I18nStrings,
     ) -> String {
         let base_title = if let Some(path) = file_path {
-            format!(
-                "Velotype - {}",
-                path.file_name().map_or_else(
-                    || path.to_string_lossy().to_string(),
-                    |name| name.to_string_lossy().to_string()
-                )
+            path.file_name().map_or_else(
+                || path.to_string_lossy().into_owned(),
+                |name| name.to_string_lossy().into_owned(),
             )
         } else {
-            "Velotype".to_string()
+            if strings.menu_file == "文件" {
+                "未命名".to_string()
+            } else {
+                "Untitled".to_string()
+            }
         };
 
         if is_dirty && !strings.dirty_title_marker.is_empty() {
@@ -244,20 +246,30 @@ impl Editor {
     pub(crate) fn on_undo(
         &mut self,
         _: &crate::components::Undo,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.undo_document(cx);
+        if self.handle_search_edit_command(crate::components::WritingCommand::Undo, window, cx) {
+            return;
+        }
+        if !self.writing.read_only {
+            self.undo_document(cx);
+        }
     }
 
     /// Handles the redo action.
     pub(crate) fn on_redo(
         &mut self,
         _: &crate::components::Redo,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.redo_document(cx);
+        if self.handle_search_edit_command(crate::components::WritingCommand::Redo, window, cx) {
+            return;
+        }
+        if !self.writing.read_only {
+            self.redo_document(cx);
+        }
     }
 
     /// Queues a save from the application action.

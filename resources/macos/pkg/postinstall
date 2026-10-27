@@ -1,10 +1,10 @@
 #!/bin/bash
-# Post-install script for Velotype.pkg
+# Post-install script for Typers.pkg
 # This script runs after the app is installed to /Applications
 
 # Don't use 'set -e' - we want to continue even if checks fail
 
-APP_NAME="Velotype"
+APP_NAME="Typers"
 BINARY_NAME="velotype"
 APP_PATH="/Applications/${APP_NAME}.app"
 BINARY_PATH="$APP_PATH/Contents/MacOS/$BINARY_NAME"

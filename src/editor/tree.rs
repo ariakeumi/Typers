@@ -5,13 +5,90 @@
 //! [`VisibleTreeSnapshot`] so hot-path lookups do not re-run a full DFS on every
 //! focus, scroll, or mutation event.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use gpui::*;
 
 use super::Editor;
 use crate::components::serialize_table_markdown_lines;
-use crate::components::{Block, BlockKind, CalloutVariant, parse_standalone_image};
+use crate::components::{
+    Block, BlockKind, CalloutVariant, InlineTextTree, TableData, parse_standalone_image,
+};
+
+/// Inputs that can affect source text or source-to-editor mappings. Compare the
+/// live records rather than relying on dirty flags: table edits, reference
+/// resolution and structural edits can also update them outside text input.
+struct SourceBlockSnapshot {
+    entity_id: EntityId,
+    kind: BlockKind,
+    title: InlineTextTree,
+    table: Option<TableData>,
+    raw_fallback: Option<String>,
+    children: Vec<EntityId>,
+    table_cells: Vec<EntityId>,
+    display_text: SharedString,
+    render_depth: usize,
+    list_ordinal: Option<usize>,
+}
+
+impl SourceBlockSnapshot {
+    fn new(entity: &Entity<Block>, cx: &App) -> Self {
+        let block = entity.read(cx);
+        Self {
+            entity_id: entity.entity_id(),
+            kind: block.record.kind.clone(),
+            title: block.record.title.clone(),
+            table: block.record.table.clone(),
+            raw_fallback: block.record.raw_fallback.clone(),
+            children: block.children.iter().map(Entity::entity_id).collect(),
+            table_cells: Self::table_cells(block).collect(),
+            display_text: block.shared_display_text(),
+            render_depth: block.render_depth,
+            list_ordinal: block.list_ordinal,
+        }
+    }
+
+    fn table_cells(block: &Block) -> impl Iterator<Item = EntityId> + '_ {
+        block.table_runtime.iter().flat_map(|table| {
+            table
+                .header
+                .iter()
+                .chain(table.rows.iter().flatten())
+                .map(Entity::entity_id)
+        })
+    }
+
+    fn matches(&self, entity: &Entity<Block>, cx: &App) -> bool {
+        let block = entity.read(cx);
+        self.entity_id == entity.entity_id()
+            && self.kind == block.record.kind
+            && self.title == block.record.title
+            && self.table == block.record.table
+            && self.raw_fallback == block.record.raw_fallback
+            && self.display_text.as_ref() == block.display_text()
+            && self.render_depth == block.render_depth
+            && self.list_ordinal == block.list_ordinal
+            && self
+                .children
+                .iter()
+                .copied()
+                .eq(block.children.iter().map(Entity::entity_id))
+            && self
+                .table_cells
+                .iter()
+                .copied()
+                .eq(Self::table_cells(block))
+    }
+}
+
+#[derive(Default)]
+struct SourceCache {
+    roots: Vec<EntityId>,
+    blocks: Vec<SourceBlockSnapshot>,
+    markdown: String,
+    revision: Option<uuid::Uuid>,
+}
 
 /// A block together with its position in the current visible DFS order.
 #[derive(Clone)]
@@ -63,6 +140,7 @@ pub(super) struct DocumentTree {
     roots: Vec<Entity<Block>>,
     /// Cached depth-first order and structural lookups.
     snapshot: VisibleTreeSnapshot,
+    source_cache: RefCell<SourceCache>,
 }
 
 impl DocumentTree {
@@ -71,6 +149,7 @@ impl DocumentTree {
         Self {
             roots,
             snapshot: VisibleTreeSnapshot::default(),
+            source_cache: RefCell::default(),
         }
     }
 
@@ -87,6 +166,25 @@ impl DocumentTree {
     /// Returns the number of root blocks.
     pub(super) fn root_count(&self) -> usize {
         self.roots.len()
+    }
+
+    /// Source indentation follows ancestor marker widths, not visual depth.
+    pub(super) fn source_indent_for_entity_id(&self, entity_id: EntityId, cx: &App) -> usize {
+        let mut indent = 0;
+        let mut current = entity_id;
+        while let Some(parent) = self
+            .find_block_location(current)
+            .and_then(|location| location.parent)
+        {
+            let block = parent.read(cx);
+            indent += if block.kind().is_footnote_definition() {
+                4
+            } else {
+                block.record.list_content_indent(block.list_ordinal)
+            };
+            current = parent.entity_id();
+        }
+        indent
     }
 
     /// Returns the cached visible depth-first order.
@@ -157,9 +255,42 @@ impl DocumentTree {
 
     /// Serializes the structured tree into canonical Markdown.
     pub(super) fn markdown_text(&self, cx: &App) -> String {
+        self.source_revision(cx);
+        self.source_cache.borrow().markdown.clone()
+    }
+
+    /// Stable across scrolling, layout and caret blink; changes when source or
+    /// mapping inputs change. The UUID also distinguishes replaced documents.
+    pub(super) fn source_revision(&self, cx: &App) -> uuid::Uuid {
+        let mut cache = self.source_cache.borrow_mut();
+        if let Some(revision) = cache.revision
+            && cache
+                .roots
+                .iter()
+                .copied()
+                .eq(self.roots.iter().map(Entity::entity_id))
+            && cache.blocks.len() == self.snapshot.visible.len()
+            && cache
+                .blocks
+                .iter()
+                .zip(&self.snapshot.visible)
+                .all(|(cached, live)| cached.matches(&live.entity, cx))
+        {
+            return revision;
+        }
         let mut lines = Vec::new();
         Self::collect_root_markdown_lines(&self.roots, cx, &mut lines);
-        lines.join("\n")
+        cache.markdown = lines.join("\n");
+        cache.roots = self.roots.iter().map(Entity::entity_id).collect();
+        cache.blocks = self
+            .snapshot
+            .visible
+            .iter()
+            .map(|visible| SourceBlockSnapshot::new(&visible.entity, cx))
+            .collect();
+        let revision = uuid::Uuid::new_v4();
+        cache.revision = Some(revision);
+        revision
     }
 
     /// Concatenates visible display text for source mode's single-block tree.
@@ -476,11 +607,11 @@ impl DocumentTree {
 
             let current_is_list_item = block_ref.kind().is_list_item();
             if wrote_non_empty_root {
-                let separator_count = if previous_was_list_item && current_is_list_item {
-                    pending_empty_roots
-                } else {
-                    pending_empty_roots + 1
-                };
+                let separator_count = Self::root_separator_line_count(
+                    previous_was_list_item,
+                    current_is_list_item,
+                    pending_empty_roots,
+                );
                 lines.extend(std::iter::repeat_n(String::new(), separator_count));
             } else if pending_empty_roots > 0 {
                 lines.extend(std::iter::repeat_n(String::new(), pending_empty_roots));
@@ -504,18 +635,23 @@ impl DocumentTree {
     /// Appends one block's Markdown lines, including supported child structure.
     fn collect_single_block_markdown_lines(
         block_ref: &Block,
-        list_depth: usize,
+        indent_columns: usize,
         cx: &App,
         lines: &mut Vec<String>,
     ) {
         match block_ref.kind() {
             BlockKind::Table => {
                 if let Some(table) = block_ref.record.table.as_ref() {
-                    lines.extend(serialize_table_markdown_lines(table));
+                    let indentation = " ".repeat(indent_columns);
+                    lines.extend(
+                        serialize_table_markdown_lines(table)
+                            .into_iter()
+                            .map(|line| format!("{indentation}{line}")),
+                    );
                 }
             }
             BlockKind::CodeBlock { language } => {
-                let indentation = "  ".repeat(list_depth);
+                let indentation = " ".repeat(indent_columns);
                 let lang_str = language.as_ref().map(|s| s.as_ref()).unwrap_or("");
                 let fence = super::persistence::safe_code_fence_with_info(
                     &block_ref.record.title.visible_text(),
@@ -531,7 +667,7 @@ impl DocumentTree {
             BlockKind::Quote => {
                 let title_markdown =
                     CalloutVariant::escape_plain_quote_header(&block_ref.record.title_markdown());
-                let indentation = "  ".repeat(list_depth);
+                let indentation = " ".repeat(indent_columns);
                 if !title_markdown.is_empty() || block_ref.children.is_empty() {
                     for line in title_markdown.split('\n') {
                         lines.push(format!("{indentation}> {line}"));
@@ -542,20 +678,21 @@ impl DocumentTree {
                     let mut child_lines = Vec::new();
                     Self::collect_markdown_lines(
                         &block_ref.children,
-                        list_depth,
+                        indent_columns,
                         cx,
                         &mut child_lines,
                         false,
                     );
                     lines.extend(
                         child_lines
-                            .into_iter()
+                            .iter()
+                            .flat_map(|line| line.split('\n'))
                             .map(|line| format!("{indentation}> {line}")),
                     );
                 }
             }
             BlockKind::Callout(variant) => {
-                let indentation = "  ".repeat(list_depth);
+                let indentation = " ".repeat(indent_columns);
                 lines.push(format!(
                     "{indentation}> {}",
                     variant.header_markdown(&block_ref.record.title_markdown())
@@ -564,20 +701,21 @@ impl DocumentTree {
                     let mut child_lines = Vec::new();
                     Self::collect_markdown_lines(
                         &block_ref.children,
-                        list_depth,
+                        indent_columns,
                         cx,
                         &mut child_lines,
                         false,
                     );
                     lines.extend(
                         child_lines
-                            .into_iter()
+                            .iter()
+                            .flat_map(|line| line.split('\n'))
                             .map(|line| format!("{indentation}> {line}")),
                     );
                 }
             }
             BlockKind::FootnoteDefinition => {
-                let indentation = "  ".repeat(list_depth);
+                let indentation = " ".repeat(indent_columns);
                 let id = block_ref.record.title.visible_text();
                 if block_ref.children.is_empty() {
                     lines.push(format!("{indentation}[^{}]:", id));
@@ -601,11 +739,23 @@ impl DocumentTree {
 
                     if block_ref.children.len() > 1 {
                         lines.push(String::new());
-                        Self::collect_markdown_lines(&block_ref.children[1..], 2, cx, lines, true);
+                        Self::collect_markdown_lines(
+                            &block_ref.children[1..],
+                            indent_columns + 4,
+                            cx,
+                            lines,
+                            true,
+                        );
                     }
                 } else {
                     lines.push(format!("{indentation}[^{}]:", id));
-                    Self::collect_markdown_lines(&block_ref.children, 2, cx, lines, true);
+                    Self::collect_markdown_lines(
+                        &block_ref.children,
+                        indent_columns + 4,
+                        cx,
+                        lines,
+                        true,
+                    );
                 }
             }
             BlockKind::RawMarkdown
@@ -613,7 +763,7 @@ impl DocumentTree {
             | BlockKind::HtmlBlock
             | BlockKind::MathBlock
             | BlockKind::MermaidBlock => {
-                let indentation = "  ".repeat(list_depth);
+                let indentation = " ".repeat(indent_columns);
                 let raw_markdown = block_ref
                     .record
                     .raw_fallback
@@ -633,9 +783,10 @@ impl DocumentTree {
                 lines.push(
                     block_ref
                         .record
-                        .markdown_line(list_depth, block_ref.list_ordinal),
+                        .markdown_line(indent_columns, block_ref.list_ordinal),
                 );
-                let child_list_depth = list_depth + 1;
+                let child_indent_columns =
+                    indent_columns + block_ref.record.list_content_indent(block_ref.list_ordinal);
                 for child in &block_ref.children {
                     let child_ref = child.read(cx);
                     if Self::list_child_requires_leading_blank_line(child_ref) {
@@ -643,7 +794,7 @@ impl DocumentTree {
                     }
                     Self::collect_single_block_markdown_lines(
                         child_ref,
-                        child_list_depth,
+                        child_indent_columns,
                         cx,
                         lines,
                     );
@@ -653,12 +804,12 @@ impl DocumentTree {
                 lines.push(
                     block_ref
                         .record
-                        .markdown_line(list_depth, block_ref.list_ordinal),
+                        .markdown_line(indent_columns, block_ref.list_ordinal),
                 );
-                let child_list_depth = list_depth + usize::from(block_ref.kind().is_list_item());
+                let child_indent_columns = indent_columns;
                 Self::collect_markdown_lines(
                     &block_ref.children,
-                    child_list_depth,
+                    child_indent_columns,
                     cx,
                     lines,
                     false,
@@ -667,20 +818,33 @@ impl DocumentTree {
         }
     }
 
+    /// Blank lines between roots, shared with source-offset mapping.
+    pub(super) fn root_separator_line_count(
+        previous_was_list_item: bool,
+        current_is_list_item: bool,
+        pending_empty_roots: usize,
+    ) -> usize {
+        if previous_was_list_item && current_is_list_item {
+            pending_empty_roots
+        } else {
+            pending_empty_roots + 1
+        }
+    }
+
     /// Requires a separating blank line before a non-image child paragraph.
-    fn list_child_requires_leading_blank_line(block_ref: &Block) -> bool {
+    pub(super) fn list_child_requires_leading_blank_line(block_ref: &Block) -> bool {
         if block_ref.kind() != BlockKind::Paragraph || !block_ref.children.is_empty() {
             return false;
         }
 
-        let markdown = block_ref.record.title_markdown();
+        let markdown = block_ref.record.title_markdown_for_output();
         !markdown.is_empty() && parse_standalone_image(&markdown).is_none()
     }
 
     /// Appends sibling blocks, inserting blank lines where requested.
     fn collect_markdown_lines(
         blocks: &[Entity<Block>],
-        depth: usize,
+        indent_columns: usize,
         cx: &App,
         lines: &mut Vec<String>,
         blank_line_between_siblings: bool,
@@ -688,19 +852,31 @@ impl DocumentTree {
         let mut first = true;
         let mut previous_was_list_item = false;
         for block in blocks {
-            let current_is_list_item = block.read(cx).kind().is_list_item();
+            let block_ref = block.read(cx);
+            let current_is_list_item = block_ref.kind().is_list_item();
             if !first
-                && blank_line_between_siblings
-                && !(previous_was_list_item && current_is_list_item)
+                && ((blank_line_between_siblings
+                    && !(previous_was_list_item && current_is_list_item))
+                    || Self::paragraph_after_list_requires_blank(previous_was_list_item, block_ref))
             {
                 lines.push(String::new());
             }
             first = false;
 
-            let block_ref = block.read(cx);
-            Self::collect_single_block_markdown_lines(block_ref, depth, cx, lines);
+            Self::collect_single_block_markdown_lines(block_ref, indent_columns, cx, lines);
             previous_was_list_item = current_is_list_item;
         }
+    }
+
+    /// A sibling paragraph must not become a lazy continuation of a list item
+    /// when the document is parsed again (undo, redo, or source-mode switching).
+    pub(super) fn paragraph_after_list_requires_blank(
+        previous_was_list: bool,
+        block: &Block,
+    ) -> bool {
+        previous_was_list
+            && block.kind() == BlockKind::Paragraph
+            && !block.record.title.visible_text().is_empty()
     }
 }
 

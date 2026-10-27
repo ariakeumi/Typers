@@ -1,6 +1,7 @@
 //! Native single-line settings input with UTF-16 IME ranges and a horizontal viewport.
 
 use std::ops::Range;
+use std::time::{Duration, Instant};
 
 use gpui::*;
 use unicode_segmentation::UnicodeSegmentation as _;
@@ -14,6 +15,13 @@ const FADE_GRAPHEME_COUNT: usize = 4;
 
 /// Emitted after the field's stored value is replaced.
 pub(crate) struct InputChanged;
+
+#[derive(Clone)]
+struct InputSnapshot {
+    content: SharedString,
+    selection: Range<usize>,
+    reversed: bool,
+}
 
 /// Controls how unfocused input text is presented when it exceeds the field.
 /// Focused fields always use a clipped, cursor-following viewport so editing
@@ -32,6 +40,11 @@ pub(crate) enum SingleLineOverflow {
 
 /// Editable single-line value with UTF-8 selection state and UTF-16 GPUI input.
 pub(crate) struct SingleLineInput {
+    /// Compact presentation for document find/replace rather than settings.
+    compact: bool,
+    undo: Vec<InputSnapshot>,
+    redo: Vec<InputSnapshot>,
+    last_edit: Option<(Instant, usize)>,
     /// Focus target registered with GPUI.
     focus: FocusHandle,
     /// Source text, without the displayed placeholder or ellipsis.
@@ -84,6 +97,10 @@ impl SingleLineInput {
         let content = value.into();
         let end = content.len();
         Self {
+            compact: false,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            last_edit: None,
             focus: cx.focus_handle(),
             content,
             selection: end..end,
@@ -108,16 +125,22 @@ impl SingleLineInput {
         self.overflow = overflow;
         self
     }
+    pub(crate) fn compact(mut self) -> Self {
+        self.compact = true;
+        self
+    }
     /// Returns the unmodified source value.
     pub(crate) fn value(&self) -> &str {
         &self.content
     }
-    #[cfg(test)]
-    /// Replaces the source value and emits a change event in component tests.
+    /// Replaces the source value and emits a change event.
     pub(crate) fn set_value(&mut self, value: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.content = value.into();
         self.selection = self.content.len()..self.content.len();
         self.marked = None;
+        self.undo.clear();
+        self.redo.clear();
+        self.last_edit = None;
         self.ensure_cursor_visible = true;
         cx.emit(InputChanged);
         cx.notify();
@@ -128,6 +151,70 @@ impl SingleLineInput {
             self.selection.start
         } else {
             self.selection.end
+        }
+    }
+
+    fn snapshot(&self) -> InputSnapshot {
+        InputSnapshot {
+            content: self.content.clone(),
+            selection: self.selection.clone(),
+            reversed: self.reversed,
+        }
+    }
+
+    fn restore_input_history(&mut self, redo: bool, cx: &mut Context<Self>) {
+        let entry = if redo {
+            self.redo.pop()
+        } else {
+            self.undo.pop()
+        };
+        let Some(entry) = entry else {
+            return;
+        };
+        let current = self.snapshot();
+        if redo {
+            self.undo.push(current);
+        } else {
+            self.redo.push(current);
+        }
+        self.content = entry.content;
+        self.selection = entry.selection;
+        self.reversed = entry.reversed;
+        self.marked = None;
+        self.ensure_cursor_visible = true;
+        self.last_edit = None;
+        cx.emit(InputChanged);
+        cx.notify();
+    }
+
+    /// Native Edit menu commands belong to the focused field while a find or
+    /// replace input owns focus, including its own independent undo history.
+    pub(crate) fn dispatch_edit_command(
+        &mut self,
+        command: crate::components::WritingCommand,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::components::WritingCommand;
+        match command {
+            WritingCommand::Undo => self.restore_input_history(false, cx),
+            WritingCommand::Redo => self.restore_input_history(true, cx),
+            WritingCommand::Copy => self.copy(cx),
+            WritingCommand::Cut => {
+                self.copy(cx);
+                self.replace_text_in_range(None, "", window, cx);
+            }
+            WritingCommand::Paste => {
+                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                    self.replace_text_in_range(None, &text, window, cx);
+                }
+            }
+            WritingCommand::SelectAll => {
+                self.selection = 0..self.content.len();
+                self.reversed = false;
+                cx.notify();
+            }
+            _ => {}
         }
     }
     /// Finds the preceding grapheme boundary in source text.
@@ -147,6 +234,7 @@ impl SingleLineInput {
     }
     /// Collapses the selection at a scalar-aligned UTF-8 byte offset.
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.last_edit = None;
         let offset = crate::text_offsets::floor_char_boundary(&self.content, offset);
         self.selection = offset..offset;
         self.reversed = false;
@@ -155,6 +243,7 @@ impl SingleLineInput {
     }
     /// Extends the selection to a scalar-aligned UTF-8 byte offset.
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.last_edit = None;
         let offset = crate::text_offsets::floor_char_boundary(&self.content, offset);
         if self.reversed {
             self.selection.start = offset;
@@ -212,8 +301,14 @@ impl SingleLineInput {
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         let shift = event.keystroke.modifiers.shift;
-        let command = event.keystroke.modifiers.platform;
+        let command = if cfg!(target_os = "macos") {
+            event.keystroke.modifiers.platform
+        } else {
+            event.keystroke.modifiers.control
+        };
         match (command, shift, key) {
+            (true, false, "z") => self.restore_input_history(false, cx),
+            (true, true, "z") | (true, _, "y") => self.restore_input_history(true, cx),
             (true, _, "a") => {
                 self.selection = 0..self.content.len();
                 self.reversed = false;
@@ -380,6 +475,23 @@ impl EntityInputHandler for SingleLineInput {
             .unwrap_or(self.selection.clone());
         let range = crate::text_offsets::normalize_utf8_range(&self.content, range);
         let text = text.replace(['\r', '\n'], " ");
+        if self.content[range.clone()] != text {
+            let now = Instant::now();
+            let typing = text.chars().count() == 1 && !text.chars().any(char::is_whitespace);
+            let coalesce = typing
+                && range.is_empty()
+                && self.last_edit.is_some_and(|(time, end)| {
+                    end == range.start && now.duration_since(time) < Duration::from_secs(1)
+                });
+            if self.marked.is_none() && !coalesce {
+                self.undo.push(self.snapshot());
+                if self.undo.len() > 100 {
+                    self.undo.remove(0);
+                }
+            }
+            self.redo.clear();
+            self.last_edit = typing.then_some((now, range.start + text.len()));
+        }
         self.content = format!(
             "{}{}{}",
             &self.content[..range.start],
@@ -456,7 +568,7 @@ impl EntityInputHandler for SingleLineInput {
 
 impl Render for SingleLineInput {
     /// Builds the input surface and its custom text element.
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.global::<ThemeManager>().current();
         let c = &theme.colors;
         let d = &theme.dimensions;
@@ -467,15 +579,27 @@ impl Render for SingleLineInput {
             .track_focus(&self.focus)
             .w_full()
             .min_w(px(0.0))
-            .h(px(SINGLE_LINE_INPUT_HEIGHT))
+            .h(px(if self.compact {
+                26.0
+            } else {
+                SINGLE_LINE_INPUT_HEIGHT
+            }))
             .px(px(10.0))
             .flex()
             .items_center()
             .overflow_hidden()
             .rounded(px(d.menu_item_radius))
             .border(px(d.dialog_border_width))
-            .border_color(c.dialog_border)
-            .bg(c.dialog_secondary_button_bg)
+            .border_color(if self.compact && self.focus.is_focused(window) {
+                c.text_link
+            } else {
+                c.dialog_border
+            })
+            .bg(if self.compact {
+                c.editor_background
+            } else {
+                c.dialog_secondary_button_bg
+            })
             .text_color(c.dialog_body)
             .text_size(px(t.dialog_body_size))
             .cursor_text()

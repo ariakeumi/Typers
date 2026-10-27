@@ -1,0 +1,21 @@
+   Compiling velotype v0.7.8 (/Users/umi/Documents/typer)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.29s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/main.rs (target/debug/deps/velotype-01da506580686cb8)
+
+running 1 test
+
+thread 'components::block::runtime::tests::inspect_unicode_link_projection_edit_ranges' (1178471) panicked at src/components/block/runtime/tests.rs:67:21:
+"前😀[**中文** 与 *斜体*](https://example.com \"中文标题\")后", display 7..9, mapped 9..11, markdown "前😀[**中文** 与 *斜体*](https://example.com \"中文标题\")后"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test components::block::runtime::tests::inspect_unicode_link_projection_edit_ranges ... FAILED
+
+failures:
+
+failures:
+    components::block::runtime::tests::inspect_unicode_link_projection_edit_ranges
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 873 filtered out; finished in 0.06s
+
+error: test failed, to rerun pass `--bin velotype`

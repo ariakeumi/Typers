@@ -1,8 +1,10 @@
-# Velotype
+# Typers
+
+本工作树已加入 Typora 风格的原生写作界面。详见[实现说明与快捷键](typora-native.md)和[对照文档](../assets/showcase/typora-native.md)。
 
 <div align="center">
 
-![Velotype banner](../assets/icon/velotype-banner.png)
+![Typers banner](../assets/icon/velotype-banner.png)
 
 **使用 Rust 与 GPUI 构建的原生 Markdown 即时渲染编辑器。**
 
@@ -20,7 +22,7 @@
 
 </div>
 
-Velotype 是一个基于 Rust 与 [GPUI](https://gpui.rs/) 的块级 Markdown 编辑器，支持所见即所得模式(WYSIWYG)和 Markdown 原文本编辑双模式。
+Typers 是一个基于 Rust 与 [GPUI](https://gpui.rs/) 的块级 Markdown 编辑器，支持所见即所得模式(WYSIWYG)和 Markdown 原文本编辑双模式。
 
 项目仍处于早期阶段，但核心方向已经稳定：原生 UI、即时渲染编辑、源文本兜底、规范化 Markdown 序列化，以及覆盖颜色、字体、间距和布局 token 的自定义能力。
 
@@ -28,20 +30,20 @@ Velotype 是一个基于 Rust 与 [GPUI](https://gpui.rs/) 的块级 Markdown �
 
 - **🧱 Block 模型:** Markdown 结构会被表达为可编辑块，让文档结构清晰可控易扩展，无需预览窗同步循环。
 - **⚡ 原生 UI:** 基于 GPUI 的桌面原生渲染，不依赖 Electron、Tauri 或任何 WebView 外壳。
-- **✍️ 编辑模式:** Velotype 支持所见即所得模式(WYSIWYG)和原文本编辑两种模式，满足常见编辑场景需求。
+- **✍️ 编辑模式:** Typers 支持所见即所得模式(WYSIWYG)和原文本编辑两种模式，满足常见编辑场景需求。
 - **🚀 性能与稳定:** Rust 驱动解析、状态更新和渲染；解析策略遵循标准导向，并在不稳定场景回退为 raw Markdown。
 - **🎨 主题自定义:** 主题可自定义全局颜色、字体、间距、菜单、弹窗、编辑器布局 token 和语言包。
-- **📦 便携单文件:** Velotype 编译后以单文件形式存在，无需安装，原生便携，支持 Windows、Linux 和 macOS 平台。
+- **📦 便携单文件:** Typers 编译后以单文件形式存在，无需安装，原生便携，支持 Windows、Linux 和 macOS 平台。
 
-Velotype 已经支持将当前 Markdown 文档导出为 HTML 和 PDF。HTML 导出会把当前主题映射为 CSS，PDF 导出复用同一套主题化 HTML 管线，以保证视觉输出一致。
+Typers 已经支持将当前 Markdown 文档导出为 HTML 和 PDF。HTML 导出会把当前主题映射为 CSS，PDF 导出复用同一套主题化 HTML 管线，以保证视觉输出一致。
 
-Velotype 目标支持 Windows、Linux 和 macOS。应用天然适合作为独立二进制文件分发，release 构建可以直接运行，无需安装。
+Typers 目标支持 Windows、Linux 和 macOS。应用天然适合作为独立二进制文件分发，release 构建可以直接运行，无需安装。
 
 ## 快速开始
 
 ### 1. 下载 release
 
-从 [Velotype Releases](https://github.com/manyougz/velotype/releases) 页面下载对应平台的构建。
+从 [Typers Releases](https://github.com/manyougz/velotype/releases) 页面下载对应平台的构建。
 
 #### Windows 和 Linux 用户
 
@@ -55,7 +57,7 @@ Velotype 目标支持 Windows、Linux 和 macOS。应用天然适合作为独立
 
 **方式 1：单一 .app 应用包**
 - 下载 `velotype-*.zip` 文件
-- 解压得到 `Velotype.app`
+- 解压得到 `Typers.app`
 - 拖到 `/Applications` 或任意位置
 - 双击即可运行
 
@@ -69,11 +71,11 @@ Velotype 目标支持 Windows、Linux 和 macOS。应用天然适合作为独立
 >
 > **如果使用 .app 应用包**：可通过应用内菜单一键安装/卸载：
 >
-> 1. 打开 Velotype.app
+> 1. 打开 Typers.app
 > 2. 点击菜单 **帮助 → 安装CLI命令**
 > 3. 输入管理员密码
 > 4. 完成！
-> 注意，如果你移动或删除了 `Velotype.app`，符号链接会自动失效，运行 `velotype` 会提示找不到命令。
+> 注意，如果你移动或删除了 `Typers.app`，符号链接会自动失效，运行 `velotype` 会提示找不到命令。
 
 ### 2. 从源码构建
 
@@ -84,7 +86,7 @@ Velotype 目标支持 Windows、Linux 和 macOS。应用天然适合作为独立
 - Cargo
 - GPUI 与系统工具链所需的平台原生构建依赖
 
-本地构建并运行 Velotype：
+本地构建并运行 Typers：
 
 ```bash
 git clone https://github.com/manyougz/velotype.git
@@ -99,7 +101,7 @@ cargo build --release
 
 ## Roadmap
 
-Velotype 目前已经支持几乎所有基础 Markdown 语法，以及绝大多数常见扩展 Markdown 语法，包括标题、段落、列表、任务列表、引用、callout、表格、代码块、行内格式、链接、reference-style 链接与图片、脚注、独立图片、注释块和安全的原生 HTML 处理。
+Typers 目前已经支持几乎所有基础 Markdown 语法，以及绝大多数常见扩展 Markdown 语法，包括标题、段落、列表、任务列表、引用、callout、表格、代码块、行内格式、链接、reference-style 链接与图片、脚注、独立图片、注释块和安全的原生 HTML 处理。
 
 语法支持仍会持续更新。仍在计划中的能力包括：
 
@@ -110,7 +112,7 @@ Velotype 目前已经支持几乎所有基础 Markdown 语法，以及绝大多�
 
 ## 自定义主题 & 翻译
 
-Velotype 将视觉主题和界面语言包拆分管理。主题文件可以覆盖全局颜色、字体、尺寸、菜单、弹窗、表格控件、图片占位、代码高亮颜色，以及布局相关 token。缺失字段或空值会继承主题包指定的内置基准主题（`velotype` 或 `velotype-light`，跟随 `base_theme_id`，该字段值为空或非法时回退到 `velotype` 主题值），因此自定义主题文件可以非常小，但也能完整覆盖。
+Typers 将视觉主题和界面语言包拆分管理。主题文件可以覆盖全局颜色、字体、尺寸、菜单、弹窗、表格控件、图片占位、代码高亮颜色，以及布局相关 token。缺失字段或空值会继承主题包指定的内置基准主题（`velotype` 或 `velotype-light`，跟随 `base_theme_id`，该字段值为空或非法时回退到 `velotype` 主题值），因此自定义主题文件可以非常小，但也能完整覆盖。
 
 语言包也采用相同的局部配置策略。缺失文案会回退到英文，导入后的语言包会在写入应用配置目录前进行规范化。
 
@@ -121,7 +123,7 @@ Velotype 将视觉主题和界面语言包拆分管理。主题文件可以覆�
 
 在应用内使用 `主题 -> 添加主题配置` 或 `语言 -> 添加语言配置` 导入 `.json` / `.jsonc` 文件。JSONC 注释用于方便编写和分享示例；应用规范化保存后的配置文件会是严格 JSON。
 
-> 十分感谢您帮助翻译 Velotype 或丰富 Velotype 主题生态！项目处于快速更迭阶段，主题字段的变更可能较为频繁。
+> 十分感谢您帮助翻译 Typers 或丰富 Typers 主题生态！项目处于快速更迭阶段，主题字段的变更可能较为频繁。
 
 ## 架构
 
@@ -130,13 +132,13 @@ Velotype 将视觉主题和界面语言包拆分管理。主题文件可以覆�
 | `editor` | 窗口级编辑器状态：视图模式、保存/关闭流程、撤销、选择、source mapping、树结构变更、导出和文件拖拽。 |
 | `components::block` | 可编辑块运行时、GPUI 输入处理、块渲染、块事件、图片/表格/代码块运行时状态。 |
 | `components::markdown` | Markdown 数据模型，以及 inline、link、image、footnote、table、HTML、code highlight 的解析与序列化辅助逻辑。 |
-| `config` | Velotype 行为、主题配置接口。 |
+| `config` | Typers 行为、主题配置接口。 |
 | `export` | HTML 与 PDF 导出管线。 |
 | `theme` | 视觉主题 token、内置主题默认值、自定义主题导入和全局主题管理。 |
 | `i18n` | 内置 UI 文案、自定义语言包、系统 locale 匹配和运行时语言切换。 |
 | `net` | 远程图片加载所需的 HTTP client 集成。 |
 
-编辑器使用原生 block tree 作为运行时模型。导入时，稳定支持的 Markdown 会转换为结构化块；保存时，block tree 会重新序列化为规范化 Markdown。对于当前运行时不稳定支持的语法，Velotype 会保留原始源码，并保持其可见、可编辑。
+编辑器使用原生 block tree 作为运行时模型。导入时，稳定支持的 Markdown 会转换为结构化块；保存时，block tree 会重新序列化为规范化 Markdown。对于当前运行时不稳定支持的语法，Typers 会保留原始源码，并保持其可见、可编辑。
 
 ## 贡献
 
@@ -146,8 +148,8 @@ Velotype 将视觉主题和界面语言包拆分管理。主题文件可以覆�
 
 ## Discord 频道
 
-欢迎各位用户、项目贡献者加入 Velotype 频道以获取更好的交流！[Discord link](https://discord.gg/AAdvntuAwE)
+欢迎各位用户、项目贡献者加入 Typers 频道以获取更好的交流！[Discord link](https://discord.gg/AAdvntuAwE)
 
 ## 许可证
 
-Velotype 使用 [Apache License 2.0](../LICENSE-APACHE)。
+Typers 使用 [Apache License 2.0](../LICENSE-APACHE)。

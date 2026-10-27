@@ -156,7 +156,7 @@ fn parse_opening_fence(line: &str) -> Option<FenceInfo> {
     BlockKind::parse_code_fence_opening(strip_fence_indent(line)?.trim_end())
 }
 
-/// Accepts only a same-marker closing fence with the exact opener run length.
+/// Accepts a same-marker closing fence at least as long as the opener.
 fn is_closing_fence(line: &str, opener: &FenceInfo) -> bool {
     let Some(trimmed) = strip_fence_indent(line).map(str::trim_end) else {
         return false;
@@ -165,13 +165,13 @@ fn is_closing_fence(line: &str, opener: &FenceInfo) -> bool {
         return false;
     }
     let run_len = trimmed.chars().take_while(|&c| c == opener.ch).count();
-    if run_len != opener.len {
+    if run_len < opener.len {
         return false;
     }
     trimmed[opener.ch.len_utf8() * run_len..].trim().is_empty()
 }
 
-/// Finds the first matching close, stopping at a new info-tagged opener.
+/// Finds the first matching close; all other fence-looking lines are content.
 fn find_matching_closing_fence(
     lines: &[String],
     start_index: usize,
@@ -187,16 +187,6 @@ fn find_matching_closing_fence(
         // the only unambiguous rule.
         if is_closing_fence(line, opener) {
             return Some(index);
-        }
-
-        // An info-tagged opener can never be a closing fence, so reaching one
-        // first means this block was never closed and stays unmatched.
-        if parse_opening_fence(line)
-            .as_ref()
-            .and_then(|fence| fence.language.as_ref())
-            .is_some()
-        {
-            break;
         }
     }
 
@@ -675,18 +665,43 @@ fn collect_unsupported_quote_region(lines: &[String], start: usize) -> Option<us
     if is_display_math_start(line) {
         return Some(collect_display_math_region(lines, start));
     }
-    if BlockKind::parse_atx_heading_line(line).is_some() || BlockKind::parse_separator_line(line) {
+    if BlockKind::parse_separator_line(line) {
         return Some(start + 1);
-    }
-    if lines
-        .get(start + 1)
-        .and_then(|next| BlockKind::parse_setext_underline(next))
-        .is_some()
-    {
-        return Some((start + 2).min(lines.len()));
     }
 
     None
+}
+
+/// Imports headings as editable children of quotes and callouts. Check ATX
+/// first: a following thematic break must not become its Setext underline.
+fn collect_quote_heading(
+    cx: &mut Context<Editor>,
+    lines: &[String],
+    start: usize,
+) -> Option<(Entity<super::Block>, usize)> {
+    let line = lines.get(start)?;
+    if let Some((level, content)) = BlockKind::parse_atx_heading_line(line) {
+        return Some((
+            native_block(cx, BlockKind::Heading { level }, content),
+            start + 1,
+        ));
+    }
+    let level = lines
+        .get(start + 1)
+        .and_then(|next| BlockKind::parse_setext_underline(next))?;
+    // Test the title line without lookahead so lists, quotes, fences and other
+    // block openers cannot be consumed as a Setext heading's text.
+    if looks_like_root_block_start(&lines[..start + 1], start) {
+        return None;
+    }
+    Some((
+        native_block(
+            cx,
+            BlockKind::Heading { level },
+            line.trim_end().to_string(),
+        ),
+        start + 2,
+    ))
 }
 
 /// Finds a list item's continuation up to a peer marker or unindented break.
@@ -1347,6 +1362,17 @@ impl Editor {
                 continue;
             }
 
+            if let Some((heading, consumed)) = collect_quote_heading(cx, lines, index) {
+                if pending_blank_lines > 0 && (!title_markdown.is_empty() || !children.is_empty()) {
+                    append_quote_separator_children(&mut children, pending_blank_lines, cx);
+                }
+                children.push(heading);
+                saw_child = true;
+                pending_blank_lines = 0;
+                index = consumed;
+                continue;
+            }
+
             if let Some(unsupported_end) = collect_unsupported_quote_region(lines, index) {
                 if pending_blank_lines > 0 && (!title_markdown.is_empty() || !children.is_empty()) {
                     append_quote_separator_children(&mut children, pending_blank_lines, cx);
@@ -1554,6 +1580,12 @@ impl Editor {
                 let math_end = collect_display_math_region(lines, index);
                 children.push(math_or_raw_block(cx, lines[index..math_end].join("\n")));
                 index = math_end;
+                continue;
+            }
+
+            if let Some((heading, consumed)) = collect_quote_heading(cx, lines, index) {
+                children.push(heading);
+                index = consumed;
                 continue;
             }
 
@@ -1907,13 +1939,15 @@ mod tests {
     use crate::components::{BlockKind, CalloutVariant, Editor, HtmlCssColor};
 
     #[test]
-    fn closing_fence_must_match_exact_opening_run_length() {
+    fn closing_fence_must_match_marker_and_meet_opening_run_length() {
         let opener = parse_opening_fence("````rust").expect("opening fence");
 
         assert!(is_closing_fence("````", &opener));
         assert!(is_closing_fence("  ````   ", &opener));
         assert!(!is_closing_fence("```", &opener));
-        assert!(!is_closing_fence("`````", &opener));
+        assert!(is_closing_fence("`````", &opener));
+        assert!(!is_closing_fence("~~~~", &opener));
+        assert!(!is_closing_fence("````python", &opener));
     }
 
     #[test]
@@ -1936,7 +1970,7 @@ mod tests {
     }
 
     #[test]
-    fn matching_closing_fence_can_skip_inner_non_closing_backtick_runs() {
+    fn longer_bare_fence_closes_the_block_immediately() {
         let lines = vec![
             "```rust".to_string(),
             "````".to_string(),
@@ -1944,7 +1978,7 @@ mod tests {
             "```".to_string(),
         ];
         let opener = parse_opening_fence(&lines[0]).expect("opening fence");
-        assert_eq!(find_matching_closing_fence(&lines, 0, &opener), Some(3));
+        assert_eq!(find_matching_closing_fence(&lines, 0, &opener), Some(1));
     }
 
     #[test]
@@ -1995,7 +2029,7 @@ mod tests {
     }
 
     #[test]
-    fn next_opening_without_prior_closing_leaves_fence_unmatched() {
+    fn info_tagged_fence_inside_code_is_literal_content() {
         let lines = vec![
             "```rust".to_string(),
             "body".to_string(),
@@ -2003,7 +2037,49 @@ mod tests {
             "```".to_string(),
         ];
         let opener = parse_opening_fence(&lines[0]).expect("opening fence");
-        assert_eq!(find_matching_closing_fence(&lines, 0, &opener), None);
+        assert_eq!(find_matching_closing_fence(&lines, 0, &opener), Some(3));
+    }
+
+    #[gpui::test]
+    async fn four_backtick_code_block_keeps_inner_fences_and_round_trips(cx: &mut TestAppContext) {
+        let content = "本代码块外层使用四个反引号，内部可以安全展示三反引号围栏：\n\n```python\nprint(\"内嵌的代码块\")\n```";
+        let fenced = format!("````markdown\n{content}\n````");
+        let source = format!("{fenced}\n\n代码块外的段落");
+        let editor = cx.new(|cx| Editor::from_markdown(cx, source.clone(), None));
+        editor.update(cx, |editor, cx| {
+            for _ in 0..3 {
+                let visible = editor.document.visible_blocks();
+                assert_eq!(visible.len(), 2);
+                assert_eq!(
+                    visible[0].entity.read(cx).kind(),
+                    BlockKind::CodeBlock {
+                        language: Some("markdown".into())
+                    }
+                );
+                assert_eq!(visible[0].entity.read(cx).display_text(), content);
+                assert_eq!(visible[1].entity.read(cx).display_text(), "代码块外的段落");
+                assert_eq!(editor.document.markdown_text(cx), source);
+                let mappings = editor.build_source_target_mappings(cx);
+                assert_eq!(mappings.len(), 2);
+                assert_eq!(mappings[0].full_source_range, 0..fenced.len());
+                assert_eq!(
+                    &source[mappings[1].full_source_range.clone()],
+                    "代码块外的段落"
+                );
+                let parsed_code = pulldown_cmark::Parser::new(&source)
+                    .filter_map(|event| match event {
+                        pulldown_cmark::Event::Text(text) => Some(text.to_string()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    parsed_code,
+                    [format!("{content}\n"), "代码块外的段落".into()]
+                );
+                editor.toggle_view_mode(cx);
+                editor.toggle_view_mode(cx);
+            }
+        });
     }
 
     #[test]
@@ -2258,6 +2334,101 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn nested_ordered_lists_keep_commonmark_hierarchy_and_source_offsets(
+        cx: &mut TestAppContext,
+    ) {
+        // Two-space indentation was emitted by older versions. Import it
+        // permissively, then write a hierarchy standard Markdown can parse.
+        let editor = cx.new(|cx| {
+            Editor::from_markdown(
+                cx,
+                "1. 有序一级\n  1. 有序二级\n  2. 有序二级之二\n2. 有序一级之二".into(),
+                None,
+            )
+        });
+        editor.update(cx, |editor, cx| {
+            let expected = "1. 有序一级\n   1. 有序二级\n   2. 有序二级之二\n2. 有序一级之二";
+            let source = editor.document.markdown_text(cx);
+            assert_eq!(source, expected);
+            let mut depth = 0;
+            let mut items = Vec::new();
+            for event in pulldown_cmark::Parser::new(&source) {
+                match event {
+                    pulldown_cmark::Event::Start(pulldown_cmark::Tag::List(_)) => depth += 1,
+                    pulldown_cmark::Event::End(pulldown_cmark::TagEnd::List(_)) => depth -= 1,
+                    pulldown_cmark::Event::Text(text) => items.push((depth, text.to_string())),
+                    _ => {}
+                }
+            }
+            assert_eq!(
+                items,
+                [
+                    (1, "有序一级".into()),
+                    (2, "有序二级".into()),
+                    (2, "有序二级之二".into()),
+                    (1, "有序一级之二".into())
+                ]
+            );
+            let mappings = editor.build_source_target_mappings(cx);
+            for (mapping, expected_line) in mappings.iter().zip(expected.lines()) {
+                assert_eq!(
+                    source.get(mapping.full_source_range.clone()),
+                    Some(expected_line)
+                );
+            }
+            assert_eq!(mappings.len(), 4);
+            for _ in 0..2 {
+                editor.toggle_view_mode(cx);
+                editor.toggle_view_mode(cx);
+                assert_eq!(editor.document.markdown_text(cx), expected);
+                let layout = editor
+                    .document
+                    .visible_blocks()
+                    .iter()
+                    .map(|row| {
+                        let block = row.entity.read(cx);
+                        (block.render_depth, block.list_ordinal)
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    layout,
+                    [(0, Some(1)), (1, Some(1)), (1, Some(2)), (0, Some(2))]
+                );
+            }
+        });
+    }
+
+    #[gpui::test]
+    async fn wide_ordered_markers_align_continuations_and_mixed_children(cx: &mut TestAppContext) {
+        let mut markdown = (1..=10)
+            .map(|number| format!("{number}. item {number}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        markdown.push_str("\n    continuation\n\n    child paragraph\n    - bullet\n      1. ordered grandchild\n         1. great grandchild");
+        let editor = cx.new(|cx| Editor::from_markdown(cx, markdown, None));
+        editor.read_with(cx, |editor, cx| {
+            let source = editor.document.markdown_text(cx);
+            assert!(source.contains("10. item 10\n    continuation\n\n    child paragraph\n    - bullet\n      1. ordered grandchild\n         1. great grandchild"), "{source}");
+            let mut depth = 0;
+            let mut nested = Vec::new();
+            for event in pulldown_cmark::Parser::new(&source) {
+                match event {
+                    pulldown_cmark::Event::Start(pulldown_cmark::Tag::List(_)) => depth += 1,
+                    pulldown_cmark::Event::End(pulldown_cmark::TagEnd::List(_)) => depth -= 1,
+                    pulldown_cmark::Event::Text(text) if text.contains("child") || text.as_ref() == "bullet" => nested.push((depth, text.to_string())),
+                    _ => {}
+                }
+            }
+            assert_eq!(nested, [(1, "child paragraph".into()), (2, "bullet".into()), (3, "ordered grandchild".into()), (4, "great grandchild".into())]);
+            for mapping in editor.build_source_target_mappings(cx) {
+                let block = mapping.entity.read(cx);
+                let expected = block.record.markdown_line(editor.document.source_indent_for_entity_id(mapping.entity.entity_id(), cx), block.list_ordinal);
+                assert_eq!(source.get(mapping.full_source_range.clone()), Some(expected.as_str()));
+            }
+        });
+    }
+
+    #[gpui::test]
     async fn imports_nested_list_children_as_native_blocks(cx: &mut TestAppContext) {
         let editor = cx.new(|cx| {
             Editor::from_markdown(
@@ -2390,7 +2561,7 @@ mod tests {
             );
             assert_eq!(
                 editor.document.markdown_text(cx),
-                "1. item with nested quote\n  > quoted text\n  > \n  > quoted paragraph two"
+                "1. item with nested quote\n   > quoted text\n   > \n   > quoted paragraph two"
             );
 
             editor.toggle_view_mode(cx);
@@ -2484,7 +2655,7 @@ mod tests {
             assert_eq!(visible[0].entity.read(cx).display_text(), "parent");
             assert_eq!(visible[1].entity.read(cx).display_text(), "child");
             assert_eq!(visible[1].entity.read(cx).render_depth, 1);
-            assert_eq!(editor.document.markdown_text(cx), "1. parent\n  1. child");
+            assert_eq!(editor.document.markdown_text(cx), "1. parent\n   1. child");
         });
     }
 

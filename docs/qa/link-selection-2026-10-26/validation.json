@@ -1,0 +1,15 @@
+{
+  "passed": 874,
+  "failed": 0,
+  "ignored": 3,
+  "format_check": "passed",
+  "diff_check": "passed",
+  "original_sha256": "00f5a2388936f01acb2838060cccc1b7c9f86ce690d55085a6201e3bae869947",
+  "installed_binary_sha256": "6796ee766d03f20aebd9a0139e7265e550c060e238792275e6ae8a24ec3d6326",
+  "release_uuid": "UUID: A8FE8B8B-ABB3-3B4F-ACC9-1938EE130810 (arm64) /Applications/Typers.app/Contents/MacOS/velotype",
+  "installed_and_dist_match": true,
+  "zip_binary_matches": true,
+  "native_before": "SIGABRT: end byte index 5 inside 粗",
+  "native_after": "Final installed release: selection, Chinese/emoji insertion, save, and undo passed; bold, italic and link destination preserved",
+  "original_unchanged": true
+}

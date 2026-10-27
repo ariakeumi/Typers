@@ -16,9 +16,9 @@ use crate::components::markdown::paste::should_split_plain_multiline_paste;
 use crate::components::{
     BlockDown, BlockUp, BoldSelection, CodeSelection, Copy, Cut, Delete, DeleteBack,
     DismissTransientUi, End, ExitCodeBlock, FocusNext, FocusPrev, Home, IndentBlock,
-    ItalicSelection, MoveLeft, MoveRight, Newline, OutdentBlock, Paste, SelectAll, SelectEnd,
-    SelectHome, SelectLeft, SelectRight, UnderlineSelection, WordDeleteBack, WordDeleteForward,
-    WordMoveLeft, WordMoveRight, WordSelectLeft, WordSelectRight,
+    ItalicSelection, MoveLeft, MoveRight, Newline, OutdentBlock, Paste, SelectAll, SelectDown,
+    SelectEnd, SelectHome, SelectLeft, SelectRight, SelectUp, UnderlineSelection, WordDeleteBack,
+    WordDeleteForward, WordMoveLeft, WordMoveRight, WordSelectLeft, WordSelectRight,
 };
 
 impl Block {
@@ -326,6 +326,9 @@ impl Block {
 
     /// Handles Enter using table, source, structural, and rich-text semantics.
     pub(crate) fn on_newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
         // Enter is ordered from special editors to rich-text splitting:
         // table/source/code/quote-like blocks keep local newline semantics,
         // while normal rendered blocks emit an editor-level split request.
@@ -349,6 +352,17 @@ impl Block {
                 self.replace_text_in_range(None, "", window, cx);
             }
             self.replace_text_in_range(None, "\n", window, cx);
+            return;
+        }
+
+        // Enter before heading content moves the intact heading down, including
+        // when its first inline fragment is code.
+        if matches!(self.kind(), BlockKind::Heading { .. })
+            && self.selected_range.is_empty()
+            && self.cursor_offset() == 0
+            && !self.is_empty()
+        {
+            cx.emit(BlockEvent::RequestInsertParagraphBefore);
             return;
         }
 
@@ -482,6 +496,9 @@ impl Block {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         if self.is_table_cell() {
             if self.selected_range.is_empty() {
                 let previous = self.previous_boundary(self.cursor_offset());
@@ -573,6 +590,9 @@ impl Block {
 
     /// Deletes forward, with kind-specific conversion in rendered mode.
     pub(crate) fn on_delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
         if self.is_table_cell() {
             if self.selected_range.is_empty() {
                 let next = self.next_boundary(self.cursor_offset());
@@ -617,6 +637,9 @@ impl Block {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         if self.selected_range.is_empty() {
             if self.cursor_offset() == 0 {
                 // Nothing to the left in this block; defer to grapheme
@@ -636,6 +659,9 @@ impl Block {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         if self.selected_range.is_empty() {
             if self.cursor_offset() == self.visible_len() {
                 // Nothing to the right in this block; defer to grapheme
@@ -655,6 +681,9 @@ impl Block {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         if self.is_table_cell() {
             cx.emit(BlockEvent::RequestTableCellMoveHorizontal { delta: 1 });
             return;
@@ -675,6 +704,9 @@ impl Block {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         if self.is_table_cell() {
             cx.emit(BlockEvent::RequestTableCellMoveHorizontal { delta: -1 });
             return;
@@ -853,6 +885,38 @@ impl Block {
         }
     }
 
+    /// Extends the selection through visual rows while retaining its x anchor.
+    fn select_vertically(&mut self, direction: i32, cx: &mut Context<Self>) {
+        let preferred_x = self.vertical_anchor_x();
+        let target = self
+            .vertical_cursor_target(direction, preferred_x)
+            .unwrap_or_else(|| if direction < 0 { 0 } else { self.visible_len() });
+        self.select_to(target, cx);
+        self.vertical_motion_x = Some(preferred_x);
+    }
+
+    pub(crate) fn on_select_up(
+        &mut self,
+        _: &SelectUp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.code_language_focus_handle.is_focused(window) {
+            self.select_vertically(-1, cx);
+        }
+    }
+
+    pub(crate) fn on_select_down(
+        &mut self,
+        _: &SelectDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.code_language_focus_handle.is_focused(window) {
+            self.select_vertically(1, cx);
+        }
+    }
+
     /// Moves the caret to the preceding word start.
     pub(crate) fn on_word_move_left(
         &mut self,
@@ -964,6 +1028,9 @@ impl Block {
 
     /// Copies and removes selected visible text as a discrete edit.
     pub(crate) fn on_cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
         if !self.selected_range.is_empty() {
             self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
             cx.write_to_clipboard(ClipboardItem::new_string(
@@ -975,6 +1042,9 @@ impl Block {
 
     /// Routes clipboard images, multiline text, or local text replacement.
     pub(crate) fn on_paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
         if self.kind().is_separator() && !self.uses_raw_text_editing() {
             return;
         }
@@ -1657,6 +1727,9 @@ impl Block {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         cx.stop_propagation();
         if !self.focus_handle.is_focused(window) {
             cx.emit(BlockEvent::RequestFocus);
@@ -1670,6 +1743,9 @@ impl Block {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         if !self.kind().is_task_list_item() || self.is_source_raw_mode() {
             return;
         }
@@ -1745,6 +1821,9 @@ impl Block {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         if self.kind() == BlockKind::Table {
             cx.emit(BlockEvent::RequestAppendTableColumn);
         }
@@ -1757,6 +1836,9 @@ impl Block {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         if self.kind() == BlockKind::Table {
             cx.emit(BlockEvent::RequestAppendTableRow);
         }
@@ -1769,6 +1851,9 @@ impl Block {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         self.toggle_inline_format(InlineFormat::Bold, cx);
     }
 
@@ -1779,6 +1864,9 @@ impl Block {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         self.toggle_inline_format(InlineFormat::Italic, cx);
     }
 
@@ -1789,6 +1877,9 @@ impl Block {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         self.toggle_inline_format(InlineFormat::Underline, cx);
     }
 
@@ -1799,6 +1890,9 @@ impl Block {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         self.toggle_inline_format(InlineFormat::Code, cx);
     }
 
@@ -1809,6 +1903,9 @@ impl Block {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         let exits_multiline_block = self.is_table_cell() || self.kind().is_multiline_text_block();
 
         if exits_multiline_block {
@@ -1850,7 +1947,7 @@ mod tests {
     }
 
     fn remove_temp_image(path: &std::path::Path) {
-        let _ = path.parent().map(|parent| fs::remove_dir_all(parent));
+        let _ = path.parent().map(fs::remove_dir_all);
     }
 
     #[gpui::test]
@@ -1927,7 +2024,7 @@ mod tests {
         let images = (0..2)
             .map(|id| Image {
                 format: ImageFormat::Png,
-                bytes: vec![id as u8].into(),
+                bytes: vec![id as u8],
                 id,
             })
             .collect::<Vec<_>>();

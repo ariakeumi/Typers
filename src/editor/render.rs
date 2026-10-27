@@ -6,10 +6,7 @@ use std::time::{Duration, Instant};
 
 use gpui::*;
 
-use super::{
-    Editor, ImagePastePrompt, InfoDialogKind, MountedRun,
-    workspace::workspace_panel_width_for_viewport,
-};
+use super::{Editor, ImagePastePrompt, InfoDialogKind, MountedRun};
 use crate::app_menu::dispatch_menu_action_for_editor;
 use crate::components::CalloutVariant;
 use crate::components::{AddLanguageConfig, AddThemeConfig, Block, NoRecentFiles};
@@ -24,6 +21,9 @@ pub(crate) const ABOUT_GITHUB_URL: &str = "https://github.com/manyougz/velotype"
 /// Rows within this many pixels of the viewport stay mounted, so a fast flick
 /// paints them before they scroll in instead of showing a blank edge.
 const RENDER_OVERDRAW_PX: f32 = 800.0;
+
+/// Bottom inset used by Typora's GitHub theme (`#write` padding-bottom).
+const EDITOR_BOTTOM_PADDING_PX: f32 = 100.0;
 
 /// Opens the project URL through GPUI's URL handler.
 pub(crate) fn open_about_github_url(cx: &mut App) {
@@ -437,9 +437,14 @@ impl Editor {
         }
     }
 
-    /// Scrolls the focused caret into the padded viewport when bounds are known.
+    /// Scrolls the active range into view. Returns true once the painted bounds
+    /// need no further scroll, including when the document edge clamps it.
     fn ensure_focused_caret_visible(&mut self, window: &Window, cx: &App) -> bool {
-        let Some(focused_block) = self.focused_edit_target(window, cx) else {
+        let Some(focused_block) = self.focused_edit_target(window, cx).or_else(|| {
+            self.search_owns_focus(window, cx)
+                .then(|| self.current_edit_target_from_state(cx))
+                .flatten()
+        }) else {
             return false;
         };
         let Some(active_bounds) =
@@ -449,13 +454,28 @@ impl Editor {
         };
 
         let viewport = self.scroll_handle.bounds();
-        let padding = px(20.0);
+        let padding = px(if self.writing.search_open { 84.0 } else { 20.0 });
         let top_limit = viewport.top() + padding;
         let bottom_limit = viewport.bottom() - padding;
         let mut offset = self.scroll_handle.offset();
         let mut changed = false;
 
-        if active_bounds.top() < top_limit {
+        if self.writing.typewriter_mode && !self.writing.search_open {
+            let desired_y = viewport.top() + viewport.size.height * 0.5;
+            let caret_y = active_bounds.top() + active_bounds.size.height * 0.5;
+            if (caret_y - desired_y).abs() > px(1.0) {
+                offset.y += desired_y - caret_y;
+                changed = true;
+            }
+        } else if active_bounds.size.height > bottom_limit - top_limit {
+            // A multiline selection can exceed the viewport. Align its start
+            // instead of alternating forever between the two selection edges.
+            let delta = top_limit - active_bounds.top();
+            if delta.abs() > px(0.5) {
+                offset.y += delta;
+                changed = true;
+            }
+        } else if active_bounds.top() < top_limit {
             offset.y += top_limit - active_bounds.top();
             changed = true;
         } else if active_bounds.bottom() > bottom_limit {
@@ -466,7 +486,10 @@ impl Editor {
         if changed {
             let max_offset_y = self.scroll_handle.max_offset().y.max(px(0.0));
             offset.y = offset.y.min(px(0.0)).max(-max_offset_y);
-            self.scroll_handle.set_offset(offset);
+            if (offset.y - self.scroll_handle.offset().y).abs() > px(0.5) {
+                self.scroll_handle.set_offset(offset);
+                return false;
+            }
         }
 
         true
@@ -484,14 +507,16 @@ impl Editor {
 
         // scroll_to_item indexed children by position, which the spacers break;
         // the focused block is always mounted, so pixel math on its bounds works.
-        let has_bounds = self.ensure_focused_caret_visible(window, cx);
+        let settled = self.ensure_focused_caret_visible(window, cx);
         if self.pending_scroll_recheck_after_layout {
             self.pending_scroll_recheck_after_layout = false;
             self.schedule_scroll_recheck(cx);
             return;
         }
 
-        if !has_bounds {
+        // Mounting an offscreen row replaces estimated heights. Keep checking
+        // its painted bounds until those layout changes stop moving the result.
+        if !settled {
             self.schedule_scroll_recheck(cx);
             return;
         }
@@ -1394,7 +1419,7 @@ impl Editor {
     /// Builds the About dialog's version, project link, and supporting lines.
     pub(crate) fn about_dialog_body_lines(strings: &I18nStrings) -> Vec<String> {
         vec![
-            format!("Velotype {}", env!("CARGO_PKG_VERSION")),
+            format!("Typers {}", env!("CARGO_PKG_VERSION")),
             strings.help_about_message.clone(),
             format!("{}: {}", strings.help_about_github_label, ABOUT_GITHUB_URL),
             strings.help_about_star_message.clone(),
@@ -1443,7 +1468,7 @@ impl Editor {
                 .flex()
                 .flex_col()
                 .gap(px(d.dialog_gap * 0.5))
-                .child(body_style(div()).child(format!("Velotype {}", env!("CARGO_PKG_VERSION"))))
+                .child(body_style(div()).child(format!("Typers {}", env!("CARGO_PKG_VERSION"))))
                 .child(body_style(div()).child(strings.help_about_message.clone()))
                 .child(
                     body_style(div())
@@ -1564,6 +1589,7 @@ impl Render for Editor {
     /// Synchronizes deferred window work and renders the editor and overlays.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.install_close_guard(cx, window);
+        self.sync_writing_menus(window, cx);
         self.apply_pending_focus(window, cx);
         self.apply_pending_scroll_into_view(window, cx);
         self.last_selection_snapshot = self.capture_source_selection_snapshot(cx);
@@ -1589,6 +1615,18 @@ impl Render for Editor {
 
         let d = &theme.dimensions;
         let visible_blocks = self.document.visible_blocks().to_vec();
+        self.sync_block_read_only(cx);
+        let zoom = 1.0 + self.writing.zoom_steps as f32 * 0.1;
+        let focused_id = self.active_entity_id.map(|id| {
+            self.table_cell_binding(id)
+                .map_or(id, |binding| binding.table_block.entity_id())
+        });
+        let dim_block = |id| {
+            self.writing.focus_mode
+                && self.view_mode == super::ViewMode::Rendered
+                && focused_id.is_some_and(|active| active != id)
+                && self.cross_block_selection.is_none()
+        };
         let editor = cx.entity().downgrade();
         let has_menus = cx
             .get_menus()
@@ -1597,16 +1635,33 @@ impl Render for Editor {
         let titlebar_height = custom_titlebar_height(window, d);
         let menu_bar_height =
             in_window_menu_bar_height_for_target_os(std::env::consts::OS, has_menus, d);
-        let scroll_trigger_padding = (d.block_min_height * 0.75).max(16.0);
         let max_scroll_y = f32::from(self.scroll_handle.max_offset().y.max(px(0.0)));
         let viewport_height = f32::from(viewport_bounds.size.height.max(px(1.0)));
-        // Extra room below the last block so the lowest line can be scrolled up
-        // to the viewport center instead of being pinned to the bottom edge.
-        let scroll_beyond_bottom = viewport_height * 0.5;
+        // Ordinary editing uses Typora's fixed inset. Typewriter mode also
+        // needs enough room to position the last line at the viewport center.
+        let bottom_padding = if self.writing.typewriter_mode {
+            EDITOR_BOTTOM_PADDING_PX.max(viewport_height * 0.5)
+        } else {
+            EDITOR_BOTTOM_PADDING_PX
+        };
         let viewport_width = f32::from(viewport_bounds.size.width.max(px(1.0)));
         let has_overflow = max_scroll_y > 0.5;
 
         let centered_width = Self::centered_column_width(viewport_width, &theme.dimensions);
+        for entity in visible_blocks
+            .iter()
+            .map(|block| &block.entity)
+            .chain(self.table_cells.values().map(|binding| &binding.cell))
+        {
+            let block = entity.read(cx);
+            if block.document_zoom != zoom || block.document_column_width != Some(centered_width) {
+                entity.update(cx, |block, cx| {
+                    block.document_zoom = zoom;
+                    block.document_column_width = Some(centered_width);
+                    cx.notify();
+                });
+            }
+        }
         let current_scroll_y = (-f32::from(self.scroll_handle.offset().y)).clamp(0.0, max_scroll_y);
         let scrollbar_geometry =
             Self::scrollbar_geometry(viewport_height, max_scroll_y, current_scroll_y);
@@ -1629,8 +1684,6 @@ impl Render for Editor {
                 .read_with(cx, |block, _cx| RenderedRowSpacingInfo::from_block(block))
         };
         let mut previous_row_spacing = None;
-        // One entry per render row; off-screen rows are dropped after windowing.
-        let mut row_elements: Vec<AnyElement> = Vec::new();
         let mut row_starts: Vec<usize> = Vec::new();
         // Each row's leading `mt` gap; the top spacer subtracts the first mounted
         // row's, since that row re-applies it.
@@ -1639,221 +1692,87 @@ impl Render for Editor {
         while index < visible_blocks.len() {
             let first_visible = visible_blocks[index].clone();
             let first_spacing = spacing_for(index);
-            let top_gap = rendered_row_top_gap(previous_row_spacing, first_spacing, d.block_gap);
+            let current_block = first_visible.entity.read(cx);
+            let list_gap = if current_block.list_group_separator_candidate
+                && focused_id != Some(first_visible.entity.entity_id())
+            {
+                0.0
+            } else if index > 0
+                && current_block.kind().is_list_item()
+                && (visible_blocks[index - 1]
+                    .entity
+                    .read(cx)
+                    .kind()
+                    .is_list_item()
+                    || visible_blocks[index - 1]
+                        .entity
+                        .read(cx)
+                        .list_group_separator_candidate)
+            {
+                9.0
+            } else if index > 0
+                && matches!(
+                    visible_blocks[index - 1].entity.read(cx).kind(),
+                    crate::components::BlockKind::Heading { .. }
+                )
+            {
+                18.0
+            } else {
+                d.block_gap
+            };
+            let mut top_gap = rendered_row_top_gap(previous_row_spacing, first_spacing, list_gap);
+            if index == 0
+                && matches!(
+                    visible_blocks[index].entity.read(cx).kind(),
+                    crate::components::BlockKind::Heading { .. }
+                )
+            {
+                top_gap = 18.0;
+            }
+            if index > 0
+                && first_spacing.quote_group_anchor.is_none()
+                && matches!(
+                    visible_blocks[index].entity.read(cx).kind(),
+                    crate::components::BlockKind::Heading { .. }
+                )
+            {
+                top_gap = top_gap.max(18.0);
+            }
 
-            if let (Some(callout_anchor), Some(callout_variant)) =
+            // Partition groups before building any UI elements. Only mounted
+            // rows will get wrappers, handlers and child element trees below.
+            let mut group_end = index + 1;
+            if let (Some(anchor), Some(_)) =
                 (first_spacing.callout_anchor, first_spacing.callout_variant)
             {
-                let mut group_children = Vec::new();
-                let mut group_end = index;
-                let mut previous_callout_row = None;
                 while group_end < visible_blocks.len()
-                    && spacing_for(group_end).callout_anchor == Some(callout_anchor)
+                    && spacing_for(group_end).callout_anchor == Some(anchor)
                 {
-                    let row_spacing = spacing_for(group_end);
-                    if let Some(footnote_anchor) = row_spacing.footnote_anchor {
-                        let mut footnote_children = Vec::new();
-                        let mut footnote_end = group_end;
-                        let mut previous_footnote_row = None;
-                        while footnote_end < visible_blocks.len()
-                            && spacing_for(footnote_end).callout_anchor == Some(callout_anchor)
-                            && spacing_for(footnote_end).footnote_anchor == Some(footnote_anchor)
-                        {
-                            let footnote_spacing = spacing_for(footnote_end);
-                            let entity = visible_blocks[footnote_end].entity.clone();
-                            let row = div()
-                                .w_full()
-                                .flex()
-                                .flex_col()
-                                .flex_shrink_0()
-                                .mt(px(footnote_row_top_gap(previous_footnote_row, d.block_gap)))
-                                .child(entity.clone())
-                                .children(self.render_pending_picgo_upload(
-                                    entity.entity_id(),
-                                    &theme,
-                                    &strings,
-                                ));
-                            let row = if self.view_mode == super::ViewMode::Rendered {
-                                let row_editor = editor.clone();
-                                let entity_id = entity.entity_id();
-                                row.on_mouse_down(MouseButton::Right, move |event, window, cx| {
-                                    let _ = row_editor.update(cx, |editor, cx| {
-                                        editor.on_block_context_menu_mouse_down(
-                                            entity_id, event, window, cx,
-                                        );
-                                    });
-                                })
-                            } else {
-                                row
-                            };
-                            footnote_children.push(row.into_any_element());
-                            previous_footnote_row = Some(footnote_spacing);
-                            footnote_end += 1;
-                        }
-
-                        group_children.push(
-                            div()
-                                .w_full()
-                                .flex_shrink_0()
-                                .mt(px(callout_row_top_gap(
-                                    previous_callout_row,
-                                    row_spacing,
-                                    d,
-                                )))
-                                .child(footnote_group_shell(footnote_children, &theme, d))
-                                .into_any_element(),
-                        );
-                        previous_callout_row = Some(spacing_for(footnote_end - 1));
-                        group_end = footnote_end;
-                        continue;
-                    }
-
-                    let entity = visible_blocks[group_end].entity.clone();
-                    let row = div()
-                        .w_full()
-                        .flex()
-                        .flex_col()
-                        .flex_shrink_0()
-                        .mt(px(callout_row_top_gap(
-                            previous_callout_row,
-                            row_spacing,
-                            d,
-                        )))
-                        .child(entity.clone())
-                        .children(self.render_pending_picgo_upload(
-                            entity.entity_id(),
-                            &theme,
-                            &strings,
-                        ));
-                    let row = if self.view_mode == super::ViewMode::Rendered {
-                        let row_editor = editor.clone();
-                        let entity_id = entity.entity_id();
-                        row.on_mouse_down(MouseButton::Right, move |event, window, cx| {
-                            let _ = row_editor.update(cx, |editor, cx| {
-                                editor
-                                    .on_block_context_menu_mouse_down(entity_id, event, window, cx);
-                            });
-                        })
-                    } else {
-                        row
-                    };
-                    group_children.push(row.into_any_element());
-                    previous_callout_row = Some(row_spacing);
                     group_end += 1;
                 }
-
-                let (accent, background) = callout_colors(callout_variant, &theme);
-                row_starts.push(index);
-                row_top_gaps.push(top_gap);
-                row_elements.push(
-                    div()
-                        .w(px(centered_width))
-                        .max_w(relative(1.0))
-                        .flex_shrink_0()
-                        .mt(px(top_gap))
-                        .flex()
-                        .flex_col()
-                        .gap(px(0.0))
-                        .px(px(d.callout_padding_x))
-                        .py(px(d.callout_padding_y))
-                        .rounded(px(d.callout_radius))
-                        .border_l(px(d.callout_border_width))
-                        .border_color(accent)
-                        .bg(background)
-                        .children(group_children)
-                        .into_any_element(),
-                );
-                previous_row_spacing = Some(spacing_for(group_end - 1));
-                index = group_end;
-                continue;
-            }
-
-            if let Some(footnote_anchor) = first_spacing.footnote_anchor {
-                let mut group_children = Vec::new();
-                let mut group_end = index;
-                let mut previous_footnote_row = None;
+            } else if let Some(anchor) = first_spacing.footnote_anchor {
                 while group_end < visible_blocks.len()
-                    && spacing_for(group_end).footnote_anchor == Some(footnote_anchor)
+                    && spacing_for(group_end).footnote_anchor == Some(anchor)
                 {
-                    let row_spacing = spacing_for(group_end);
-                    let entity = visible_blocks[group_end].entity.clone();
-                    let row = div()
-                        .w_full()
-                        .flex()
-                        .flex_col()
-                        .flex_shrink_0()
-                        .mt(px(footnote_row_top_gap(previous_footnote_row, d.block_gap)))
-                        .child(entity.clone())
-                        .children(self.render_pending_picgo_upload(
-                            entity.entity_id(),
-                            &theme,
-                            &strings,
-                        ));
-                    let row = if self.view_mode == super::ViewMode::Rendered {
-                        let row_editor = editor.clone();
-                        let entity_id = entity.entity_id();
-                        row.on_mouse_down(MouseButton::Right, move |event, window, cx| {
-                            let _ = row_editor.update(cx, |editor, cx| {
-                                editor
-                                    .on_block_context_menu_mouse_down(entity_id, event, window, cx);
-                            });
-                        })
-                    } else {
-                        row
-                    };
-                    group_children.push(row.into_any_element());
-                    previous_footnote_row = Some(row_spacing);
                     group_end += 1;
                 }
-
-                row_starts.push(index);
-                row_top_gaps.push(top_gap);
-                row_elements.push(
-                    div()
-                        .w(px(centered_width))
-                        .max_w(relative(1.0))
-                        .flex_shrink_0()
-                        .mt(px(top_gap))
-                        .child(footnote_group_shell(group_children, &theme, d))
-                        .into_any_element(),
-                );
-                previous_row_spacing = Some(spacing_for(group_end - 1));
-                index = group_end;
-                continue;
             }
-
-            let entity = first_visible.entity.clone();
-            let row = div()
-                .w(px(centered_width))
-                .max_w(relative(1.0))
-                .flex()
-                .flex_col()
-                .flex_shrink_0()
-                .mt(px(top_gap))
-                .child(entity.clone())
-                .children(self.render_pending_picgo_upload(entity.entity_id(), &theme, &strings));
-            let row = if self.view_mode == super::ViewMode::Rendered {
-                let row_editor = editor.clone();
-                let entity_id = entity.entity_id();
-                row.on_mouse_down(MouseButton::Right, move |event, window, cx| {
-                    let _ = row_editor.update(cx, |editor, cx| {
-                        editor.on_block_context_menu_mouse_down(entity_id, event, window, cx);
-                    });
-                })
-            } else {
-                row
-            };
             row_starts.push(index);
             row_top_gaps.push(top_gap);
-            row_elements.push(row.into_any_element());
-            previous_row_spacing = Some(first_spacing);
-            index += 1;
+            previous_row_spacing = Some(spacing_for(group_end - 1));
+            index = group_end;
         }
 
-        // The focused row is always kept mounted so its caret is not blurred; a
-        // table cell maps to its containing table block's row.
+        // Keep the search selection mounted too: keyboard focus stays in the
+        // query field, but the result needs layout bounds before it can scroll.
+        // A table cell maps to its containing table block's row.
         let focus_row = self
             .focused_edit_target_entity_id(window, cx)
+            .or_else(|| {
+                self.search_owns_focus(window, cx)
+                    .then(|| self.current_edit_target_entity_id_from_state(cx))
+                    .flatten()
+            })
             .and_then(|id| {
                 self.document.visible_index_for_entity_id(id).or_else(|| {
                     self.table_cell_binding(id).and_then(|binding| {
@@ -1945,6 +1864,238 @@ impl Render for Editor {
             focus_row,
         );
 
+        let mut row_elements: Vec<Option<AnyElement>> = std::iter::repeat_with(|| None)
+            .take(row_starts.len())
+            .collect();
+        for row_index in 0..row_starts.len() {
+            if !(render_window.run_start..render_window.run_end).contains(&row_index)
+                && !render_window
+                    .focus_island
+                    .is_some_and(|island| island.row == row_index)
+            {
+                continue;
+            }
+            let index = row_starts[row_index];
+            let first_visible = visible_blocks[index].clone();
+            let first_spacing = spacing_for(index);
+            let top_gap = row_top_gaps[row_index];
+            if let (Some(callout_anchor), Some(callout_variant)) =
+                (first_spacing.callout_anchor, first_spacing.callout_variant)
+            {
+                let mut group_children = Vec::new();
+                let mut group_end = index;
+                let mut previous_callout_row = None;
+                while group_end < visible_blocks.len()
+                    && spacing_for(group_end).callout_anchor == Some(callout_anchor)
+                {
+                    let row_spacing = spacing_for(group_end);
+                    if let Some(footnote_anchor) = row_spacing.footnote_anchor {
+                        let mut footnote_children = Vec::new();
+                        let mut footnote_end = group_end;
+                        let mut previous_footnote_row = None;
+                        while footnote_end < visible_blocks.len()
+                            && spacing_for(footnote_end).callout_anchor == Some(callout_anchor)
+                            && spacing_for(footnote_end).footnote_anchor == Some(footnote_anchor)
+                        {
+                            let footnote_spacing = spacing_for(footnote_end);
+                            let entity = visible_blocks[footnote_end].entity.clone();
+                            let row = div()
+                                .w_full()
+                                .flex()
+                                .flex_col()
+                                .flex_shrink_0()
+                                .mt(px(footnote_row_top_gap(previous_footnote_row, d.block_gap)))
+                                .opacity(if dim_block(entity.entity_id()) {
+                                    0.25
+                                } else {
+                                    1.0
+                                })
+                                .child(entity.clone())
+                                .children(self.render_pending_picgo_upload(
+                                    entity.entity_id(),
+                                    &theme,
+                                    &strings,
+                                ));
+                            let row = if self.view_mode == super::ViewMode::Rendered {
+                                let row_editor = editor.clone();
+                                let entity_id = entity.entity_id();
+                                row.on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                                    let _ = row_editor.update(cx, |editor, cx| {
+                                        editor.on_block_context_menu_mouse_down(
+                                            entity_id, event, window, cx,
+                                        );
+                                    });
+                                })
+                            } else {
+                                row
+                            };
+                            footnote_children.push(row.into_any_element());
+                            previous_footnote_row = Some(footnote_spacing);
+                            footnote_end += 1;
+                        }
+
+                        group_children.push(
+                            div()
+                                .w_full()
+                                .flex_shrink_0()
+                                .mt(px(callout_row_top_gap(
+                                    previous_callout_row,
+                                    row_spacing,
+                                    d,
+                                )))
+                                .child(footnote_group_shell(footnote_children, &theme, d))
+                                .into_any_element(),
+                        );
+                        previous_callout_row = Some(spacing_for(footnote_end - 1));
+                        group_end = footnote_end;
+                        continue;
+                    }
+
+                    let entity = visible_blocks[group_end].entity.clone();
+                    let row = div()
+                        .w_full()
+                        .flex()
+                        .flex_col()
+                        .flex_shrink_0()
+                        .mt(px(callout_row_top_gap(
+                            previous_callout_row,
+                            row_spacing,
+                            d,
+                        )))
+                        .opacity(if dim_block(entity.entity_id()) {
+                            0.25
+                        } else {
+                            1.0
+                        })
+                        .child(entity.clone())
+                        .children(self.render_pending_picgo_upload(
+                            entity.entity_id(),
+                            &theme,
+                            &strings,
+                        ));
+                    let row = if self.view_mode == super::ViewMode::Rendered {
+                        let row_editor = editor.clone();
+                        let entity_id = entity.entity_id();
+                        row.on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                            let _ = row_editor.update(cx, |editor, cx| {
+                                editor
+                                    .on_block_context_menu_mouse_down(entity_id, event, window, cx);
+                            });
+                        })
+                    } else {
+                        row
+                    };
+                    group_children.push(row.into_any_element());
+                    previous_callout_row = Some(row_spacing);
+                    group_end += 1;
+                }
+
+                let (accent, background) = callout_colors(callout_variant, &theme);
+                row_elements[row_index] = Some(
+                    div()
+                        .w(px(centered_width))
+                        .max_w(relative(1.0))
+                        .flex_shrink_0()
+                        .mt(px(top_gap))
+                        .flex()
+                        .flex_col()
+                        .gap(px(0.0))
+                        .px(px(d.callout_padding_x))
+                        .py(px(d.callout_padding_y))
+                        .rounded(px(d.callout_radius))
+                        .border_l(px(d.callout_border_width))
+                        .border_color(accent)
+                        .bg(background)
+                        .children(group_children)
+                        .into_any_element(),
+                );
+                continue;
+            }
+
+            if let Some(footnote_anchor) = first_spacing.footnote_anchor {
+                let mut group_children = Vec::new();
+                let mut group_end = index;
+                let mut previous_footnote_row = None;
+                while group_end < visible_blocks.len()
+                    && spacing_for(group_end).footnote_anchor == Some(footnote_anchor)
+                {
+                    let row_spacing = spacing_for(group_end);
+                    let entity = visible_blocks[group_end].entity.clone();
+                    let row = div()
+                        .w_full()
+                        .flex()
+                        .flex_col()
+                        .flex_shrink_0()
+                        .mt(px(footnote_row_top_gap(previous_footnote_row, d.block_gap)))
+                        .opacity(if dim_block(entity.entity_id()) {
+                            0.25
+                        } else {
+                            1.0
+                        })
+                        .child(entity.clone())
+                        .children(self.render_pending_picgo_upload(
+                            entity.entity_id(),
+                            &theme,
+                            &strings,
+                        ));
+                    let row = if self.view_mode == super::ViewMode::Rendered {
+                        let row_editor = editor.clone();
+                        let entity_id = entity.entity_id();
+                        row.on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                            let _ = row_editor.update(cx, |editor, cx| {
+                                editor
+                                    .on_block_context_menu_mouse_down(entity_id, event, window, cx);
+                            });
+                        })
+                    } else {
+                        row
+                    };
+                    group_children.push(row.into_any_element());
+                    previous_footnote_row = Some(row_spacing);
+                    group_end += 1;
+                }
+
+                row_elements[row_index] = Some(
+                    div()
+                        .w(px(centered_width))
+                        .max_w(relative(1.0))
+                        .flex_shrink_0()
+                        .mt(px(top_gap))
+                        .child(footnote_group_shell(group_children, &theme, d))
+                        .into_any_element(),
+                );
+                continue;
+            }
+
+            let entity = first_visible.entity.clone();
+            let row = div()
+                .w(px(centered_width))
+                .max_w(relative(1.0))
+                .flex()
+                .flex_col()
+                .flex_shrink_0()
+                .mt(px(top_gap))
+                .opacity(if dim_block(entity.entity_id()) {
+                    0.25
+                } else {
+                    1.0
+                })
+                .child(entity.clone())
+                .children(self.render_pending_picgo_upload(entity.entity_id(), &theme, &strings));
+            let row = if self.view_mode == super::ViewMode::Rendered {
+                let row_editor = editor.clone();
+                let entity_id = entity.entity_id();
+                row.on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                    let _ = row_editor.update(cx, |editor, cx| {
+                        editor.on_block_context_menu_mouse_down(entity_id, event, window, cx);
+                    });
+                })
+            } else {
+                row
+            };
+            row_elements[row_index] = Some(row.into_any_element());
+        }
+
         let island = render_window.focus_island;
         let island_before_run = island.is_some_and(|island| island.row < render_window.run_start);
         // A mounted row re-applies its own `mt`, which the preceding stride
@@ -1969,8 +2120,6 @@ impl Render for Editor {
             }
         };
 
-        let mut row_elements: Vec<Option<AnyElement>> =
-            row_elements.into_iter().map(Some).collect();
         let mut take_row = |rows: &mut Vec<AnyElement>, row: usize| {
             if let Some(element) = row_elements.get_mut(row).and_then(Option::take) {
                 rows.push(element);
@@ -2022,9 +2171,12 @@ impl Render for Editor {
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_editor_mouse_up))
             .on_scroll_wheel(cx.listener(Self::on_editor_scroll_wheel))
             .p(px(d.editor_padding))
-            .pb(px(d.editor_padding
-                + scroll_trigger_padding
-                + scroll_beyond_bottom))
+            .pt(px(if self.writing.typewriter_mode {
+                viewport_height * 0.5
+            } else {
+                d.editor_padding
+            }))
+            .pb(px(bottom_padding))
             .children(block_rows);
         let scroll_content = if self.view_mode == super::ViewMode::Rendered {
             scroll_content.on_mouse_down(
@@ -2140,6 +2292,14 @@ impl Render for Editor {
             .capture_action(cx.listener(Self::on_cut_capture))
             .capture_action(cx.listener(Self::on_delete_capture))
             .capture_action(cx.listener(Self::on_delete_back_capture))
+            .capture_action(cx.listener(Self::on_select_left_capture))
+            .capture_action(cx.listener(Self::on_select_right_capture))
+            .capture_action(cx.listener(Self::on_select_up_capture))
+            .capture_action(cx.listener(Self::on_select_down_capture))
+            .capture_action(cx.listener(Self::on_move_left_selection_capture))
+            .capture_action(cx.listener(Self::on_move_right_selection_capture))
+            .capture_action(cx.listener(Self::on_focus_prev_selection_capture))
+            .capture_action(cx.listener(Self::on_focus_next_selection_capture))
             .capture_key_down(cx.listener(Self::on_editor_key_down_capture))
             .can_drop(|dragged, _window, _cx| dragged.is::<ExternalPaths>())
             .on_drop::<ExternalPaths>(cx.listener(Self::on_external_paths_drop))
@@ -2153,6 +2313,21 @@ impl Render for Editor {
             .on_action(cx.listener(Self::on_close_window))
             .on_action(cx.listener(Self::on_toggle_view_mode_action))
             .on_action(cx.listener(Self::on_toggle_workspace_action))
+            .on_action(cx.listener(Self::on_writing_action))
+            .on_mouse_move(cx.listener(Self::on_workspace_resize_move))
+            .cursor(if self.workspace.resizing {
+                CursorStyle::ResizeLeftRight
+            } else {
+                CursorStyle::Arrow
+            })
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(Self::on_workspace_resize_end),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(Self::on_workspace_resize_end),
+            )
             .on_action(cx.listener(Self::on_page_up))
             .on_action(cx.listener(Self::on_page_down))
             .on_action(cx.listener(Self::on_jump_to_top))
@@ -2198,23 +2373,55 @@ impl Render for Editor {
         } else {
             base
         };
-        let workspace_width =
-            workspace_panel_width_for_viewport(f32::from(window.viewport_size().width));
+        let workspace_width = self.workspace_panel_width(f32::from(window.viewport_size().width));
+        // macOS draws its traffic lights above our content. Let the drawer
+        // continue behind them while the document still clears the titlebar.
+        // Other platforms keep their app-rendered controls and menu row clear.
+        let workspace_titlebar_height = if cfg!(target_os = "macos") && self.workspace.is_open {
+            titlebar_height
+        } else {
+            0.0
+        };
         let main_content = div()
             .w_full()
             .flex_1()
             .min_h(px(0.0))
-            .pt(px(titlebar_height + menu_bar_height))
+            .pt(px(
+                titlebar_height + menu_bar_height - workspace_titlebar_height
+            ))
             .flex()
             .min_w(px(0.0));
-        let main_content = if let Some(workspace_panel) =
-            self.render_workspace_panel(&theme, &strings, workspace_width, cx)
-        {
+        let main_content = if let Some(workspace_panel) = self.render_workspace_panel(
+            &theme,
+            &strings,
+            workspace_width,
+            workspace_titlebar_height,
+            cx,
+        ) {
             main_content.child(workspace_panel)
         } else {
             main_content
         };
-        let base = base.child(main_content.child(content_area));
+        let mut document_pane = div()
+            .flex_1()
+            .min_w(px(0.0))
+            .h_full()
+            .pt(px(workspace_titlebar_height))
+            .flex()
+            .flex_col()
+            .relative()
+            .child(content_area);
+        if let Some(search_bar) = self.render_search_bar(&theme, cx) {
+            document_pane = document_pane.child(
+                div()
+                    .absolute()
+                    .top(px(workspace_titlebar_height))
+                    .left_0()
+                    .right_0()
+                    .child(search_bar),
+            );
+        }
+        let base = base.child(main_content.child(document_pane));
         let base = if let Some(status_bar) = self.render_status_bar(&theme, &strings, window, cx) {
             base.child(status_bar)
         } else {
@@ -2239,6 +2446,11 @@ impl Render for Editor {
         };
         let base = if let Some(table_dialog) = self.render_table_insert_dialog_overlay(&theme, cx) {
             base.child(table_dialog)
+        } else {
+            base
+        };
+        let base = if let Some(statistics) = self.render_statistics(&theme, cx) {
+            base.child(statistics)
         } else {
             base
         };
@@ -2512,7 +2724,7 @@ mod tests {
     #[test]
     fn import_menu_split_detects_theme_and_language_import_tails() {
         let theme_items = vec![
-            disabled_menu_action("Velotype"),
+            disabled_menu_action("Typers"),
             OwnedMenuItem::Separator,
             add_theme_menu_action(),
         ];
@@ -2526,8 +2738,7 @@ mod tests {
             OwnedMenuItem::Separator,
             disabled_menu_action("Save"),
         ];
-        let malformed_import_items =
-            vec![disabled_menu_action("Velotype"), add_theme_menu_action()];
+        let malformed_import_items = vec![disabled_menu_action("Typers"), add_theme_menu_action()];
 
         assert_eq!(import_menu_split_index(&theme_items), Some(1));
         assert_eq!(import_menu_split_index(&language_items), Some(1));

@@ -113,7 +113,8 @@ mod tests {
         assert_eq!(utf16_range_to_utf8("a😀b", &(2..2)), 1..1);
         assert_eq!(utf16_range_to_utf8("a😀b", &(1..2)), 1..5);
         assert_eq!(utf16_range_to_utf8("a😀b", &(2..3)), 1..5);
-        assert_eq!(utf16_range_to_utf8("a😀b", &(3..1)), 1..5);
+        let reversed = std::ops::Range { start: 3, end: 1 };
+        assert_eq!(utf16_range_to_utf8("a😀b", &reversed), 1..5);
         assert_eq!(utf16_range_to_utf8("a😀b", &(99..99)), 6..6);
     }
 

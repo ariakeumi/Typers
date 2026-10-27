@@ -102,6 +102,14 @@ impl EventEmitter<BlockEvent> for Block {}
 /// Blocks delegate structural operations (split, merge, indent, delete) to
 /// the parent editor via `BlockEvent` emissions.
 pub struct Block {
+    /// Per-window document scale; excluded from persistent Markdown.
+    pub(crate) document_zoom: f32,
+    /// Actual editor column width after the workspace sidebar is laid out.
+    pub(crate) document_column_width: Option<f32>,
+    pub(crate) read_only: bool,
+    /// Find results in block-local Markdown bytes. Projection to visible text
+    /// happens during paint so moving focus cannot leave stale highlight spans.
+    pub(crate) search_highlights: Vec<(Range<usize>, bool)>,
     /// Persistent block kind, title, and identity.
     pub record: BlockRecord,
     /// Clean visible-text cache derived from `record.title`.
@@ -271,6 +279,10 @@ impl Block {
         let edit_mode = EditMode::for_kind(&record.kind);
         let render_cache = record.title.render_cache();
         let mut block = Self {
+            document_zoom: 1.0,
+            document_column_width: None,
+            read_only: false,
+            search_highlights: Vec::new(),
             record,
             render_cache,
             code_highlight: None,
@@ -373,14 +385,28 @@ impl Block {
         requested
     }
 
-    /// Updates image, link, and footnote context, refreshing affected caches.
+    /// Updates reference context, returning whether any shared input changed.
     pub(crate) fn set_runtime_context(
         &mut self,
         base_dir: Option<PathBuf>,
         image_reference_definitions: Arc<ImageReferenceDefinitions>,
         link_reference_definitions: Arc<LinkReferenceDefinitions>,
         footnote_registry: Arc<FootnoteRegistry>,
-    ) {
+    ) -> bool {
+        let unchanged = self.image_base_dir == base_dir
+            && (Arc::ptr_eq(
+                &self.image_reference_definitions,
+                &image_reference_definitions,
+            ) || self.image_reference_definitions == image_reference_definitions)
+            && (Arc::ptr_eq(
+                &self.link_reference_definitions,
+                &link_reference_definitions,
+            ) || self.link_reference_definitions == link_reference_definitions)
+            && (Arc::ptr_eq(&self.footnote_registry, &footnote_registry)
+                || self.footnote_registry == footnote_registry);
+        if unchanged {
+            return false;
+        }
         if self.image_base_dir != base_dir {
             self.image_base_dir = base_dir;
         }
@@ -390,6 +416,7 @@ impl Block {
         self.sync_link_reference_definitions(link_reference_definitions);
         self.sync_footnote_registry(footnote_registry);
         self.sync_image_runtime();
+        true
     }
 
     /// Whether text edits bypass rich inline parsing in the current mode.
@@ -661,10 +688,17 @@ impl Block {
         }
 
         let markdown = self.record.title.serialize_markdown();
-        let next_title = InlineTextTree::from_markdown_with_link_references(
+        let parsed = InlineTextTree::parse_markdown_with_link_references(
             &markdown,
             &self.link_reference_definitions,
         );
+        let selected_clean = selected_markdown
+            .as_ref()
+            .map(|range| parsed.map_range(range));
+        let marked_clean = marked_markdown
+            .as_ref()
+            .map(|range| parsed.map_range(range));
+        let next_title = parsed.tree;
         if self.record.title == next_title {
             return;
         }
@@ -673,8 +707,8 @@ impl Block {
         self.sync_edit_mode_from_kind();
         self.sync_render_cache();
 
-        if let Some(selected_markdown) = selected_markdown {
-            let restored = self.markdown_range_to_current_range(selected_markdown);
+        if let Some(selected_clean) = selected_clean {
+            let restored = self.clean_to_current_range(selected_clean);
             if restored.is_empty() {
                 self.assign_collapsed_selection_offset(
                     restored.start,
@@ -688,8 +722,7 @@ impl Block {
             }
         }
 
-        self.marked_range =
-            marked_markdown.map(|range| self.markdown_range_to_current_range(range));
+        self.marked_range = marked_clean.map(|range| self.clean_to_current_range(range));
 
         if had_projection {
             self.sync_inline_projection_for_focus(true);
@@ -784,11 +817,13 @@ impl Block {
         let replaced_text = markdown[markdown_range.clone()].to_string();
         markdown.replace_range(markdown_range.clone(), new_text);
 
-        let next_title = InlineTextTree::from_markdown_with_link_references(
+        // The edit offsets address the source we just spliced. Serialization
+        // can choose different escaping/delimiters after parsing, so its offset
+        // map cannot restore the caret in that input (especially with references).
+        let parsed = InlineTextTree::parse_markdown_with_link_references(
             &markdown,
             &self.link_reference_definitions,
         );
-        let map = next_title.markdown_offset_map();
         let selected_markdown = selected_range_relative.as_ref().map(|relative| {
             markdown_range.start + relative.start..markdown_range.start + relative.end
         });
@@ -803,11 +838,12 @@ impl Block {
         };
         let selected_clean = selected_markdown
             .as_ref()
-            .map(|range| map.markdown_to_visible_range(range.clone()));
+            .map(|range| parsed.map_range(range));
         let marked_clean = marked_markdown
             .as_ref()
-            .map(|range| map.markdown_to_visible_range(range.clone()));
-        let cursor_clean = map.markdown_to_visible_offset(cursor_markdown);
+            .map(|range| parsed.map_range(range));
+        let cursor_clean = parsed.map_offset(cursor_markdown);
+        let next_title = parsed.tree;
 
         let quote_structure_edit = self.quote_depth > 0
             && (new_text.contains('\n')
@@ -1159,26 +1195,15 @@ impl Block {
     /// Expanded links and footnotes use their projected source runs; raw edit
     /// modes already share the Markdown and display coordinate space.
     pub(crate) fn current_range_to_markdown_range(&self, range: Range<usize>) -> Range<usize> {
+        let range = crate::text_offsets::normalize_utf8_range(self.display_text(), range);
         if self.uses_raw_text_editing() || self.kind().is_code_block() {
-            return crate::text_offsets::normalize_utf8_range(self.display_text(), range);
+            return range;
         }
 
-        if let Some(link_run) = self.projected_link_run_fully_covering_range(&range) {
-            let map = self.record.title.markdown_offset_map();
-            let label_markdown_start = map.visible_to_markdown_offset(link_run.clean_range.start);
-            let run_markdown_start =
-                label_markdown_start.saturating_sub(link_run.link.open_marker().len());
-            let start = run_markdown_start
-                + range
-                    .start
-                    .saturating_sub(link_run.display_range.start)
-                    .min(link_run.display_range.len());
-            let end = run_markdown_start
-                + range
-                    .end
-                    .saturating_sub(link_run.display_range.start)
-                    .min(link_run.display_range.len());
-            return start..end;
+        if let Some(projection) = &self.projection
+            && let Some(link_run) = projection.link_run_fully_covering_range(&range)
+        {
+            return projection.link_range_to_markdown(&self.record.title, link_run, range);
         }
 
         if let Some(footnote_run) = self
@@ -1395,6 +1420,28 @@ impl Block {
         mark_inserted_text: bool,
         cx: &mut Context<Self>,
     ) {
+        let label_end = link_run.target_display_range.start
+            - link_run.link.middle_marker().map(str::len).unwrap_or(0);
+        if visible_range.end <= label_end {
+            let canonical = InlineTextTree::from_fragments(
+                self.record.title.fragments
+                    [link_run.start_fragment_index..link_run.end_fragment_index]
+                    .to_vec(),
+            )
+            .serialize_markdown();
+            if self.display_text().get(link_run.display_range.clone()) != Some(canonical.as_str()) {
+                // Hidden emphasis and escaping still belong to the label's
+                // source. Re-parsing just the display would discard them.
+                self.apply_markdown_space_title_edit(
+                    visible_range,
+                    new_text,
+                    selected_range_relative,
+                    mark_inserted_text,
+                    cx,
+                );
+                return;
+            }
+        }
         let local_visible_range = visible_range.start - link_run.display_range.start
             ..visible_range.end - link_run.display_range.start;
         let local_display_text = self.display_text()[link_run.display_range.clone()].to_string();
@@ -2041,7 +2088,7 @@ impl Block {
     }
 
     /// Returns the stored or measured x position for vertical caret movement.
-    pub(super) fn vertical_anchor_x(&self) -> Pixels {
+    pub(crate) fn vertical_anchor_x(&self) -> Pixels {
         self.vertical_motion_x
             .or_else(|| {
                 self.current_line_layout_and_offset()
@@ -2067,25 +2114,32 @@ impl Block {
         preferred_x: Pixels,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(lines) = self.last_layout.as_ref() else {
+        let Some(offset) = self.vertical_cursor_target(direction, preferred_x) else {
             return false;
         };
+        self.move_to_with_preferred_x(offset, Some(preferred_x), cx);
+        true
+    }
+
+    /// Finds the adjacent visual row without collapsing an existing selection.
+    pub(crate) fn vertical_cursor_target(
+        &self,
+        direction: i32,
+        preferred_x: Pixels,
+    ) -> Option<usize> {
+        let lines = self.last_layout.as_ref()?;
 
         let text = self.display_text();
         let ranges = super::element::hard_line_ranges(text);
         let (current_line_idx, offset_in_line) =
             super::element::line_index_for_offset(&ranges, self.cursor_offset());
-        let Some(current_layout) = lines.get(current_line_idx) else {
-            return false;
-        };
-        let Some(current_position) = super::element::position_for_offset(
+        let current_layout = lines.get(current_line_idx)?;
+        let current_position = super::element::position_for_offset(
             current_layout,
             offset_in_line,
             self.last_line_height,
             true,
-        ) else {
-            return false;
-        };
+        )?;
 
         let current_y =
             super::element::wrapped_line_top(lines, self.last_line_height, current_line_idx)
@@ -2096,21 +2150,18 @@ impl Block {
             current_y + self.last_line_height + self.last_line_height / 2.0
         };
         if target_y < px(0.0) {
-            return false;
+            return None;
         }
 
         let total_height = lines.iter().fold(px(0.0), |height, line| {
             height + super::element::wrapped_line_height(line, self.last_line_height)
         });
         if target_y >= total_height {
-            return false;
+            return None;
         }
 
-        let Some((target_line_idx, target_y_in_line)) =
-            super::element::wrapped_line_for_y(lines, self.last_line_height, target_y)
-        else {
-            return false;
-        };
+        let (target_line_idx, target_y_in_line) =
+            super::element::wrapped_line_for_y(lines, self.last_line_height, target_y)?;
         let target_layout = &lines[target_line_idx];
         let target_point = point(preferred_x, target_y_in_line);
         let target_offset_in_line =
@@ -2118,9 +2169,10 @@ impl Block {
                 Ok(idx) | Err(idx) => idx,
             };
 
-        let flat_offset = ranges[target_line_idx].start + target_offset_in_line;
-        self.move_to_with_preferred_x(flat_offset, Some(preferred_x), cx);
-        true
+        Some(crate::text_offsets::floor_char_boundary(
+            text,
+            ranges.get(target_line_idx)?.start + target_offset_in_line,
+        ))
     }
 
     /// Compute the character offset where the cursor should land when focus
@@ -2175,19 +2227,24 @@ impl Block {
         cx.notify();
     }
 
-    /// Starts a 33 ms cursor repaint loop while blink opacity is animating.
-    /// During the first 0.5 s after an epoch reset, opacity stays at 1.0 and
-    /// the timer skips unnecessary repaints.
-    ///
-    /// The blink task is automatically cancelled when the block loses focus
-    /// (the task handle is dropped in [`Block::render`]).
+    /// Repaints only at half-second caret visibility transitions. Typing resets
+    /// the epoch and keeps the caret visible without a continuous animation.
+    /// The render path drops the task when focus or window activation is lost.
     pub(super) fn start_cursor_blink(&mut self, cx: &mut Context<Self>) {
         self.cursor_blink_epoch = Instant::now();
         self.cursor_blink_task = Some(cx.spawn(
             async |this: WeakEntity<Block>, cx: &mut AsyncApp| loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(33))
-                    .await;
+                let Ok(delay) = this.update(cx, |this, _| {
+                    let interval = Duration::from_millis(500);
+                    interval
+                        - Duration::from_nanos(
+                            (this.cursor_blink_epoch.elapsed().as_nanos() % interval.as_nanos())
+                                as u64,
+                        )
+                }) else {
+                    break;
+                };
+                cx.background_executor().timer(delay).await;
                 if this
                     .update(cx, |this: &mut Block, cx: &mut Context<Block>| {
                         if this.cursor_blink_epoch.elapsed().as_secs_f32() >= 0.5 {
@@ -2202,14 +2259,13 @@ impl Block {
         ));
     }
 
-    /// Cosine blink opacity: fully opaque for 0.5 s, then a 1 s period.
+    /// A half-second visible/hidden caret cycle, reset by typing or movement.
     pub fn cursor_opacity(&self) -> f32 {
-        let elapsed = self.cursor_blink_epoch.elapsed().as_secs_f32();
-        if elapsed < 0.5 {
-            return 1.0;
+        if (self.cursor_blink_epoch.elapsed().as_millis() / 500).is_multiple_of(2) {
+            1.0
+        } else {
+            0.0
         }
-        let t = elapsed - 0.5;
-        (f32::cos(t * std::f32::consts::TAU) + 1.0) / 2.0
     }
 
     /// Returns the active selection endpoint as a display UTF-8 byte offset.

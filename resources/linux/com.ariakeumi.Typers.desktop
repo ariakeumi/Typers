@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
-Name=Velotype
+Name=Typers
 Comment=Native Markdown editor built with Rust and GPUI
 Exec=velotype %F
-Icon=com.manyougz.Velotype
+Icon=com.ariakeumi.Typers
 Terminal=false
 Categories=Office;TextEditor;Utility;
 MimeType=text/markdown;text/x-markdown;
 StartupNotify=false
-StartupWMClass=com.manyougz.Velotype
+StartupWMClass=com.ariakeumi.Typers

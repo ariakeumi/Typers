@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use super::{VelotypeConfigDirs, read_recent_files};
 use crate::components::single_line_input::{InputChanged, SingleLineInput, SingleLineOverflow};
 use crate::components::{
-    ShortcutCategory, ShortcutCommand, ShortcutDefinition, install_keybindings,
+    CloseWindow, ShortcutCategory, ShortcutCommand, ShortcutDefinition, install_keybindings,
     normalize_shortcut_config, normalize_shortcut_keys, resolved_shortcut_keys,
     shortcut_conflict_for, shortcut_definitions, switch::Switch,
 };
@@ -26,8 +26,8 @@ use crate::window_chrome::{
     custom_titlebar_height, render_custom_titlebar, velotype_window_options,
 };
 
-/// Built-in dark theme used when a configured theme is absent or unavailable.
-const DEFAULT_THEME_ID: &str = "velotype";
+/// The paper theme is the default writing environment.
+const DEFAULT_THEME_ID: &str = "velotype-light";
 /// Language fallback for ordinary preference reads without locale detection.
 const DEFAULT_LANGUAGE_ID: &str = "en-US";
 
@@ -844,6 +844,61 @@ enum PreferencesNav {
     StatusBar,
 }
 
+impl PreferencesNav {
+    const ALL: [Self; 6] = [
+        Self::File,
+        Self::Theme,
+        Self::Image,
+        Self::Shortcuts,
+        Self::StatusBar,
+        Self::Settings,
+    ];
+
+    fn label(self, strings: &I18nStrings) -> &str {
+        match self {
+            Self::Settings => &strings.preferences_nav_settings,
+            Self::File => &strings.preferences_nav_file,
+            Self::Theme => &strings.preferences_nav_theme,
+            Self::Image => &strings.preferences_nav_image,
+            Self::Shortcuts => &strings.preferences_nav_shortcuts,
+            Self::StatusBar => &strings.preferences_nav_status_bar,
+        }
+    }
+
+    fn icon(self) -> &'static str {
+        match self {
+            Self::Settings => "icon/preferences/general.svg",
+            Self::File => "icon/preferences/file.svg",
+            Self::Theme => "icon/preferences/appearance.svg",
+            Self::Image => "icon/preferences/image.svg",
+            Self::Shortcuts => "icon/preferences/keyboard.svg",
+            Self::StatusBar => "icon/preferences/status-bar.svg",
+        }
+    }
+}
+
+/// Quiet, neutral surfaces derived from the active theme for the settings window.
+struct PreferencesStyle {
+    background: Hsla,
+    sidebar: Hsla,
+    selected: Hsla,
+    hover: Hsla,
+    border: Hsla,
+}
+
+impl PreferencesStyle {
+    fn new(theme: &Theme) -> Self {
+        let c = &theme.colors;
+        Self {
+            background: c.dialog_surface.blend(c.dialog_body.opacity(0.025)),
+            sidebar: c.dialog_surface.blend(c.dialog_body.opacity(0.045)),
+            selected: c.dialog_body.opacity(0.12),
+            hover: c.dialog_body.opacity(0.06),
+            border: c.dialog_body.opacity(0.14),
+        }
+    }
+}
+
 /// Non-uploading connectivity check for the configured local PicGo Server.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PicGoStatus {
@@ -869,6 +924,9 @@ fn font_uses_system_default(fonts: &FontPreferences, catalog: &FontCatalog) -> [
 pub(crate) struct PreferencesWindow {
     /// Active page in the navigation pane.
     nav: PreferencesNav,
+    /// Localized settings search; never persisted with the preference draft.
+    search_input: Entity<SingleLineInput>,
+    search_query: String,
     /// Draft startup document policy.
     startup_open: StartupOpenPreference,
     /// Draft theme selection.
@@ -1010,19 +1068,48 @@ impl PreferencesWindow {
         let body_font_input = cx.new(|cx| {
             SingleLineInput::new(fonts.body_stack.clone(), "e.g. .SystemUIFont", cx)
                 .with_overflow(SingleLineOverflow::Ellipsis)
+                .compact()
         });
         let code_font_input = cx.new(|cx| {
             SingleLineInput::new(fonts.code_stack.clone(), "e.g. Consolas, monospace", cx)
                 .with_overflow(SingleLineOverflow::Ellipsis)
+                .compact()
         });
         let ui_font_input = cx.new(|cx| {
             SingleLineInput::new(fonts.ui_stack.clone(), "e.g. .SystemUIFont", cx)
                 .with_overflow(SingleLineOverflow::Ellipsis)
+                .compact()
         });
         let picgo_server_input = cx.new(|cx| {
             SingleLineInput::new(picgo_server_url.clone(), DEFAULT_PICGO_SERVER_URL, cx)
                 .with_overflow(SingleLineOverflow::Ellipsis)
+                .compact()
         });
+        let search_placeholder = cx
+            .global::<I18nManager>()
+            .strings()
+            .preferences_search_placeholder
+            .clone();
+        let search_input = cx.new(|cx| SingleLineInput::new("", search_placeholder, cx).compact());
+        cx.subscribe(&search_input, |this, input, _: &InputChanged, cx| {
+            this.search_query = input.read(cx).value().trim().to_lowercase();
+            this.dismiss_page_controls();
+            let strings = cx.global::<I18nManager>().strings();
+            if !this.page_matches(this.nav, strings)
+                && let Some(nav) = PreferencesNav::ALL
+                    .into_iter()
+                    .find(|&nav| this.page_matches(nav, strings))
+            {
+                this.nav = nav;
+                if nav == PreferencesNav::Image
+                    && this.image_paste_behavior == ImagePasteBehavior::UsePicGo
+                {
+                    this.check_picgo_server(cx);
+                }
+            }
+            cx.notify();
+        })
+        .detach();
         cx.subscribe(&picgo_server_input, |this, input, _: &InputChanged, cx| {
             this.picgo_server_url = input.read(cx).value().to_string();
             if this.image_paste_behavior == ImagePasteBehavior::UsePicGo {
@@ -1051,6 +1138,8 @@ impl PreferencesWindow {
         .detach();
         Self {
             nav: PreferencesNav::Settings,
+            search_input,
+            search_query: String::new(),
             startup_open,
             selected_theme_id: selected_theme_id.clone(),
             image_paste_behavior,
@@ -1135,13 +1224,13 @@ impl PreferencesWindow {
         .unwrap_or(false);
     }
 
-    /// Looks up the draft theme's display name, falling back to `Velotype`.
+    /// Looks up the draft theme's display name, falling back to `Typers`.
     fn selected_theme_name(&self) -> String {
         self.theme_options
             .iter()
             .find(|entry| entry.id == self.selected_theme_id)
             .map(|entry| entry.name.clone())
-            .unwrap_or_else(|| "Velotype".into())
+            .unwrap_or_else(|| "Typers".into())
     }
 
     /// Compares draft values with saved baselines, normalizing shortcut overrides.
@@ -1368,6 +1457,11 @@ impl PreferencesWindow {
         window.remove_window();
     }
 
+    /// Handles the configured close shortcut in this window, including focused inputs.
+    fn on_close_window(&mut self, _: &CloseWindow, window: &mut Window, _: &mut Context<Self>) {
+        window.remove_window();
+    }
+
     /// Closes without saving when the custom titlebar receives a standard click.
     fn on_titlebar_close(
         &mut self,
@@ -1481,50 +1575,132 @@ impl PreferencesWindow {
         cx.notify();
     }
 
-    /// Builds a navigation button with selected-page styling and a click listener.
+    /// Closes transient controls when navigating or searching without changing the draft.
+    fn dismiss_page_controls(&mut self) {
+        self.startup_dropdown_open = false;
+        self.theme_dropdown_open = false;
+        self.image_dropdown_open = false;
+        self.recording_shortcut = None;
+        self.shortcut_error = None;
+    }
+
+    /// Matches both category names and the localized options contained in each category.
+    fn page_matches(&self, nav: PreferencesNav, strings: &I18nStrings) -> bool {
+        if self.search_query.is_empty() {
+            return true;
+        }
+        let fields: &[&str] = match nav {
+            PreferencesNav::Settings => &[
+                &strings.preferences_updates_title,
+                &strings.preferences_updates_auto_download,
+                &strings.preferences_updates_auto_download_hint,
+                &strings.preferences_file_associations,
+                &strings.preferences_associate_formats,
+            ],
+            PreferencesNav::File => &[
+                &strings.preferences_startup_option,
+                &strings.preferences_startup_new_file,
+                &strings.preferences_startup_last_opened_file,
+            ],
+            PreferencesNav::Theme => &[
+                &strings.preferences_local_theme,
+                &strings.preferences_fonts_title,
+                &strings.preferences_font_body,
+                &strings.preferences_font_code,
+                &strings.preferences_font_ui,
+            ],
+            PreferencesNav::Image => &[
+                &strings.preferences_image_insert_behavior,
+                &strings.preferences_image_paste_none,
+                &strings.preferences_image_paste_copy_to_document_folder,
+                &strings.preferences_image_paste_copy_to_assets_folder,
+                &strings.preferences_image_paste_copy_to_named_assets_folder,
+                &strings.preferences_image_paste_picgo,
+                &strings.preferences_picgo_server_url,
+            ],
+            PreferencesNav::StatusBar => &[
+                &strings.preferences_status_bar_enabled,
+                &strings.preferences_status_bar_items_title,
+                &strings.preferences_status_bar_show_word_count,
+                &strings.preferences_status_bar_show_cursor_position,
+                &strings.preferences_status_bar_show_sidebar_toggle,
+                &strings.preferences_status_bar_show_mode_switch,
+            ],
+            PreferencesNav::Shortcuts => &[],
+        };
+        nav.label(strings)
+            .to_lowercase()
+            .contains(&self.search_query)
+            || fields
+                .iter()
+                .any(|field| field.to_lowercase().contains(&self.search_query))
+            || (nav == PreferencesNav::Theme
+                && self
+                    .theme_options
+                    .iter()
+                    .any(|theme| theme.name.to_lowercase().contains(&self.search_query)))
+            || (nav == PreferencesNav::Shortcuts
+                && shortcut_definitions().iter().any(|definition| {
+                    Self::shortcut_command_label(definition.command, strings)
+                        .to_lowercase()
+                        .contains(&self.search_query)
+                        || Self::shortcut_category_label(definition.category, strings)
+                            .to_lowercase()
+                            .contains(&self.search_query)
+                }))
+    }
+
+    /// Builds a left-aligned icon navigation row with a quiet selected surface.
     fn nav_button(
         &self,
-        id: &'static str,
-        label: String,
-        selected: bool,
+        nav: PreferencesNav,
         theme: &Theme,
-        on_click: fn(&mut Self, &ClickEvent, &mut Window, &mut Context<Self>),
+        strings: &I18nStrings,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let c = &theme.colors;
-        let d = &theme.dimensions;
-        let t = &theme.typography;
+        let style = PreferencesStyle::new(theme);
+        let selected = self.nav == nav;
         div()
-            .h(px(34.0))
-            .w(px(156.0))
+            .id(("preferences-nav", nav as usize))
+            .h(px(36.0))
+            .w_full()
             .px(px(12.0))
             .flex()
             .items_center()
-            .justify_end()
-            .rounded(px(d.menu_item_radius))
+            .gap(px(11.0))
+            .rounded(px(6.0))
             .cursor_pointer()
-            .text_size(px(t.dialog_body_size))
-            .font_weight(t.dialog_button_weight.to_font_weight())
-            .text_color(if selected {
-                c.dialog_primary_button_text
-            } else {
-                c.dialog_body
-            })
-            .bg(if selected {
-                c.dialog_primary_button_bg
-            } else {
-                c.dialog_secondary_button_bg
-            })
-            .hover(move |this| {
-                this.bg(if selected {
-                    c.dialog_primary_button_hover
+            .text_size(px(14.0))
+            .text_color(theme.colors.dialog_body)
+            .when(selected, |row| row.bg(style.selected))
+            .hover(move |row| {
+                row.bg(if selected {
+                    style.selected
                 } else {
-                    c.dialog_secondary_button_hover
+                    style.hover
                 })
             })
-            .id(id)
-            .child(label)
-            .on_click(cx.listener(on_click))
+            .child(
+                svg()
+                    .path(nav.icon())
+                    .size(px(18.0))
+                    .flex_shrink_0()
+                    .text_color(
+                        theme
+                            .colors
+                            .dialog_body
+                            .opacity(if selected { 0.9 } else { 0.6 }),
+                    ),
+            )
+            .child(nav.label(strings).to_string())
+            .on_click(cx.listener(move |this, event, window, cx| match nav {
+                PreferencesNav::Settings => this.set_nav_settings(event, window, cx),
+                PreferencesNav::File => this.set_nav_file(event, window, cx),
+                PreferencesNav::Theme => this.set_nav_theme(event, window, cx),
+                PreferencesNav::Image => this.set_nav_image(event, window, cx),
+                PreferencesNav::Shortcuts => this.set_nav_shortcuts(event, window, cx),
+                PreferencesNav::StatusBar => this.set_nav_status_bar(event, window, cx),
+            }))
     }
 
     /// Builds the current-value button that opens a preferences dropdown.
@@ -1535,32 +1711,38 @@ impl PreferencesWindow {
         on_click: fn(&mut Self, &ClickEvent, &mut Window, &mut Context<Self>),
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let c = &theme.colors;
-        let d = &theme.dimensions;
-        let t = &theme.typography;
+        let style = PreferencesStyle::new(theme);
         div()
+            .id(id)
             .w_full()
             .min_w(px(0.0))
-            .min_h(px(36.0))
-            .px(px(12.0))
+            .h(px(32.0))
+            .px(px(10.0))
             .flex()
             .items_center()
             .justify_between()
-            .rounded(px(d.menu_item_radius))
-            .border(px(d.dialog_border_width))
-            .border_color(c.dialog_border)
-            .bg(c.dialog_secondary_button_bg)
-            .hover(|this| this.bg(c.dialog_secondary_button_hover))
+            .gap(px(8.0))
+            .rounded(px(5.0))
+            .border(px(1.0))
+            .border_color(style.border)
+            .bg(theme.colors.dialog_surface)
+            .hover(move |this| this.bg(style.hover))
             .cursor_pointer()
-            .text_size(px(t.dialog_body_size))
-            .text_color(c.dialog_body)
-            .id(id)
-            .child(label)
-            .child("v")
+            .text_size(px(14.0))
+            .text_color(theme.colors.dialog_body)
+            .child(div().min_w(px(0.0)).truncate().child(label))
+            .child(
+                svg()
+                    .path("icon/preferences/chevrons.svg")
+                    .size(px(14.0))
+                    .text_color(theme.colors.dialog_body)
+                    .flex_shrink_0(),
+            )
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(on_click))
     }
 
-    /// Builds a selectable dropdown row with current-selection highlighting.
+    /// Builds a selectable dropdown row with a checkmark for the current value.
     fn dropdown_item(
         id: impl Into<ElementId>,
         label: String,
@@ -1569,51 +1751,132 @@ impl PreferencesWindow {
         on_click: impl Fn(&mut Self, &ClickEvent, &mut Window, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let c = &theme.colors;
-        let d = &theme.dimensions;
-        let t = &theme.typography;
+        let style = PreferencesStyle::new(theme);
         div()
+            .id(id)
             .w_full()
             .min_w(px(0.0))
             .min_h(px(30.0))
-            .px(px(12.0))
+            .px(px(8.0))
+            .py(px(5.0))
             .flex()
             .items_center()
-            .rounded(px(d.menu_item_radius))
+            .gap(px(8.0))
+            .rounded(px(4.0))
             .cursor_pointer()
-            .bg(if selected {
-                c.selection
-            } else {
-                c.dialog_surface
-            })
-            .hover(|this| this.bg(c.dialog_secondary_button_hover))
-            .text_size(px(t.dialog_body_size))
-            .text_color(c.dialog_body)
-            .id(id)
-            .child(label)
+            .when(selected, |this| this.bg(style.selected))
+            .hover(move |this| this.bg(style.hover))
+            .text_size(px(13.0))
+            .text_color(theme.colors.dialog_body)
+            .child(
+                div()
+                    .w(px(14.0))
+                    .flex_shrink_0()
+                    .child(if selected { "✓" } else { "" }),
+            )
+            .child(div().min_w(px(0.0)).child(label))
             .on_click(cx.listener(on_click))
     }
 
-    /// Stacks a field label above its full-width control.
+    /// Paints options over the page instead of shifting the fields below them.
+    fn dropdown_menu(list: Div, theme: &Theme) -> impl IntoElement {
+        deferred(
+            div()
+                .id("preferences-dropdown-menu")
+                .absolute()
+                .top(px(36.0))
+                .left_0()
+                .w_full()
+                .p(px(4.0))
+                .rounded(px(7.0))
+                .border(px(1.0))
+                .border_color(PreferencesStyle::new(theme).border)
+                .bg(theme.colors.dialog_surface)
+                .shadow_md()
+                .occlude()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    list.id("preferences-dropdown-options")
+                        .max_h(px(220.0))
+                        .overflow_y_scroll(),
+                ),
+        )
+    }
+
+    /// Typora-style section: a small heading with an inset, full-width control.
     fn labeled_row(&self, label: &str, control: impl IntoElement, theme: &Theme) -> Div {
-        let c = &theme.colors;
-        let t = &theme.typography;
         div()
             .w_full()
             .min_w(px(0.0))
+            .flex_shrink_0()
             .flex()
             .flex_col()
-            .gap(px(8.0))
+            .gap(px(10.0))
+            .child(Self::section_heading(label, theme))
+            .child(div().w_full().min_w(px(0.0)).pl(px(16.0)).child(control))
+    }
+
+    fn section_heading(label: &str, theme: &Theme) -> Div {
+        div()
+            .text_size(px(14.0))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(theme.colors.dialog_title)
+            .child(label.to_string())
+    }
+
+    /// A whole-row checkbox target keeps compact boolean settings easy to click.
+    fn checkbox_row(
+        id: &'static str,
+        label: &str,
+        checked: bool,
+        enabled: bool,
+        theme: &Theme,
+        on_click: fn(&mut Self, &ClickEvent, &mut Window, &mut Context<Self>),
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let c = &theme.colors;
+        div()
+            .id(id)
+            .w_full()
+            .min_h(px(30.0))
+            .flex()
+            .items_center()
+            .gap(px(9.0))
+            .text_size(px(14.0))
+            .text_color(if enabled {
+                c.dialog_body
+            } else {
+                c.dialog_muted
+            })
+            .when(!enabled, |row| row.opacity(0.5))
             .child(
                 div()
-                    .w_full()
-                    .min_w(px(0.0))
-                    .text_size(px(t.dialog_body_size))
-                    .font_weight(t.dialog_button_weight.to_font_weight())
-                    .text_color(c.dialog_title)
-                    .child(SharedString::from(label.to_string())),
+                    .size(px(15.0))
+                    .flex_shrink_0()
+                    .rounded(px(3.0))
+                    .border(px(1.0))
+                    .border_color(if checked {
+                        c.text_link
+                    } else {
+                        c.dialog_muted.opacity(0.6)
+                    })
+                    .bg(if checked {
+                        c.text_link
+                    } else {
+                        c.dialog_surface
+                    })
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(12.0))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(c.dialog_surface)
+                    .child(if checked { "✓" } else { "" }),
             )
-            .child(div().w_full().min_w(px(0.0)).child(control))
+            .child(label.to_string())
+            .when(enabled, |row| {
+                row.cursor_pointer().on_click(cx.listener(on_click))
+            })
     }
 
     /// Renders the draft startup document policy dropdown.
@@ -1630,11 +1893,12 @@ impl PreferencesWindow {
             }
         };
         let mut dropdown = div()
+            .relative()
             .w_full()
             .min_w(px(0.0))
             .flex()
             .flex_col()
-            .gap(px(4.0))
+            .h(px(32.0))
             .child(Self::dropdown_button(
                 "preferences-startup-dropdown",
                 selected,
@@ -1645,7 +1909,10 @@ impl PreferencesWindow {
         if self.startup_dropdown_open {
             let new_file_label = strings.preferences_startup_new_file.clone();
             let last_file_label = strings.preferences_startup_last_opened_file.clone();
-            dropdown = dropdown
+            let list = div()
+                .w_full()
+                .flex()
+                .flex_col()
                 .child(Self::dropdown_item(
                     "preferences-startup-new-file",
                     new_file_label,
@@ -1670,6 +1937,7 @@ impl PreferencesWindow {
                     },
                     cx,
                 ));
+            dropdown = dropdown.child(Self::dropdown_menu(list, theme));
         }
         self.labeled_row(&strings.preferences_startup_option, dropdown, theme)
     }
@@ -1682,11 +1950,12 @@ impl PreferencesWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let mut dropdown = div()
+            .relative()
             .w_full()
             .min_w(px(0.0))
             .flex()
             .flex_col()
-            .gap(px(4.0))
+            .h(px(32.0))
             .child(Self::dropdown_button(
                 "preferences-theme-dropdown",
                 self.selected_theme_name(),
@@ -1695,13 +1964,7 @@ impl PreferencesWindow {
                 cx,
             ));
         if self.theme_dropdown_open {
-            let mut list = div()
-                .id("preferences-theme-dropdown-list")
-                .w_full()
-                .min_w(px(0.0))
-                .flex()
-                .flex_col()
-                .gap(px(4.0));
+            let mut list = div().w_full().min_w(px(0.0)).flex().flex_col().gap(px(4.0));
 
             for (index, entry) in self.theme_options.clone().into_iter().enumerate() {
                 let selected = entry.id == self.selected_theme_id;
@@ -1718,86 +1981,75 @@ impl PreferencesWindow {
                     cx,
                 ));
             }
-            dropdown = dropdown.child(list);
+            dropdown = dropdown.child(Self::dropdown_menu(list, theme));
         }
         let c = &theme.colors;
-        let t = &theme.typography;
         let font_error = self.font_validation_error(strings);
-        let warning = |uses_system_default: bool| {
-            if !uses_system_default {
-                div().into_any_element()
-            } else {
+        let mut fields = div().w_full().flex().flex_col().gap(px(14.0));
+        for (index, label, input) in [
+            (0, &strings.preferences_font_body, &self.body_font_input),
+            (1, &strings.preferences_font_code, &self.code_font_input),
+            (2, &strings.preferences_font_ui, &self.ui_font_input),
+        ] {
+            fields = fields.child(
                 div()
                     .w_full()
-                    .min_w(px(0.0))
-                    .text_size(px((t.dialog_body_size - 2.).max(10.)))
-                    .text_color(c.callout_warning_border)
-                    .child(strings.preferences_font_unavailable_template.clone())
-                    .into_any_element()
-            }
-        };
-        let fields = div()
-            .w_full()
-            .min_w(px(0.0))
-            .flex()
-            .flex_col()
-            .gap(px(10.))
-            .child(self.labeled_row(
-                &strings.preferences_font_body,
-                self.body_font_input.clone(),
-                theme,
-            ))
-            .child(warning(
-                font_error.is_none() && self.font_uses_system_default[0],
-            ))
-            .child(self.labeled_row(
-                &strings.preferences_font_code,
-                self.code_font_input.clone(),
-                theme,
-            ))
-            .child(warning(
-                font_error.is_none() && self.font_uses_system_default[1],
-            ))
-            .child(self.labeled_row(
-                &strings.preferences_font_ui,
-                self.ui_font_input.clone(),
-                theme,
-            ))
-            .child(warning(
-                font_error.is_none() && self.font_uses_system_default[2],
-            ))
-            .when_some(font_error, |this, error| {
-                this.child(
+                    .flex_shrink_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(5.0))
+                    .child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .gap(px(12.0))
+                            .child(
+                                div()
+                                    .w(px(98.0))
+                                    .flex_shrink_0()
+                                    .text_size(px(13.0))
+                                    .child(label.clone()),
+                            )
+                            .child(div().flex_1().min_w(px(0.0)).child(input.clone())),
+                    )
+                    .when(
+                        font_error.is_none() && self.font_uses_system_default[index],
+                        |row| {
+                            row.child(
+                                div()
+                                    .pl(px(110.0))
+                                    .text_size(px(12.0))
+                                    .text_color(c.callout_warning_border)
+                                    .child(strings.preferences_font_unavailable_template.clone()),
+                            )
+                        },
+                    ),
+            );
+        }
+        fields = fields
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(c.dialog_muted)
+                    .child(strings.preferences_font_help.clone()),
+            )
+            .when_some(font_error, |fields, error| {
+                fields.child(
                     div()
-                        .w_full()
-                        .min_w(px(0.0))
-                        .text_size(px(t.dialog_body_size))
+                        .text_size(px(12.0))
                         .text_color(c.dialog_danger_button_bg)
                         .child(error),
                 )
             });
         div()
-            .id("preferences-theme-scroll")
             .w_full()
-            .h_full()
-            .flex_1()
-            .min_h(px(0.0))
             .min_w(px(0.0))
-            .overflow_y_scroll()
             .flex()
             .flex_col()
-            .gap(px(18.))
-            .pr(px(4.0))
+            .gap(px(28.0))
             .child(self.labeled_row(&strings.preferences_local_theme, dropdown, theme))
-            .child(
-                div()
-                    .w_full()
-                    .min_w(px(0.0))
-                    .text_size(px((t.dialog_body_size - 2.).max(10.)))
-                    .text_color(c.dialog_muted)
-                    .child(strings.preferences_font_help.clone()),
-            )
-            .child(fields)
+            .child(self.labeled_row(&strings.preferences_fonts_title, fields, theme))
     }
 
     /// Resolves the localized label for an image storage policy.
@@ -1835,11 +2087,12 @@ impl PreferencesWindow {
             ImagePasteBehavior::UsePicGo,
         ];
         let mut dropdown = div()
+            .relative()
             .w_full()
             .min_w(px(0.0))
             .flex()
             .flex_col()
-            .gap(px(4.0))
+            .h(px(32.0))
             .child(Self::dropdown_button(
                 "preferences-image-dropdown",
                 Self::image_paste_behavior_label(self.image_paste_behavior, strings),
@@ -1848,10 +2101,11 @@ impl PreferencesWindow {
                 cx,
             ));
         if self.image_dropdown_open {
+            let mut list = div().w_full().flex().flex_col();
             for (index, behavior) in options.into_iter().enumerate() {
                 let selected = behavior == self.image_paste_behavior;
                 let label = Self::image_paste_behavior_label(behavior, strings);
-                dropdown = dropdown.child(Self::dropdown_item(
+                list = list.child(Self::dropdown_item(
                     ("preferences-image-option", index),
                     label,
                     selected,
@@ -1870,12 +2124,13 @@ impl PreferencesWindow {
                     cx,
                 ));
             }
+            dropdown = dropdown.child(Self::dropdown_menu(list, theme));
         }
         let mut content = div()
             .w_full()
             .flex()
             .flex_col()
-            .gap(px(14.0))
+            .gap(px(28.0))
             .child(self.labeled_row(&strings.preferences_image_insert_behavior, dropdown, theme));
         if self.image_paste_behavior == ImagePasteBehavior::UsePicGo {
             let status = match self.picgo_status {
@@ -1892,7 +2147,8 @@ impl PreferencesWindow {
                 ))
                 .child(
                     div()
-                        .text_size(px(theme.typography.dialog_body_size))
+                        .pl(px(16.0))
+                        .text_size(px(12.0))
                         .text_color(theme.colors.dialog_muted)
                         .child(status.clone()),
                 );
@@ -1946,6 +2202,8 @@ impl PreferencesWindow {
             ShortcutCommand::JumpToBottom => strings.preferences_shortcut_jump_to_bottom.clone(),
             ShortcutCommand::SelectLeft => strings.preferences_shortcut_select_left.clone(),
             ShortcutCommand::SelectRight => strings.preferences_shortcut_select_right.clone(),
+            ShortcutCommand::SelectUp => strings.preferences_shortcut_select_up.clone(),
+            ShortcutCommand::SelectDown => strings.preferences_shortcut_select_down.clone(),
             ShortcutCommand::WordSelectLeft => {
                 strings.preferences_shortcut_word_select_left.clone()
             }
@@ -1977,6 +2235,7 @@ impl PreferencesWindow {
             }
             ShortcutCommand::NewWindow => strings.preferences_shortcut_new_window.clone(),
             ShortcutCommand::OpenFile => strings.preferences_shortcut_open_file.clone(),
+            ShortcutCommand::OpenPreferences => strings.menu_preferences.clone(),
             ShortcutCommand::QuitApplication => {
                 strings.preferences_shortcut_quit_application.clone()
             }
@@ -2037,10 +2296,18 @@ impl PreferencesWindow {
     fn capture_shortcut_key(
         &mut self,
         event: &KeyDownEvent,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(command) = self.recording_shortcut else {
+            let key = event.keystroke.unparse();
+            if key == "escape" {
+                self.dismiss_page_controls();
+                cx.notify();
+            } else if matches!(key.as_str(), "cmd-f" | "ctrl-f") {
+                self.search_input.focus_handle(cx).focus(window, cx);
+                cx.stop_propagation();
+            }
             return;
         };
         cx.stop_propagation();
@@ -2160,8 +2427,6 @@ impl PreferencesWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let c = &theme.colors;
-        let d = &theme.dimensions;
-        let t = &theme.typography;
         let is_recording = self.recording_shortcut == Some(definition.command);
         let keys = resolved_shortcut_keys(&self.keybindings, definition.command);
         let label = Self::shortcut_command_label(definition.command, strings);
@@ -2181,23 +2446,25 @@ impl PreferencesWindow {
 
         div()
             .w_full()
-            .min_h(px(42.0))
-            .px(px(10.0))
+            .min_h(px(38.0))
+            .flex_shrink_0()
+            .px(px(0.0))
             .py(px(6.0))
             .flex()
             .items_center()
             .justify_between()
             .gap(px(12.0))
-            .rounded(px(d.menu_item_radius))
-            .bg(c.dialog_surface)
+            .border_b(px(1.0))
+            .border_color(PreferencesStyle::new(theme).border.opacity(0.5))
             .child(
                 div()
-                    .min_w(px(144.0))
-                    .text_size(px(t.dialog_body_size))
+                    .w(px(144.0))
+                    .flex_shrink_0()
+                    .text_size(px(13.0))
                     .text_color(c.dialog_body)
                     .child(label),
             )
-            .child(div().flex_1().child(chips))
+            .child(div().flex_1().min_w(px(0.0)).child(chips))
             .child(
                 div()
                     .flex()
@@ -2231,18 +2498,12 @@ impl PreferencesWindow {
         cx: &mut Context<Self>,
     ) -> Div {
         let c = &theme.colors;
-        let d = &theme.dimensions;
-        let t = &theme.typography;
-        let mut content = div()
-            .id("preferences-shortcuts-scroll")
-            .w_full()
-            .flex_1()
-            .min_h(px(0.0))
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .gap(px(18.0))
-            .pr(px(4.0));
+        let mut content = div().w_full().flex().flex_col().gap(px(24.0));
+        let all_commands = self.search_query.is_empty()
+            || strings
+                .preferences_nav_shortcuts
+                .to_lowercase()
+                .contains(&self.search_query);
 
         let categories = [
             ShortcutCategory::File,
@@ -2254,51 +2515,46 @@ impl PreferencesWindow {
         ];
 
         for category in categories {
-            let mut group = div().w_full().flex().flex_col().gap(px(8.0)).child(
-                div()
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .gap(px(10.0))
-                    .child(
-                        div()
-                            .text_size(px(t.dialog_body_size))
-                            .font_weight(t.dialog_button_weight.to_font_weight())
-                            .text_color(c.dialog_title)
-                            .child(Self::shortcut_category_label(category, strings)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .h(px(d.dialog_border_width.max(1.0)))
-                            .bg(c.dialog_border),
-                    ),
-            );
-            for definition in shortcut_definitions()
+            let definitions = shortcut_definitions()
                 .iter()
                 .copied()
                 .filter(|definition| definition.category == category)
-            {
+                .filter(|definition| {
+                    all_commands
+                        || Self::shortcut_command_label(definition.command, strings)
+                            .to_lowercase()
+                            .contains(&self.search_query)
+                        || Self::shortcut_category_label(category, strings)
+                            .to_lowercase()
+                            .contains(&self.search_query)
+                })
+                .collect::<Vec<_>>();
+            if definitions.is_empty() {
+                continue;
+            }
+            let mut group = div()
+                .w_full()
+                .flex_shrink_0()
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .child(Self::section_heading(
+                    &Self::shortcut_category_label(category, strings),
+                    theme,
+                ));
+            for definition in definitions {
                 group = group.child(self.render_shortcut_row(definition, theme, strings, cx));
             }
             content = content.child(group);
         }
 
-        let mut page = div()
-            .w_full()
-            .h_full()
-            .flex_1()
-            .min_h(px(0.0))
-            .flex()
-            .flex_col()
-            .items_center()
-            .gap(px(8.0));
+        let mut page = div().w_full().flex().flex_col().gap(px(8.0));
         if let Some(error) = &self.shortcut_error {
             page = page.child(
                 div()
                     .w_full()
                     .flex_shrink_0()
-                    .text_size(px(t.dialog_body_size))
+                    .text_size(px(13.0))
                     .text_color(c.dialog_danger_button_bg)
                     .child(error.clone()),
             );
@@ -2306,473 +2562,396 @@ impl PreferencesWindow {
         page.child(content)
     }
 
-    /// Uses the existing controlled switch for the opt-in download setting.
+    /// Groups general settings into compact, top-aligned sections.
     fn render_settings_page(
         &self,
         theme: &Theme,
-        strings: &crate::i18n::I18nStrings,
+        strings: &I18nStrings,
         cx: &mut Context<Self>,
     ) -> Div {
+        let enabled = self.file_associations.can_associate();
+        let status = match &self.file_associations {
+            FileAssociationStatus::Checking | FileAssociationStatus::Associating => {
+                Some(strings.preferences_file_associations_checking.clone())
+            }
+            FileAssociationStatus::Associated => {
+                Some(strings.preferences_file_associations_associated.clone())
+            }
+            FileAssociationStatus::NeedsConfirmation => {
+                Some(strings.preferences_file_associations_pending.clone())
+            }
+            FileAssociationStatus::Failed(error) => Some(error.clone()),
+            FileAssociationStatus::NotAssociated => None,
+        };
+        let association = div()
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(px(8.0))
+            .child(
+                div()
+                    .id("preferences-associate-formats")
+                    .h(px(28.0))
+                    .px(px(12.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(5.0))
+                    .border(px(1.0))
+                    .border_color(PreferencesStyle::new(theme).border)
+                    .bg(theme.colors.dialog_surface)
+                    .text_size(px(13.0))
+                    .text_color(if enabled {
+                        theme.colors.dialog_body
+                    } else {
+                        theme.colors.dialog_muted
+                    })
+                    .when(enabled, |button| {
+                        button
+                            .cursor_pointer()
+                            .hover(|style| style.bg(theme.colors.dialog_secondary_button_hover))
+                            .on_click(cx.listener(Self::associate_file_formats))
+                    })
+                    .child(strings.preferences_associate_formats.clone()),
+            )
+            .children(status.map(|message| {
+                div()
+                    .text_size(px(12.0))
+                    .text_color(theme.colors.dialog_muted)
+                    .child(message)
+            }));
         div()
             .w_full()
             .flex()
             .flex_col()
-            .gap(px(12.0))
+            .gap(px(28.0))
             .child(
-                div()
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .gap(px(16.0))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .text_size(px(theme.typography.dialog_body_size))
-                            .text_color(theme.colors.dialog_body)
-                            .child(strings.preferences_updates_auto_download.clone()),
-                    )
-                    .child(
-                        Switch::new("preferences-auto-download-updates")
-                            .checked(self.auto_download_updates)
-                            .on_click(cx.listener(|this, _, _, cx| {
+                self.labeled_row(
+                    &strings.preferences_updates_title,
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.0))
+                        .child(Self::checkbox_row(
+                            "preferences-auto-download-updates",
+                            &strings.preferences_updates_auto_download,
+                            self.auto_download_updates,
+                            true,
+                            theme,
+                            |this, _, _, cx| {
                                 this.auto_download_updates = !this.auto_download_updates;
                                 cx.notify();
-                            })),
-                    ),
+                            },
+                            cx,
+                        ))
+                        .child(
+                            div()
+                                .pl(px(24.0))
+                                .text_size(px(12.0))
+                                .text_color(theme.colors.dialog_muted)
+                                .child(strings.preferences_updates_auto_download_hint.clone()),
+                        ),
+                    theme,
+                ),
             )
-            .child(
-                div()
-                    .text_size(px(theme.typography.dialog_body_size))
-                    .text_color(theme.colors.dialog_muted)
-                    .child(strings.preferences_updates_auto_download_hint.clone()),
-            )
-            .child({
-                let enabled = self.file_associations.can_associate();
-                div()
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .gap(px(16.0))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .text_size(px(theme.typography.dialog_body_size))
-                            .text_color(theme.colors.dialog_body)
-                            .child(strings.preferences_file_associations.clone()),
-                    )
-                    .child(
-                        div()
-                            .id("preferences-associate-formats")
-                            .h(px(theme.dimensions.dialog_button_height))
-                            .px(px(theme.dimensions.dialog_button_padding_x))
-                            .flex_shrink_0()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px((theme.dimensions.dialog_radius - 4.0).max(0.0)))
-                            .border(px(theme.dimensions.dialog_border_width))
-                            .border_color(theme.colors.dialog_border)
-                            .bg(theme.colors.dialog_secondary_button_bg)
-                            .text_size(px(theme.typography.dialog_button_size))
-                            .font_weight(theme.typography.dialog_button_weight.to_font_weight())
-                            .text_color(if enabled {
-                                theme.colors.dialog_secondary_button_text
-                            } else {
-                                theme.colors.dialog_muted
-                            })
-                            .when(enabled, |button| {
-                                button
-                                    .cursor_pointer()
-                                    .hover(|style| {
-                                        style.bg(theme.colors.dialog_secondary_button_hover)
-                                    })
-                                    .on_click(cx.listener(Self::associate_file_formats))
-                            })
-                            .child(strings.preferences_associate_formats.clone()),
-                    )
-            })
-            .children(
-                match &self.file_associations {
-                    FileAssociationStatus::Checking | FileAssociationStatus::Associating => {
-                        Some(strings.preferences_file_associations_checking.clone())
-                    }
-                    FileAssociationStatus::Associated => {
-                        Some(strings.preferences_file_associations_associated.clone())
-                    }
-                    FileAssociationStatus::NeedsConfirmation => {
-                        Some(strings.preferences_file_associations_pending.clone())
-                    }
-                    FileAssociationStatus::Failed(error) => Some(error.clone()),
-                    FileAssociationStatus::NotAssociated => None,
-                }
-                .map(|message| {
-                    div()
-                        .text_size(px(theme.typography.dialog_body_size))
-                        .text_color(theme.colors.dialog_muted)
-                        .child(message)
-                }),
-            )
+            .child(self.labeled_row(&strings.preferences_file_associations, association, theme))
     }
 
-    /// Renders the draft status bar and built-in item visibility switches.
+    /// Keeps subordinate visibility choices intact while the entire bar is hidden.
     fn render_status_bar_page(
         &self,
         theme: &Theme,
-        strings: &crate::i18n::I18nStrings,
+        strings: &I18nStrings,
         cx: &mut Context<Self>,
     ) -> Div {
-        let c = &theme.colors;
-        let t = &theme.typography;
-
-        let switch_row = |label: &str,
-                          checked: bool,
-                          on_click: fn(&mut Self, &ClickEvent, &mut Window, &mut Context<Self>),
-                          cx: &mut Context<Self>| {
-            div()
-                .w(px(280.0))
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .text_size(px(t.dialog_body_size))
-                        .text_color(c.dialog_body)
-                        .child(SharedString::from(label.to_string())),
-                )
-                .child(
-                    Switch::new(ElementId::Name(
-                        format!("preferences-toggle-{}", label).into(),
-                    ))
-                    .checked(checked)
-                    .on_click(cx.listener(on_click)),
-                )
-        };
-
         let items = div()
+            .w_full()
             .flex()
             .flex_col()
-            .gap(px(12.0))
-            .child(switch_row(
-                &strings.preferences_status_bar_enabled,
-                self.status_bar_enabled,
-                |this, _, _, cx| {
-                    this.status_bar_enabled = !this.status_bar_enabled;
-                    cx.notify();
-                },
-                cx,
-            ))
-            .child(switch_row(
+            .gap(px(4.0))
+            .child(Self::checkbox_row(
+                "preferences-status-word-count",
                 &strings.preferences_status_bar_show_word_count,
                 self.status_bar_show_word_count,
+                self.status_bar_enabled,
+                theme,
                 |this, _, _, cx| {
                     this.status_bar_show_word_count = !this.status_bar_show_word_count;
                     cx.notify();
                 },
                 cx,
             ))
-            .child(switch_row(
+            .child(Self::checkbox_row(
+                "preferences-status-cursor",
                 &strings.preferences_status_bar_show_cursor_position,
                 self.status_bar_show_cursor_position,
+                self.status_bar_enabled,
+                theme,
                 |this, _, _, cx| {
                     this.status_bar_show_cursor_position = !this.status_bar_show_cursor_position;
                     cx.notify();
                 },
                 cx,
             ))
-            .child(switch_row(
+            .child(Self::checkbox_row(
+                "preferences-status-sidebar",
                 &strings.preferences_status_bar_show_sidebar_toggle,
                 self.status_bar_show_sidebar_toggle,
+                self.status_bar_enabled,
+                theme,
                 |this, _, _, cx| {
                     this.status_bar_show_sidebar_toggle = !this.status_bar_show_sidebar_toggle;
                     cx.notify();
                 },
                 cx,
             ))
-            .child(switch_row(
+            .child(Self::checkbox_row(
+                "preferences-status-mode",
                 &strings.preferences_status_bar_show_mode_switch,
                 self.status_bar_show_mode_switch,
+                self.status_bar_enabled,
+                theme,
                 |this, _, _, cx| {
                     this.status_bar_show_mode_switch = !this.status_bar_show_mode_switch;
                     cx.notify();
                 },
                 cx,
             ));
-
         div()
             .w_full()
-            .flex_1()
-            .min_h(px(0.0))
             .flex()
-            .items_center()
-            .justify_center()
-            .child(items)
+            .flex_col()
+            .gap(px(24.0))
+            .child(
+                div()
+                    .w_full()
+                    .h(px(32.0))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(Self::section_heading(
+                        &strings.preferences_status_bar_enabled,
+                        theme,
+                    ))
+                    .child(
+                        Switch::new("preferences-status-enabled")
+                            .checked(self.status_bar_enabled)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.status_bar_enabled = !this.status_bar_enabled;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(self.labeled_row(&strings.preferences_status_bar_items_title, items, theme))
     }
 }
 
 impl Render for PreferencesWindow {
-    /// Renders navigation, the active page, and draft-aware save/cancel controls.
+    /// Renders a searchable sidebar, one scrolling page, and a fixed draft-action footer.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.global::<ThemeManager>().current().clone();
         let strings = cx.global::<I18nManager>().strings().clone();
         let c = &theme.colors;
-        let d = &theme.dimensions;
-        let t = &theme.typography;
+        let style = PreferencesStyle::new(&theme);
         let can_save = self.has_unsaved_changes();
         let window_title =
-            SharedString::from(format!("Velotype - {}", strings.preferences_window_title));
+            SharedString::from(format!("Typers - {}", strings.preferences_window_title));
         window.set_window_title(window_title.as_ref());
-        let titlebar_height = custom_titlebar_height(window, d);
-
+        let titlebar_height = custom_titlebar_height(window, &theme.dimensions);
+        let pages = PreferencesNav::ALL
+            .into_iter()
+            .filter(|&nav| self.page_matches(nav, &strings))
+            .collect::<Vec<_>>();
+        let mut navigation = div().w_full().flex().flex_col().gap(px(3.0));
+        for nav in pages.iter().copied() {
+            navigation = navigation.child(self.nav_button(nav, &theme, &strings, cx));
+        }
+        let page = if pages.is_empty() {
+            div()
+                .w_full()
+                .py(px(48.0))
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .text_size(px(14.0))
+                .text_color(c.dialog_muted)
+                .child(strings.preferences_search_empty.clone())
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .child(self.search_input.read(cx).value().to_string()),
+                )
+                .into_any_element()
+        } else {
+            match self.nav {
+                PreferencesNav::Settings => self
+                    .render_settings_page(&theme, &strings, cx)
+                    .into_any_element(),
+                PreferencesNav::File => self
+                    .render_startup_page(&theme, &strings, cx)
+                    .into_any_element(),
+                PreferencesNav::Theme => self
+                    .render_theme_page(&theme, &strings, cx)
+                    .into_any_element(),
+                PreferencesNav::Image => self
+                    .render_image_page(&theme, &strings, cx)
+                    .into_any_element(),
+                PreferencesNav::Shortcuts => self
+                    .render_shortcuts_page(&theme, &strings, cx)
+                    .into_any_element(),
+                PreferencesNav::StatusBar => self
+                    .render_status_bar_page(&theme, &strings, cx)
+                    .into_any_element(),
+            }
+        };
         let content = div()
             .size_full()
             .pt(px(titlebar_height))
             .flex()
             .key_context("Preferences")
             .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::on_close_window))
             .on_key_down(cx.listener(Self::capture_shortcut_key))
-            .bg(c.editor_background)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.startup_dropdown_open
+                        || this.theme_dropdown_open
+                        || this.image_dropdown_open
+                    {
+                        this.startup_dropdown_open = false;
+                        this.theme_dropdown_open = false;
+                        this.image_dropdown_open = false;
+                        cx.notify();
+                    }
+                }),
+            )
+            .bg(style.background)
             .text_color(c.dialog_body)
             .font(FontSettings::ui_font(cx))
             .child(
                 div()
-                    .w(relative(0.3))
+                    .w(px(190.0))
                     .h_full()
-                    .pr(px(20.0))
+                    .flex_shrink_0()
+                    .px(px(12.0))
+                    .pt(px(12.0))
                     .flex()
-                    .items_center()
-                    .justify_end()
-                    .border_r(px(d.dialog_border_width))
-                    .border_color(c.dialog_border)
+                    .flex_col()
+                    .gap(px(20.0))
+                    .bg(style.sidebar)
+                    .border_r(px(1.0))
+                    .border_color(style.border)
+                    .child(self.search_input.clone())
                     .child(
                         div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(8.0))
-                            .child(self.nav_button(
-                                "preferences-nav-settings",
-                                strings.preferences_nav_settings.clone(),
-                                self.nav == PreferencesNav::Settings,
-                                &theme,
-                                Self::set_nav_settings,
-                                cx,
-                            ))
-                            .child(self.nav_button(
-                                "preferences-nav-file",
-                                strings.preferences_nav_file.clone(),
-                                self.nav == PreferencesNav::File,
-                                &theme,
-                                Self::set_nav_file,
-                                cx,
-                            ))
-                            .child(self.nav_button(
-                                "preferences-nav-theme",
-                                strings.preferences_nav_theme.clone(),
-                                self.nav == PreferencesNav::Theme,
-                                &theme,
-                                Self::set_nav_theme,
-                                cx,
-                            ))
-                            .child(self.nav_button(
-                                "preferences-nav-image",
-                                strings.preferences_nav_image.clone(),
-                                self.nav == PreferencesNav::Image,
-                                &theme,
-                                Self::set_nav_image,
-                                cx,
-                            ))
-                            .child(self.nav_button(
-                                "preferences-nav-shortcuts",
-                                strings.preferences_nav_shortcuts.clone(),
-                                self.nav == PreferencesNav::Shortcuts,
-                                &theme,
-                                Self::set_nav_shortcuts,
-                                cx,
-                            ))
-                            .child(self.nav_button(
-                                "preferences-nav-status-bar",
-                                strings.preferences_nav_status_bar.clone(),
-                                self.nav == PreferencesNav::StatusBar,
-                                &theme,
-                                Self::set_nav_status_bar,
-                                cx,
-                            )),
+                            .id("preferences-navigation-scroll")
+                            .flex_1()
+                            .min_h(px(0.0))
+                            .overflow_y_scroll()
+                            .child(navigation),
                     ),
             )
             .child(
                 div()
-                    .w(relative(0.7))
+                    .flex_1()
+                    .min_w(px(0.0))
                     .h_full()
-                    .p(px(d.dialog_padding))
                     .flex()
                     .flex_col()
-                    .gap(px(d.dialog_gap))
                     .child(
                         div()
+                            .id(("preferences-page", self.nav as usize))
                             .w_full()
                             .flex_1()
                             .min_h(px(0.0))
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .gap(px(d.dialog_gap * 1.5))
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .text_size(px(t.dialog_title_size))
-                                    .font_weight(t.dialog_title_weight.to_font_weight())
-                                    .text_color(c.dialog_title)
-                                    .child(match self.nav {
-                                        PreferencesNav::Settings => {
-                                            strings.preferences_nav_settings.clone()
-                                        }
-                                        PreferencesNav::File => {
-                                            strings.preferences_nav_file.clone()
-                                        }
-                                        PreferencesNav::Theme => {
-                                            strings.preferences_nav_theme.clone()
-                                        }
-                                        PreferencesNav::Image => {
-                                            strings.preferences_nav_image.clone()
-                                        }
-                                        PreferencesNav::Shortcuts => {
-                                            strings.preferences_nav_shortcuts.clone()
-                                        }
-                                        PreferencesNav::StatusBar => {
-                                            strings.preferences_nav_status_bar.clone()
-                                        }
-                                    }),
-                            )
-                            .child(match self.nav {
-                                PreferencesNav::Settings => div()
-                                    .id("preferences-settings-scroll")
-                                    .w_full()
-                                    .flex_1()
-                                    .min_h(px(0.0))
-                                    .overflow_y_scroll()
-                                    .child(self.render_settings_page(&theme, &strings, cx))
-                                    .into_any_element(),
-                                PreferencesNav::File => div()
-                                    .id("preferences-file-scroll")
-                                    .w_full()
-                                    .h_full()
-                                    .flex_1()
-                                    .min_h(px(0.0))
-                                    .min_w(px(0.0))
-                                    .overflow_y_scroll()
-                                    .pr(px(4.0))
-                                    .child(self.render_startup_page(&theme, &strings, cx))
-                                    .into_any_element(),
-                                PreferencesNav::Theme => div()
-                                    .w_full()
-                                    .flex_1()
-                                    .min_h(px(0.0))
-                                    .child(self.render_theme_page(&theme, &strings, cx))
-                                    .into_any_element(),
-                                PreferencesNav::Image => div()
-                                    .id("preferences-image-scroll")
-                                    .w_full()
-                                    .h_full()
-                                    .flex_1()
-                                    .min_h(px(0.0))
-                                    .min_w(px(0.0))
-                                    .overflow_y_scroll()
-                                    .pr(px(4.0))
-                                    .child(self.render_image_page(&theme, &strings, cx))
-                                    .into_any_element(),
-                                PreferencesNav::Shortcuts => div()
-                                    .w_full()
-                                    .flex_1()
-                                    .min_h(px(0.0))
-                                    .child(self.render_shortcuts_page(&theme, &strings, cx))
-                                    .into_any_element(),
-                                PreferencesNav::StatusBar => div()
-                                    .w_full()
-                                    .flex_1()
-                                    .min_h(px(0.0))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(self.render_status_bar_page(&theme, &strings, cx))
-                                    .into_any_element(),
-                            }),
+                            .overflow_y_scroll()
+                            .px(px(28.0))
+                            .pt(px(14.0))
+                            .pb(px(28.0))
+                            .child(page),
                     )
                     .child(
                         div()
                             .w_full()
+                            .h(px(62.0))
                             .flex_shrink_0()
+                            .px(px(28.0))
                             .flex()
+                            .items_center()
                             .justify_end()
-                            .gap(px(d.dialog_button_gap))
+                            .gap(px(8.0))
+                            .border_t(px(1.0))
+                            .border_color(style.border)
                             .child(
                                 div()
                                     .id("preferences-cancel")
-                                    .h(px(d.dialog_button_height))
-                                    .px(px(d.dialog_button_padding_x))
+                                    .min_w(px(72.0))
+                                    .h(px(28.0))
+                                    .px(px(14.0))
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .rounded(px((d.dialog_radius - 4.0).max(0.0)))
-                                    .border(px(d.dialog_border_width))
-                                    .border_color(c.dialog_border)
-                                    .bg(c.dialog_secondary_button_bg)
-                                    .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                                    .rounded(px(5.0))
+                                    .border(px(1.0))
+                                    .border_color(style.border)
+                                    .bg(c.dialog_surface)
+                                    .hover(move |this| this.bg(style.hover))
                                     .cursor_pointer()
-                                    .text_size(px(t.dialog_button_size))
-                                    .font_weight(t.dialog_button_weight.to_font_weight())
-                                    .text_color(c.dialog_secondary_button_text)
+                                    .text_size(px(13.0))
+                                    .text_color(c.dialog_body)
                                     .child(strings.preferences_cancel.clone())
                                     .on_click(cx.listener(Self::cancel)),
                             )
                             .child(
                                 div()
                                     .id("preferences-save")
-                                    .h(px(d.dialog_button_height))
-                                    .px(px(d.dialog_button_padding_x))
+                                    .min_w(px(72.0))
+                                    .h(px(28.0))
+                                    .px(px(14.0))
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .rounded(px((d.dialog_radius - 4.0).max(0.0)))
-                                    .border(px(if can_save { 0.0 } else { d.dialog_border_width }))
-                                    .border_color(c.dialog_border)
+                                    .rounded(px(5.0))
+                                    .border(px(1.0))
+                                    .border_color(if can_save {
+                                        c.dialog_primary_button_bg
+                                    } else {
+                                        style.border
+                                    })
                                     .bg(if can_save {
                                         c.dialog_primary_button_bg
                                     } else {
-                                        c.dialog_secondary_button_bg
+                                        c.dialog_surface
                                     })
-                                    .hover(move |this| {
-                                        if can_save {
-                                            this.bg(c.dialog_primary_button_hover)
-                                        } else {
-                                            this.bg(c.dialog_secondary_button_bg)
-                                        }
-                                    })
-                                    .when(can_save, |this| this.cursor_pointer())
-                                    .text_size(px(t.dialog_button_size))
-                                    .font_weight(t.dialog_button_weight.to_font_weight())
                                     .text_color(if can_save {
                                         c.dialog_primary_button_text
                                     } else {
-                                        c.dialog_secondary_button_text
+                                        c.dialog_muted
                                     })
+                                    .when(can_save, |button| {
+                                        button
+                                            .cursor_pointer()
+                                            .hover(|this| this.bg(c.dialog_primary_button_hover))
+                                    })
+                                    .text_size(px(13.0))
                                     .child(strings.preferences_save.clone())
                                     .on_click(cx.listener(Self::save)),
                             ),
                     ),
             );
-
         let root = div()
             .size_full()
             .relative()
-            .bg(c.editor_background)
+            .bg(style.background)
             .font(FontSettings::ui_font(cx))
             .child(content);
-
+        let mut chrome_theme = theme.clone();
+        chrome_theme.colors.dialog_surface = style.background;
         if let Some(titlebar) = render_custom_titlebar(
             "preferences-titlebar",
             window_title,
-            &theme,
+            &chrome_theme,
             window,
             cx,
             Self::on_titlebar_close,
@@ -2792,11 +2971,14 @@ fn open_preferences_window_with_state(
     theme_options: Vec<ThemeCatalogEntry>,
     title: String,
 ) -> WindowHandle<PreferencesWindow> {
-    let bounds = Bounds::centered(None, size(px(720.0), px(480.0)), cx);
-    let window_title = SharedString::from(format!("Velotype - {title}"));
+    let bounds = Bounds::centered(None, size(px(820.0), px(580.0)), cx);
+    let window_title = SharedString::from(format!("Typers - {title}"));
     let handle = cx
         .open_window(
-            velotype_window_options(window_title, bounds),
+            WindowOptions {
+                window_min_size: Some(size(px(720.0), px(480.0))),
+                ..velotype_window_options(window_title, bounds)
+            },
             move |_window, cx| {
                 cx.new(move |cx| PreferencesWindow::new(preferences, theme_options, cx))
             },
@@ -2852,7 +3034,7 @@ mod tests {
     use crate::fonts::FontPreferences;
     use crate::i18n::I18nManager;
     use crate::theme::{ThemeCatalogEntry, ThemeManager};
-    use gpui::TestAppContext;
+    use gpui::{AppContext, Focusable, TestAppContext};
     use std::collections::BTreeMap;
 
     fn init_preferences_test_app(cx: &mut TestAppContext) {
@@ -2867,7 +3049,7 @@ mod tests {
     fn default_theme_options() -> Vec<ThemeCatalogEntry> {
         vec![ThemeCatalogEntry {
             id: "velotype".into(),
-            name: "Velotype".into(),
+            name: "Typers".into(),
         }]
     }
 
@@ -3226,6 +3408,77 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    async fn preferences_close_shortcut_closes_only_settings(cx: &mut TestAppContext) {
+        init_preferences_test_app(cx);
+        cx.update(crate::app_menu::init);
+        let editor = cx.update(|cx| {
+            crate::app_menu::open_editor_window(cx, "keep this document open".into(), None)
+        });
+
+        for focus_search in [false, true] {
+            let settings = cx.update(|cx| {
+                open_preferences_window_with_state(
+                    cx,
+                    AppPreferences::default(),
+                    default_theme_options(),
+                    "Preferences".into(),
+                )
+            });
+            settings
+                .update(cx, |preferences, window, cx| {
+                    if focus_search {
+                        preferences.search_input.focus_handle(cx).focus(window, cx);
+                    }
+                })
+                .unwrap();
+            cx.update_window(settings.into(), |_, window, cx| window.draw(cx).clear(cx))
+                .unwrap();
+            cx.run_until_parked();
+
+            cx.simulate_keystrokes(settings.into(), "cmd-w");
+            cx.run_until_parked();
+
+            let remaining = cx.update(|cx| cx.windows());
+            assert_eq!(remaining.len(), 1);
+            assert_eq!(remaining[0].window_id(), editor.window_id());
+        }
+    }
+
+    #[gpui::test]
+    async fn preferences_custom_close_shortcut_closes_only_settings(cx: &mut TestAppContext) {
+        init_preferences_test_app(cx);
+        cx.update(crate::app_menu::init);
+        let editor = cx.update(|cx| {
+            crate::app_menu::open_editor_window(cx, "keep this document open".into(), None)
+        });
+        cx.update(|cx| {
+            crate::components::install_keybindings(
+                cx,
+                &BTreeMap::from([("close_window".into(), vec!["ctrl-alt-w".into()])]),
+            );
+        });
+        let settings = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.update_window(settings.into(), |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap();
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes(settings.into(), "ctrl-alt-w");
+        cx.run_until_parked();
+
+        let remaining = cx.update(|cx| cx.windows());
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].window_id(), editor.window_id());
+    }
+
     #[cfg(target_os = "windows")]
     #[gpui::test]
     async fn preferences_file_association_check_completes_in_background(cx: &mut TestAppContext) {
@@ -3305,6 +3558,117 @@ mod tests {
                 assert!(preferences.has_unsaved_changes());
             })
             .expect("preferences window should be updateable");
+    }
+
+    #[gpui::test]
+    async fn settings_search_finds_options_and_clears_transient_controls(cx: &mut TestAppContext) {
+        init_preferences_test_app(cx);
+        let handle = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        let input = handle
+            .update(cx, |preferences, _, _| {
+                preferences.startup_dropdown_open = true;
+                preferences.recording_shortcut =
+                    Some(crate::components::ShortcutCommand::SaveDocument);
+                preferences.search_input.clone()
+            })
+            .unwrap();
+        input.update(cx, |input, cx| input.set_value("  FONT  ", cx));
+        cx.run_until_parked();
+        handle
+            .update(cx, |preferences, _, cx| {
+                let strings = cx.global::<I18nManager>().strings();
+                assert_eq!(preferences.nav, super::PreferencesNav::Theme);
+                assert!(preferences.page_matches(super::PreferencesNav::Theme, strings));
+                assert!(!preferences.page_matches(super::PreferencesNav::File, strings));
+                assert!(!preferences.startup_dropdown_open);
+                assert!(preferences.recording_shortcut.is_none());
+                assert!(!preferences.has_unsaved_changes());
+            })
+            .unwrap();
+
+        input.update(cx, |input, cx| input.set_value("SAVE DOCUMENT", cx));
+        cx.run_until_parked();
+        handle
+            .update(cx, |preferences, _, _| {
+                assert_eq!(preferences.nav, super::PreferencesNav::Shortcuts);
+                assert!(!preferences.has_unsaved_changes());
+            })
+            .unwrap();
+
+        input.update(cx, |input, cx| input.set_value("source code", cx));
+        cx.run_until_parked();
+        handle
+            .update(cx, |preferences, _, cx| {
+                let strings = cx.global::<I18nManager>().strings();
+                assert_eq!(preferences.nav, super::PreferencesNav::Shortcuts);
+                assert_eq!(
+                    super::PreferencesWindow::shortcut_command_label(
+                        crate::components::ShortcutCommand::ToggleViewMode,
+                        strings
+                    ),
+                    "Toggle Source Code Mode"
+                );
+            })
+            .unwrap();
+
+        input.update(cx, |input, cx| input.set_value("no such setting", cx));
+        cx.run_until_parked();
+        handle
+            .update(cx, |preferences, _, cx| {
+                let strings = cx.global::<I18nManager>().strings();
+                assert!(
+                    super::PreferencesNav::ALL
+                        .into_iter()
+                        .all(|nav| !preferences.page_matches(nav, strings))
+                );
+            })
+            .unwrap();
+
+        input.update(cx, |input, cx| input.set_value("", cx));
+        cx.run_until_parked();
+        handle
+            .update(cx, |preferences, _, cx| {
+                let strings = cx.global::<I18nManager>().strings();
+                assert!(
+                    super::PreferencesNav::ALL
+                        .into_iter()
+                        .all(|nav| preferences.page_matches(nav, strings))
+                );
+                assert!(!preferences.has_unsaved_changes());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    async fn settings_search_uses_localized_labels(cx: &mut TestAppContext) {
+        init_preferences_test_app(cx);
+        cx.update(|cx| I18nManager::init_with_language_id(cx, "zh-CN"));
+        let handle = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "偏好设置".into(),
+            )
+        });
+        let input = handle
+            .update(cx, |preferences, _, _| preferences.search_input.clone())
+            .unwrap();
+        input.update(cx, |input, cx| input.set_value("字体", cx));
+        cx.run_until_parked();
+        handle
+            .update(cx, |preferences, _, _| {
+                assert_eq!(preferences.nav, super::PreferencesNav::Theme);
+                assert!(!preferences.has_unsaved_changes());
+            })
+            .unwrap();
     }
 
     #[gpui::test]

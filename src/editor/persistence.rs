@@ -28,15 +28,10 @@ fn longest_marker_run(text: &str, marker: char) -> usize {
     longest
 }
 
-/// Uses triple backticks unless content requires a longer, tilde-based fence.
+/// Keeps backtick fences longer than any literal backtick run in the content.
 pub(super) fn safe_code_fence(content: &str) -> String {
     let longest_backticks = longest_marker_run(content, '`');
-    if longest_backticks < 3 {
-        return "```".to_string();
-    }
-
-    let longest_tildes = longest_marker_run(content, '~');
-    "~".repeat(longest_tildes.max(2) + 1)
+    "`".repeat(longest_backticks.max(2) + 1)
 }
 
 /// Also forces a tilde fence when the info string contains a backtick.
@@ -241,9 +236,9 @@ mod tests {
     #[test]
     fn safe_code_fence_is_longer_than_any_inner_backtick_run() {
         assert_eq!(safe_code_fence("plain code"), "```");
-        assert_eq!(safe_code_fence("```\ncode"), "~~~");
-        assert_eq!(safe_code_fence("value = `````"), "~~~");
-        assert_eq!(safe_code_fence("```\n~~~"), "~~~~");
+        assert_eq!(safe_code_fence("```\ncode"), "````");
+        assert_eq!(safe_code_fence("value = `````"), "``````");
+        assert_eq!(safe_code_fence("```\n~~~"), "````");
     }
 
     #[test]

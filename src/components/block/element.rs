@@ -1207,9 +1207,12 @@ impl Element for BlockTextElement {
                     span.range.clone(),
                     text_align,
                 ) {
+                    let glyph_height =
+                        window.text_style().font_size.to_pixels(window.rem_size()) * 1.2;
+                    let inset = ((line_height - glyph_height) * 0.5).max(px(0.0));
                     let quad_bounds = Bounds::from_corners(
-                        point(segment.left() - pad_x, segment.top() - pad_y),
-                        point(segment.right() + pad_x, segment.bottom() + pad_y),
+                        point(segment.left() - pad_x, segment.top() + inset - pad_y),
+                        point(segment.right() + pad_x, segment.bottom() - inset + pad_y),
                     );
                     code_quads.push({
                         let mut q = fill(quad_bounds, code_color);
@@ -1220,6 +1223,26 @@ impl Element for BlockTextElement {
             }
         }
 
+        for (range, current) in &input.search_highlights {
+            let range = input.markdown_range_to_current_range(range.clone());
+            let color = if *current {
+                rgba(0xffbd4fcc)
+            } else {
+                rgba(0xffe99a88)
+            };
+            for bounds in range_segment_bounds(
+                &lines,
+                text_bounds,
+                line_height,
+                input.display_text(),
+                range,
+                text_align,
+            ) {
+                code_quads.push(fill(bounds, color));
+            }
+        }
+
+        let cursor_quad = if input.read_only { None } else { cursor_quad };
         PrepaintState {
             lines,
             source_line_numbers,

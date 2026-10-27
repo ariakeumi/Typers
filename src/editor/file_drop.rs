@@ -34,6 +34,9 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.writing.read_only {
+            return;
+        }
         let Some(path) = Self::first_dropped_markdown_path(paths.paths()) else {
             let strings = cx.global::<I18nManager>().strings().clone();
             self.show_drop_open_failed_prompt(strings.drop_no_markdown_file_message, window, cx);

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Pre-uninstall script for Velotype.pkg
+# Pre-uninstall script for Typers.pkg
 # This script runs when the user removes the package
 
 set -e
@@ -7,7 +7,7 @@ set -e
 BINARY_NAME="velotype"
 CLI_LINK="/usr/local/bin/${BINARY_NAME}"
 
-echo "==> Velotype pre-uninstall script"
+echo "==> Typers pre-uninstall script"
 
 # Remove CLI symlink if it exists
 if [ -L "$CLI_LINK" ] || [ -e "$CLI_LINK" ]; then

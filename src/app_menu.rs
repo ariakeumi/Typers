@@ -1,7 +1,7 @@
 //! Native application menu, app-level actions, and window close routing.
 //!
 //! This module owns menu construction and the actions that operate on the
-//! active or explicitly targeted editor. Quit checks editor close guards in
+//! active window or explicitly targeted editor. Quit checks editor close guards in
 //! window-priority order and stops at the first unsaved-changes prompt.
 
 use std::path::{Path, PathBuf};
@@ -13,7 +13,7 @@ use crate::components::{
     AddLanguageConfig, AddThemeConfig, CheckForUpdates, CloseWindow, ExportHtml, ExportPdf,
     InstallCliTool, NewWindow, NoRecentFiles, OpenFile, OpenPreferences, OpenRecentFile,
     QuitApplication, SaveDocument, SaveDocumentAs, SelectLanguage, SelectTheme, ShowAbout,
-    ToggleWorkspace, UninstallCliTool,
+    ToggleWorkspace, UninstallCliTool, WritingAction,
 };
 use crate::config::{
     apply_configured_language, apply_configured_theme, import_language_config_and_select,
@@ -25,6 +25,9 @@ use crate::export::ExportFormat;
 use crate::i18n::I18nManager;
 use crate::theme::ThemeManager;
 use crate::window_chrome::velotype_window_options;
+
+#[cfg(target_os = "macos")]
+mod macos;
 
 /// Global app-menu state for platform menu lifecycle hooks.
 #[derive(Default)]
@@ -44,14 +47,14 @@ fn window_title(file_path: Option<&Path>) -> SharedString {
         // Display impl writes the borrowed bytes straight into the output
         // String, no intermediate allocation.
         format!(
-            "Velotype - {}",
+            "{}",
             path.file_name()
                 .map(|name| name.to_string_lossy())
                 .unwrap_or_else(|| path.to_string_lossy())
         )
         .into()
     } else {
-        SharedString::new("Velotype")
+        SharedString::new("Untitled")
     }
 }
 
@@ -64,7 +67,7 @@ pub(crate) fn open_editor_window(
     markdown: String,
     file_path: Option<PathBuf>,
 ) -> WindowHandle<Editor> {
-    let bounds = Bounds::centered(None, size(px(1080.), px(720.)), cx);
+    let bounds = Bounds::centered(None, size(px(900.), px(750.)), cx);
     let title = window_title(file_path.as_deref());
     let handle = cx
         .open_window(
@@ -195,7 +198,7 @@ do shell script "rm -f " & quoted form of linkPath & linefeed & "ln -s " & quote
                      \x1b[1mvelotype README.md\x1b[0m\n\
                      \x1b[1mvelotype file1.md file2.md\x1b[0m\n\n\
                      Location: {bin_link}\n\n\
-                     Note: If you move or delete Velotype.app,\n\
+                     Note: If you move or delete Typers.app,\n\
                      the 'velotype' command will stop working\n\
                      automatically (no cleanup needed)."
                 );
@@ -204,7 +207,7 @@ do shell script "rm -f " & quoted form of linkPath & linefeed & "ln -s " & quote
                     let _ = window.update(cx, |_view, window, cx| {
                         let _ = window.prompt(
                             PromptLevel::Info,
-                            &title,
+                            title,
                             Some(&detail),
                             &[ok.as_str()],
                             cx,
@@ -260,7 +263,7 @@ do shell script "rm -f " & quoted form of linkPath with administrator privileges
                     let _ = window.update(cx, |_view, window, cx| {
                         let _ = window.prompt(
                             PromptLevel::Info,
-                            &title,
+                            title,
                             Some(&detail),
                             &[ok.as_str()],
                             cx,
@@ -347,8 +350,17 @@ fn with_active_editor<R>(
     cx: &mut App,
     update: impl FnOnce(&mut Editor, &mut Window, &mut Context<Editor>) -> R,
 ) -> Option<R> {
-    let window = cx.active_window()?.downcast::<Editor>()?;
-    window.update(cx, update).ok()
+    // Native menus can be invoked while AppKit temporarily has no key window
+    // (for example after dismissing a panel or activating the application).
+    let window = current_window_candidates(cx)
+        .into_iter()
+        .find_map(|window| window.downcast::<Editor>())?;
+    window
+        .update(cx, |editor, window, cx| {
+            window.activate_window();
+            update(editor, window, cx)
+        })
+        .ok()
 }
 
 /// Requests an information overlay on the active editor, if there is one.
@@ -419,7 +431,8 @@ fn open_recent_file_with_error_window(
 
 /// Identifies menu commands routed with an editor target, including guarded quit.
 fn is_editor_scoped_menu_action(action: &dyn Action) -> bool {
-    action.as_any().is::<SaveDocument>()
+    action.as_any().is::<WritingAction>()
+        || action.as_any().is::<SaveDocument>()
         || action.as_any().is::<SaveDocumentAs>()
         || action.as_any().is::<ExportHtml>()
         || action.as_any().is::<ExportPdf>()
@@ -473,41 +486,42 @@ fn current_window_candidates(cx: &mut App) -> Vec<AnyWindowHandle> {
     candidates
 }
 
-/// Returns whether an editor accepted the close request, not whether it closed.
-fn request_close_editor_window(window: AnyWindowHandle, cx: &mut App) -> bool {
-    let Some(window) = window.downcast::<Editor>() else {
-        return false;
-    };
-
-    window
-        .update(cx, |editor, window, cx| {
-            editor.request_close_current_window(window, cx);
-        })
-        .is_ok()
-}
-
-/// Requests closing the first available editor; quits if no windows exist.
-fn request_close_current_editor_window(cx: &mut App) {
-    let candidates = current_window_candidates(cx);
-    if candidates.is_empty() {
+/// Closes the current window, preserving editor close guards; quits if none exist.
+fn request_close_current_window(cx: &mut App) {
+    let open_windows = cx.windows();
+    let Some(target) = current_window_candidates(cx).into_iter().find(|candidate| {
+        open_windows
+            .iter()
+            .any(|window| window.window_id() == candidate.window_id())
+    }) else {
         cx.quit();
         return;
-    }
+    };
 
-    for window in candidates {
-        if request_close_editor_window(window, cx) {
-            return;
+    // Actions may arrive while the target window is borrowed. Keep that target
+    // and wait for dispatch to release it instead of trying a background editor.
+    cx.defer(move |cx| {
+        if let Some(editor) = target.downcast::<Editor>() {
+            let _ = editor.update(cx, |editor, window, cx| {
+                editor.request_close_current_window(window, cx);
+            });
+        } else {
+            let _ = target.update(cx, |_, window, _| window.remove_window());
         }
-    }
+    });
 }
 
-/// Quits only if every available editor close guard allows it.
+/// Queues a quit check after the current action releases its window/editor.
 ///
+/// Keyboard and menu actions run inside a window update. Checking that same
+/// window synchronously fails and vetoes quit, even for a clean document.
 /// Stops at the first declined or failed guard; non-editor windows are skipped.
 pub(crate) fn request_quit_application(cx: &mut App) {
-    if editors_allow_exit_except(None, cx) {
-        cx.quit();
-    }
+    cx.defer(|cx| {
+        if editors_allow_exit_except(None, cx) {
+            cx.quit();
+        }
+    });
 }
 
 /// Checks close guards without quitting; callers check their already-borrowed window separately.
@@ -534,9 +548,7 @@ fn editors_allow_operation_except(
             continue;
         };
 
-        let should_close = window
-            .update(cx, |editor, window, cx| guard(editor, window, cx))
-            .unwrap_or(false);
+        let should_close = window.update(cx, guard).unwrap_or(false);
         if !should_close {
             return false;
         }
@@ -546,7 +558,11 @@ fn editors_allow_operation_except(
 
 /// Executes one of the app-menu actions against the current application state.
 pub(crate) fn dispatch_menu_action(action: &dyn Action, cx: &mut App) {
-    if action.as_any().is::<NewWindow>() {
+    if let Some(action) = action.as_any().downcast_ref::<WritingAction>() {
+        let _ = with_active_editor(cx, |editor, window, cx| {
+            editor.on_writing_action(action, window, cx)
+        });
+    } else if action.as_any().is::<NewWindow>() {
         open_editor_window(cx, String::new(), None);
     } else if action.as_any().is::<OpenFile>() {
         prompt_and_open_files(cx);
@@ -620,7 +636,7 @@ pub(crate) fn dispatch_menu_action(action: &dyn Action, cx: &mut App) {
     } else if action.as_any().is::<QuitApplication>() {
         request_quit_application(cx);
     } else if action.as_any().is::<CloseWindow>() {
-        request_close_current_editor_window(cx);
+        request_close_current_window(cx);
     }
 }
 
@@ -645,7 +661,11 @@ pub(crate) fn dispatch_menu_action_for_editor(
     window.activate_window();
     let current_window = Some(window.window_handle());
 
-    if action.as_any().is::<NewWindow>() {
+    if let Some(action) = action.as_any().downcast_ref::<WritingAction>() {
+        let _ = target.update(cx, |editor, cx| {
+            editor.on_writing_action(action, window, cx)
+        });
+    } else if action.as_any().is::<NewWindow>() {
         open_editor_window(cx, String::new(), None);
     } else if action.as_any().is::<OpenFile>() {
         prompt_and_open_files_with_error_window(cx, current_window);
@@ -777,7 +797,7 @@ fn build_menus(
         // match standard macOS conventions.
         vec![
             Menu {
-                name: "Velotype".into(),
+                name: "Typers".into(),
                 disabled: false,
                 items: vec![
                     MenuItem::action(strings.menu_preferences.clone(), OpenPreferences),
@@ -863,51 +883,127 @@ fn build_menus(
     ];
 
     let mut menus = initial_menus;
-    menus.extend([
-        Menu {
-            name: strings.menu_export.into(),
-            disabled: false,
-            items: vec![
-                MenuItem::action(strings.menu_export_html.clone(), ExportHtml),
-                MenuItem::action(strings.menu_export_pdf.clone(), ExportPdf),
-            ],
+    let file_index = if cfg!(target_os = "macos") { 1 } else { 0 };
+    menus[file_index].items.push(MenuItem::separator());
+    menus[file_index].items.push(MenuItem::action(
+        if i18n_manager.current_language_id().starts_with("zh") {
+            "打开文件夹…"
+        } else {
+            "Open Folder…"
         },
-        Menu {
-            name: strings.menu_language.into(),
-            disabled: false,
-            items: language_items,
+        WritingAction {
+            command: crate::components::WritingCommand::OpenFolder,
         },
-        Menu {
-            name: strings.menu_theme.into(),
-            disabled: false,
-            items: theme_items,
-        },
-        Menu {
-            name: strings.menu_workspace.into(),
-            disabled: false,
-            items: vec![MenuItem::action(
-                strings.menu_toggle_workspace.clone(),
-                ToggleWorkspace,
-            )],
-        },
-        Menu {
-            name: strings.menu_help.into(),
-            disabled: false,
-            items: help_items,
-        },
-    ]);
+    ));
+    menus[file_index].items.push(MenuItem::submenu(Menu {
+        name: strings.menu_export.into(),
+        disabled: false,
+        items: vec![
+            MenuItem::action(strings.menu_export_html.clone(), ExportHtml),
+            MenuItem::action(strings.menu_export_pdf.clone(), ExportPdf),
+        ],
+    }));
+    menus[0].items.push(MenuItem::separator());
+    menus[0].items.push(MenuItem::submenu(Menu {
+        name: strings.menu_language.into(),
+        disabled: false,
+        items: language_items,
+    }));
+    menus.extend(crate::editor::writing::writing_menus(i18n_manager));
+    menus.push(Menu {
+        name: strings.menu_theme.into(),
+        disabled: false,
+        items: theme_items,
+    });
+    menus.push(Menu {
+        name: window_menu_title(i18n_manager).into(),
+        disabled: false,
+        items: [
+            (
+                "Minimize",
+                "最小化",
+                crate::components::WritingCommand::MinimizeWindow,
+            ),
+            (
+                "Zoom",
+                "缩放窗口",
+                crate::components::WritingCommand::ZoomWindow,
+            ),
+            (
+                "Toggle Full Screen",
+                "切换全屏",
+                crate::components::WritingCommand::FullScreen,
+            ),
+        ]
+        .into_iter()
+        .map(|(en, zh, command)| {
+            MenuItem::action(
+                if i18n_manager.current_language_id().starts_with("zh") {
+                    zh
+                } else {
+                    en
+                },
+                WritingAction { command },
+            )
+        })
+        .collect(),
+    });
+    menus.extend([Menu {
+        name: strings.menu_help.into(),
+        disabled: false,
+        items: help_items,
+    }]);
     menus
+}
+
+/// Keeps native registration tied to the same localized title as menu creation.
+fn window_menu_title(i18n_manager: &I18nManager) -> &'static str {
+    if i18n_manager.current_language_id().starts_with("zh") {
+        "窗口"
+    } else {
+        "Window"
+    }
 }
 
 /// Replaces the app menu tree from the current registries and recent-file history.
 pub(crate) fn install_menus(cx: &mut App) {
     let recent_files = recent_files_for_menu();
-    let menus = build_menus(
+    let mut menus = build_menus(
         cx.global::<ThemeManager>(),
         cx.global::<I18nManager>(),
         &recent_files,
     );
+    let state = cx
+        .try_global::<crate::editor::writing::WritingMenuState>()
+        .copied()
+        .unwrap_or_default();
+    fn check_writing_items(
+        items: &mut [MenuItem],
+        state: crate::editor::writing::WritingMenuState,
+    ) {
+        for item in items {
+            match item {
+                MenuItem::Action {
+                    action, checked, ..
+                } => {
+                    if let Some(action) = action.as_any().downcast_ref::<WritingAction>() {
+                        *checked = state.checked(action.command);
+                    }
+                }
+                MenuItem::Submenu(menu) => check_writing_items(&mut menu.items, state),
+                _ => {}
+            }
+        }
+    }
+    for menu in &mut menus {
+        check_writing_items(&mut menu.items, state);
+    }
+    #[cfg(target_os = "macos")]
+    let window_menu_title = window_menu_title(cx.global::<I18nManager>());
+
     cx.set_menus(menus);
+    #[cfg(target_os = "macos")]
+    macos::register_window_menu(window_menu_title);
 }
 
 /// Prompts for documents and directs read failures to the current active window.
@@ -932,7 +1028,7 @@ fn prompt_and_open_files_with_error_window(cx: &mut App, error_window: Option<An
 
     cx.spawn(async move |cx| match prompt.await {
         Ok(Ok(Some(paths))) => {
-            let _ = cx.update(move |cx| {
+            cx.update(move |cx| {
                 for path in paths {
                     if let Err(err) = open_file_in_new_window(cx, &path) {
                         let title = cx
@@ -947,7 +1043,7 @@ fn prompt_and_open_files_with_error_window(cx: &mut App, error_window: Option<An
         }
         Ok(Err(err)) => {
             let detail = err.to_string();
-            let _ = cx.update(move |cx| {
+            cx.update(move |cx| {
                 let title = cx
                     .global::<I18nManager>()
                     .strings()
@@ -989,7 +1085,7 @@ fn prompt_and_import_language_config_with_error_window(
             let Some(path) = paths.into_iter().next() else {
                 return;
             };
-            let _ = cx.update(move |cx| {
+            cx.update(move |cx| {
                 let result = import_language_config_and_select(cx, &path);
                 match result {
                     Ok(_) => {
@@ -1009,7 +1105,7 @@ fn prompt_and_import_language_config_with_error_window(
         }
         Ok(Err(err)) => {
             let detail = err.to_string();
-            let _ = cx.update(move |cx| {
+            cx.update(move |cx| {
                 let title = cx
                     .global::<I18nManager>()
                     .strings()
@@ -1051,7 +1147,7 @@ fn prompt_and_import_theme_config_with_error_window(
             let Some(path) = paths.into_iter().next() else {
                 return;
             };
-            let _ = cx.update(move |cx| {
+            cx.update(move |cx| {
                 let result = import_theme_config_and_select(cx, &path);
                 match result {
                     Ok(_) => {
@@ -1071,7 +1167,7 @@ fn prompt_and_import_theme_config_with_error_window(
         }
         Ok(Err(err)) => {
             let detail = err.to_string();
-            let _ = cx.update(move |cx| {
+            cx.update(move |cx| {
                 let title = cx
                     .global::<I18nManager>()
                     .strings()
@@ -1143,6 +1239,9 @@ pub(crate) fn init(cx: &mut App) {
     cx.on_action(|_: &ShowAbout, cx| {
         dispatch_menu_action(&ShowAbout, cx);
     });
+    cx.on_action(|action: &WritingAction, cx| {
+        dispatch_menu_action(action, cx);
+    });
     cx.on_action(|_: &ToggleWorkspace, cx| {
         dispatch_menu_action(&ToggleWorkspace, cx);
     });
@@ -1159,6 +1258,28 @@ pub(crate) fn init(cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
+    #[gpui::test]
+    async fn native_writing_menu_routes_to_an_existing_editor(cx: &mut gpui::TestAppContext) {
+        use crate::components::{WritingAction, WritingCommand};
+        use crate::editor::{Editor, ViewMode};
+        cx.update(|cx| {
+            crate::i18n::I18nManager::init_with_language_id(cx, "en-US");
+            crate::theme::ThemeManager::init_with_theme_id(cx, "velotype-light");
+        });
+        let (editor, visual) =
+            cx.add_window_view(|_, cx| Editor::from_markdown(cx, "# Hello".into(), None));
+        visual.deactivate_window();
+        visual.cx.update(|cx| {
+            super::dispatch_menu_action(
+                &WritingAction {
+                    command: WritingCommand::SourceMode,
+                },
+                cx,
+            )
+        });
+        assert!(editor.read_with(visual, |editor, _| editor.view_mode == ViewMode::Source));
+    }
+
     use super::{applescript_string_literal, build_menus};
     use crate::components::{
         AddLanguageConfig, AddThemeConfig, CheckForUpdates, CloseWindow, ExportHtml, ExportPdf,
@@ -1188,42 +1309,33 @@ mod tests {
     fn applescript_string_literal_escapes_special_characters() {
         assert_eq!(
             applescript_string_literal(
-                r#"/Applications/Velotype "Test".app/Contents/MacOS/velotype"#
+                r#"/Applications/Typers "Test".app/Contents/MacOS/velotype"#
             ),
-            r#""/Applications/Velotype \"Test\".app/Contents/MacOS/velotype""#
+            r#""/Applications/Typers \"Test\".app/Contents/MacOS/velotype""#
         );
         assert_eq!(
-            applescript_string_literal(r#"/Applications/O'Brien\Velotype.app"#),
-            r#""/Applications/O'Brien\\Velotype.app""#
+            applescript_string_literal(r#"/Applications/O'Brien\Typers.app"#),
+            r#""/Applications/O'Brien\\Typers.app""#
         );
     }
 
-    // On macOS the menu bar is: [Velotype app menu, File, Export, Language, Theme, Workspace, Help]
-    // On other platforms:       [File, Export, Language, Theme, Workspace, Help]
     #[cfg(target_os = "macos")]
-    const EXPORT_IDX: usize = 2;
+    const THEME_IDX: usize = 6;
     #[cfg(not(target_os = "macos"))]
-    const EXPORT_IDX: usize = 1;
+    const THEME_IDX: usize = 5;
+    const HELP_IDX: usize = THEME_IDX + 2;
+    const VIEW_IDX: usize = THEME_IDX - 1;
 
-    #[cfg(target_os = "macos")]
-    const LANGUAGE_IDX: usize = 3;
-    #[cfg(not(target_os = "macos"))]
-    const LANGUAGE_IDX: usize = 2;
-
-    #[cfg(target_os = "macos")]
-    const THEME_IDX: usize = 4;
-    #[cfg(not(target_os = "macos"))]
-    const THEME_IDX: usize = 3;
-
-    #[cfg(target_os = "macos")]
-    const WORKSPACE_IDX: usize = 5;
-    #[cfg(not(target_os = "macos"))]
-    const WORKSPACE_IDX: usize = 4;
-
-    #[cfg(target_os = "macos")]
-    const HELP_IDX: usize = 6;
-    #[cfg(not(target_os = "macos"))]
-    const HELP_IDX: usize = 5;
+    fn export_menu(menus: &[gpui::Menu]) -> &gpui::Menu {
+        let file_index = if cfg!(target_os = "macos") { 1 } else { 0 };
+        menus[file_index].items.iter().find_map(|item| match item {
+            MenuItem::Submenu(menu) if menu.items.iter().any(|item| matches!(item, MenuItem::Action { action, .. } if action.as_any().is::<ExportHtml>())) => Some(menu),
+            _ => None,
+        }).expect("export submenu")
+    }
+    fn language_menu(menus: &[gpui::Menu]) -> &gpui::Menu {
+        submenu(menus[0].items.last().unwrap())
+    }
 
     #[test]
     fn build_menus_uses_english_fallback_by_default() {
@@ -1240,19 +1352,30 @@ mod tests {
         assert_eq!(
             menu_names,
             vec![
-                "Velotype",
+                "Typers",
                 "File",
-                "Export",
-                "Language",
+                "Edit",
+                "Paragraph",
+                "Format",
+                "View",
                 "Theme",
-                "Workspace",
+                "Window",
                 "Help"
             ]
         );
         #[cfg(not(target_os = "macos"))]
         assert_eq!(
             menu_names,
-            vec!["File", "Export", "Language", "Theme", "Workspace", "Help"]
+            vec![
+                "File",
+                "Edit",
+                "Paragraph",
+                "Format",
+                "View",
+                "Theme",
+                "Window",
+                "Help"
+            ]
         );
 
         // New Window belongs with file operations on macOS and remains the
@@ -1286,17 +1409,14 @@ mod tests {
         #[cfg(not(target_os = "macos"))]
         assert_eq!(action_name(&menus[0].items[4]), "Preferences");
 
-        assert_eq!(action_name(&menus[EXPORT_IDX].items[0]), "HTML");
-        assert_eq!(action_name(&menus[EXPORT_IDX].items[1]), "PDF");
-        assert_eq!(action_name(&menus[LANGUAGE_IDX].items[0]), "简体中文");
+        assert_eq!(action_name(&export_menu(&menus).items[0]), "HTML");
+        assert_eq!(action_name(&export_menu(&menus).items[1]), "PDF");
+        assert_eq!(action_name(&language_menu(&menus).items[0]), "简体中文");
         assert_eq!(
-            action_name(&menus[LANGUAGE_IDX].items[1]),
+            action_name(&language_menu(&menus).items[1]),
             "\u{2713} English"
         );
-        assert_eq!(
-            action_name(&menus[WORKSPACE_IDX].items[0]),
-            "Toggle Workspace"
-        );
+        assert_eq!(action_name(&menus[VIEW_IDX].items[7]), "Outline");
     }
 
     #[test]
@@ -1324,26 +1444,30 @@ mod tests {
         #[cfg(target_os = "macos")]
         assert_eq!(
             menu_names,
-            vec!["Velotype", "文件", "导出", "语言", "主题", "工作区", "帮助"]
+            vec![
+                "Typers", "文件", "编辑", "段落", "格式", "显示", "主题", "窗口", "帮助"
+            ]
         );
         #[cfg(not(target_os = "macos"))]
         assert_eq!(
             menu_names,
-            vec!["文件", "导出", "语言", "主题", "工作区", "帮助"]
+            vec![
+                "文件", "编辑", "段落", "格式", "显示", "主题", "窗口", "帮助"
+            ]
         );
 
         #[cfg(target_os = "macos")]
         assert_eq!(action_name(&menus[1].items[0]), "新建窗口");
         #[cfg(not(target_os = "macos"))]
         assert_eq!(action_name(&menus[0].items[0]), "新建窗口");
-        assert_eq!(action_name(&menus[EXPORT_IDX].items[0]), "HTML");
-        assert_eq!(action_name(&menus[EXPORT_IDX].items[1]), "PDF");
+        assert_eq!(action_name(&export_menu(&menus).items[0]), "HTML");
+        assert_eq!(action_name(&export_menu(&menus).items[1]), "PDF");
         assert_eq!(
-            action_name(&menus[LANGUAGE_IDX].items[0]),
+            action_name(&language_menu(&menus).items[0]),
             "\u{2713} 简体中文"
         );
-        assert_eq!(action_name(&menus[LANGUAGE_IDX].items[1]), "English");
-        assert_eq!(action_name(&menus[WORKSPACE_IDX].items[0]), "切换工作区");
+        assert_eq!(action_name(&language_menu(&menus).items[1]), "English");
+        assert_eq!(action_name(&menus[VIEW_IDX].items[7]), "大纲");
     }
 
     #[test]
@@ -1352,14 +1476,14 @@ mod tests {
         let i18n_manager = I18nManager::default();
         let menus = build_menus(&theme_manager, &i18n_manager, &[]);
 
-        match &menus[EXPORT_IDX].items[0] {
+        match &export_menu(&menus).items[0] {
             MenuItem::Action { action, .. } => {
                 assert!(action.as_any().is::<ExportHtml>());
             }
             _ => panic!("expected export html action item"),
         }
 
-        match &menus[EXPORT_IDX].items[1] {
+        match &export_menu(&menus).items[1] {
             MenuItem::Action { action, .. } => {
                 assert!(action.as_any().is::<ExportPdf>());
             }
@@ -1373,7 +1497,7 @@ mod tests {
         let i18n_manager = I18nManager::default();
         let menus = build_menus(&theme_manager, &i18n_manager, &[]);
 
-        match &menus[LANGUAGE_IDX].items[0] {
+        match &language_menu(&menus).items[0] {
             MenuItem::Action { action, .. } => {
                 let action = action
                     .as_any()
@@ -1466,7 +1590,7 @@ mod tests {
         let i18n_manager = I18nManager::default();
         let menus = build_menus(&theme_manager, &i18n_manager, &[]);
 
-        let language_items = &menus[LANGUAGE_IDX].items;
+        let language_items = &language_menu(&menus).items;
         assert!(matches!(
             language_items[language_items.len() - 2],
             MenuItem::Separator
@@ -1483,8 +1607,8 @@ mod tests {
         }
 
         let theme_items = &menus[THEME_IDX].items;
-        assert_eq!(action_name(&theme_items[0]), "\u{2713} Velotype");
-        assert_eq!(action_name(&theme_items[1]), "Velotype Light");
+        assert_eq!(action_name(&theme_items[0]), "\u{2713} Night");
+        assert_eq!(action_name(&theme_items[1]), "Github");
         assert!(matches!(
             theme_items[theme_items.len() - 2],
             MenuItem::Separator
@@ -1515,8 +1639,8 @@ mod tests {
         let menus = build_menus(&theme_manager, &i18n_manager, &[]);
         let theme_items = &menus[THEME_IDX].items;
 
-        assert_eq!(action_name(&theme_items[0]), "Velotype");
-        assert_eq!(action_name(&theme_items[1]), "\u{2713} Velotype Light");
+        assert_eq!(action_name(&theme_items[0]), "Night");
+        assert_eq!(action_name(&theme_items[1]), "\u{2713} Github");
         match &theme_items[1] {
             MenuItem::Action { action, .. } => {
                 let action = action

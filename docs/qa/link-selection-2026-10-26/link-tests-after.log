@@ -1,0 +1,72 @@
+   Compiling velotype v0.7.8 (/Users/umi/Documents/typer)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.39s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/main.rs (target/debug/deps/velotype-01da506580686cb8)
+
+running 62 tests
+test components::block::render::tests::html_render_style_overrides_link_and_mark_defaults ... ok
+test components::block::render::tests::consecutive_linked_badges_share_a_row_but_blank_lines_break_it ... ok
+test components::block::runtime::tests::editing_link_anchor_in_math_block_matches_plain_paragraph ... ok
+test components::block::runtime::tests::caret_blinks_in_half_second_steps_and_resets_after_movement ... ok
+test components::block::runtime::tests::autolink_expands_with_angle_brackets_when_touched ... ok
+test components::block::element::tests::link_hit_matches_only_rendered_link_text ... ok
+test components::block::element::tests::wrapped_link_hit_matches_only_visible_segments ... ok
+test components::block::element::tests::link_hit_respects_center_alignment ... ok
+test components::block::element::tests::secondary_click_follows_link_while_plain_click_edits ... ok
+test components::block::runtime::tests::inline_link_projection_only_expands_touched_span ... ok
+test components::block::runtime::tests::editing_link_destination_inside_projection_preserves_link ... ok
+test components::block::runtime::tests::deleting_adjacent_text_preserves_autolink_syntax ... ok
+test components::block::runtime::tests::completing_link_in_math_block_places_caret_after_closing_paren ... ok
+test components::block::runtime::tests::inline_link_with_title_expands_title_but_opens_destination ... ok
+test components::block::runtime::tests::link_anchor_emphasis_delimiters_are_revealed_when_caret_inside ... ok
+test components::block::runtime::tests::inline_math_focus_stays_rendered_rich_and_keeps_links ... ok
+test components::block::runtime::tests::deleting_adjacent_text_preserves_reference_style_link_syntax ... ok
+test components::block::runtime::tests::link_projection_preserves_cursor_inside_destination_after_rebuild ... ok
+test components::block::runtime::tests::link_middle_delimiter_click_snaps_to_destination_start ... ok
+test components::block::runtime::tests::link_projection_preserves_selection_inside_destination_after_rebuild ... ok
+test components::block::runtime::tests::reversed_selection_inside_link_destination_survives_focus_refresh ... ok
+test components::block::runtime::tests::projected_reference_target_stays_link_hit_testable ... ok
+test components::block::runtime::tests::reference_style_link_hit_exposes_raw_prompt_and_resolved_open_target ... ok
+test components::block::runtime::tests::partially_expanded_link_maps_destination_and_title_exactly ... ok
+test components::block::runtime::tests::reference_style_link_resolves_and_expands_preserving_raw_syntax ... ok
+test components::markdown::image::tests::parses_complete_images_and_linked_badges_in_html_containers ... ok
+test components::markdown::inline::tests::editing_inline_image_source_retains_its_enclosing_link ... ok
+test components::block::runtime::tests::rtl_selection_across_trailing_link_keeps_block_end_anchor ... ok
+test components::block::runtime::tests::typing_after_inline_link_preserves_link ... ok
+test components::markdown::inline::tests::html_like_tags_are_not_autolinks_when_unsafe_or_unclosed ... ok
+test components::markdown::inline::tests::parses_any_standalone_autolink_and_preserves_syntax ... ok
+test components::markdown::inline::tests::parses_collapsed_reference_style_links_with_definitions ... ok
+test components::markdown::inline::tests::parses_inline_link_title_without_polluting_open_target ... ok
+test components::markdown::inline::tests::parses_mailto_autolinks_and_preserves_syntax ... ok
+test components::markdown::inline::tests::parses_inline_links_autolinks_and_preserves_other_unsupported_inline_syntax ... ok
+test components::markdown::inline::tests::parses_nested_inline_marks_inside_link_label ... ok
+test components::markdown::inline::tests::parses_reference_style_links_with_definitions_and_preserves_syntax ... ok
+test components::markdown::inline::tests::parses_reference_style_links_with_generic_normalized_labels ... ok
+test components::markdown::inline::tests::parses_shortcut_reference_style_links_with_definitions ... ok
+test components::markdown::inline::tests::parses_span_style_as_inline_html_not_link ... ok
+test components::markdown::inline::tests::autolink_targets_round_trip_without_markdown_escaping ... ok
+test components::markdown::inline::tests::shortcut_reference_detection_does_not_consume_images_as_links ... ok
+test components::markdown::inline::tests::unresolved_reference_style_links_remain_literal_text ... ok
+test components::markdown::inline::tests::unresolved_shortcut_reference_links_remain_literal_text ... ok
+test components::block::runtime::tests::typing_destination_into_empty_link_parens_keeps_caret_inside ... ok
+test components::markdown::link::tests::parses_link_reference_definitions_with_title_and_first_wins ... ok
+test components::markdown::link::tests::parses_container_scoped_link_reference_definitions_and_skips_raw_blocks ... ok
+test components::markdown::inline::tests::resolves_reference_link_examples_from_test_markdown ... ok
+test editor::tests::about_github_link_uses_gpui_url_opening ... ok
+test components::markdown::link::tests::supports_http_https_and_mailto_autolinks ... ok
+test components::markdown::inline::tests::linked_inline_image_keeps_its_source_and_outer_link ... ok
+test editor::writing::tests::statistics_exclude_markdown_delimiters_and_link_destinations ... ok
+test editor::tests::reference_style_link_in_root_paragraph_resolves_document_wide ... ok
+test editor::tests::reference_style_link_in_table_cell_resolves_document_wide ... ok
+test editor::tests::unresolved_footnote_reference_stays_literal_and_unlinked ... ok
+test editor::document::tests::imports_list_items_with_inline_span_style_as_text_not_links ... ok
+test editor::tests::paragraph_with_linked_image_keeps_image_link_and_source_mapping ... ok
+test updater::download::tests::updater_tar_extraction_preserves_binary_and_rejects_links ... ok
+test updater::download::tests::updater_zip_extraction_rejects_links_and_traversal ... ok
+test editor::writing::tests::selecting_unicode_link_delimiters_keeps_source_selection_valid ... ok
+test editor::writing::tests::native_find_unicode_link_fast_navigation_and_input ... ok
+test components::block::runtime::tests::unicode_link_projection_ranges_keep_markdown_scalar_boundaries ... ok
+
+test result: ok. 62 passed; 0 failed; 0 ignored; 0 measured; 814 filtered out; finished in 0.34s
+

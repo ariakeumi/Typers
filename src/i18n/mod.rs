@@ -172,6 +172,17 @@ pub struct I18nStrings {
     pub config_import_failed_title: String,
     /// Preferences window title.
     pub preferences_window_title: String,
+    /// Settings window text for search placeholder.
+    pub preferences_search_placeholder: String,
+    /// Settings window text for search empty.
+    pub preferences_search_empty: String,
+    /// Settings window text for updates title.
+    pub preferences_updates_title: String,
+    /// Settings window text for fonts title.
+    pub preferences_fonts_title: String,
+    /// Settings window text for status bar items title.
+    pub preferences_status_bar_items_title: String,
+
     /// File preferences navigation label.
     pub preferences_nav_file: String,
     /// Theme preferences navigation label.
@@ -291,6 +302,10 @@ pub struct I18nStrings {
     pub preferences_shortcut_select_left: String,
     /// Command label for extending selection right.
     pub preferences_shortcut_select_right: String,
+    /// Command label for extending selection up.
+    pub preferences_shortcut_select_up: String,
+    /// Command label for extending selection down.
+    pub preferences_shortcut_select_down: String,
     /// Command label for extending selection to the previous word.
     pub preferences_shortcut_word_select_left: String,
     /// Command label for extending selection to the next word.
@@ -582,6 +597,12 @@ struct I18nStringsDe {
     config_import_failed_title: Option<String>,
     /// Optional preferences window title.
     preferences_window_title: Option<String>,
+    preferences_search_placeholder: Option<String>,
+    preferences_search_empty: Option<String>,
+    preferences_updates_title: Option<String>,
+    preferences_fonts_title: Option<String>,
+    preferences_status_bar_items_title: Option<String>,
+
     /// Optional startup settings navigation label.
     preferences_nav_file: Option<String>,
     /// Optional theme settings navigation label.
@@ -698,6 +719,10 @@ struct I18nStringsDe {
     preferences_shortcut_select_left: Option<String>,
     /// Optional rightward selection command label.
     preferences_shortcut_select_right: Option<String>,
+    /// Optional upward selection command label.
+    preferences_shortcut_select_up: Option<String>,
+    /// Optional downward selection command label.
+    preferences_shortcut_select_down: Option<String>,
     /// Optional previous-word selection command label.
     preferences_shortcut_word_select_left: Option<String>,
     /// Optional next-word selection command label.
@@ -925,6 +950,11 @@ const I18N_STRING_KEYS: &[&str] = &[
     "image_paste_picgo_waiting",
     "config_import_failed_title",
     "preferences_window_title",
+    "preferences_search_placeholder",
+    "preferences_search_empty",
+    "preferences_updates_title",
+    "preferences_fonts_title",
+    "preferences_status_bar_items_title",
     "preferences_nav_file",
     "preferences_nav_theme",
     "preferences_nav_image",
@@ -986,6 +1016,8 @@ const I18N_STRING_KEYS: &[&str] = &[
     "preferences_shortcut_jump_to_bottom",
     "preferences_shortcut_select_left",
     "preferences_shortcut_select_right",
+    "preferences_shortcut_select_up",
+    "preferences_shortcut_select_down",
     "preferences_shortcut_word_select_left",
     "preferences_shortcut_word_select_right",
     "preferences_shortcut_select_home",
@@ -1254,6 +1286,21 @@ impl I18nStringsDe {
             config_import_failed_title: self
                 .config_import_failed_title
                 .unwrap_or(defaults.config_import_failed_title),
+            preferences_search_placeholder: self
+                .preferences_search_placeholder
+                .unwrap_or(defaults.preferences_search_placeholder),
+            preferences_search_empty: self
+                .preferences_search_empty
+                .unwrap_or(defaults.preferences_search_empty),
+            preferences_updates_title: self
+                .preferences_updates_title
+                .unwrap_or(defaults.preferences_updates_title),
+            preferences_fonts_title: self
+                .preferences_fonts_title
+                .unwrap_or(defaults.preferences_fonts_title),
+            preferences_status_bar_items_title: self
+                .preferences_status_bar_items_title
+                .unwrap_or(defaults.preferences_status_bar_items_title),
             preferences_window_title: self
                 .preferences_window_title
                 .unwrap_or(defaults.preferences_window_title),
@@ -1438,6 +1485,12 @@ impl I18nStringsDe {
             preferences_shortcut_select_right: self
                 .preferences_shortcut_select_right
                 .unwrap_or(defaults.preferences_shortcut_select_right),
+            preferences_shortcut_select_up: self
+                .preferences_shortcut_select_up
+                .unwrap_or(defaults.preferences_shortcut_select_up),
+            preferences_shortcut_select_down: self
+                .preferences_shortcut_select_down
+                .unwrap_or(defaults.preferences_shortcut_select_down),
             preferences_shortcut_word_select_left: self
                 .preferences_shortcut_word_select_left
                 .unwrap_or(defaults.preferences_shortcut_word_select_left),
@@ -1674,7 +1727,7 @@ impl I18nStrings {
                 "请拖入 Markdown 文件（.md 或 .markdown）以在当前窗口打开。".into(),
             info_dialog_ok: "确定".into(),
             help_check_updates_title: "检查更新".into(),
-            help_check_updates_message: "正在检查 Velotype 的最新版本...".into(),
+            help_check_updates_message: "正在检查 Typers 的最新版本...".into(),
             update_available_title: "发现新版本".into(),
             update_available_message_template:
                 "当前版本：{current}\n最新版本：{latest}\n是否前往 GitHub Releases 下载？".into(),
@@ -1684,7 +1737,7 @@ impl I18nStrings {
             update_failed_message_template: "无法完成更新：{error}".into(),
             update_open_release: "前往下载".into(),
             update_later: "稍后".into(),
-            help_about_title: "关于 Velotype".into(),
+            help_about_title: "关于 Typers".into(),
             help_about_message: "作者：所有项目贡献者".into(),
             help_about_github_label: "GitHub".into(),
             help_about_star_message: "如果本项目对您有帮助，那不妨给本项目一颗 Star⭐，十分感谢！"
@@ -1724,6 +1777,12 @@ impl I18nStrings {
             export_failed_title: "导出失败".into(),
             config_import_failed_title: "配置导入失败".into(),
             preferences_window_title: "偏好设置".into(),
+            preferences_search_placeholder: "搜索设置…".into(),
+            preferences_search_empty: "没有找到相关设置".into(),
+            preferences_updates_title: "软件更新".into(),
+            preferences_fonts_title: "字体".into(),
+            preferences_status_bar_items_title: "显示项目".into(),
+
             preferences_nav_file: "文件".into(),
             preferences_nav_theme: "主题".into(),
             preferences_nav_shortcuts: "快捷键".into(),
@@ -1773,6 +1832,8 @@ impl I18nStrings {
             preferences_shortcut_jump_to_bottom: "跳至末尾".into(),
             preferences_shortcut_select_left: "向左选择".into(),
             preferences_shortcut_select_right: "向右选择".into(),
+            preferences_shortcut_select_up: "向上选择".into(),
+            preferences_shortcut_select_down: "向下选择".into(),
             preferences_shortcut_word_select_left: "向左选择单词".into(),
             preferences_shortcut_word_select_right: "向右选择单词".into(),
             preferences_shortcut_select_home: "选择到行首".into(),
@@ -1797,7 +1858,7 @@ impl I18nStrings {
             preferences_shortcut_quit_application: "退出应用".into(),
             preferences_shortcut_close_window: "关闭窗口".into(),
             preferences_shortcut_dismiss_transient_ui: "关闭临时界面".into(),
-            preferences_shortcut_toggle_view_mode: "切换视图模式".into(),
+            preferences_shortcut_toggle_view_mode: "切换源码模式".into(),
             preferences_shortcut_toggle_workspace: "切换工作区".into(),
             workspace_tab_files: "文件".into(),
             workspace_tab_outline: "大纲".into(),
@@ -1843,8 +1904,8 @@ impl I18nStrings {
             ..Self::en_us()
         };
         strings.image_paste_failed_title = "图片粘贴失败".into();
-        strings.update_downloading = "正在下载并验证 Velotype {version}...".into();
-        strings.update_ready_message = "Velotype {version} 已下载并验证，可以安装并重启。".into();
+        strings.update_downloading = "正在下载并验证 Typers {version}...".into();
+        strings.update_ready_message = "Typers {version} 已下载并验证，可以安装并重启。".into();
         strings.update_restart = "更新并重启".into();
         strings.update_status_ready = "更新至 {version} 并重启".into();
         strings.update_save_first_message =
@@ -1853,9 +1914,9 @@ impl I18nStrings {
         strings.preferences_file_associations = "Markdown 文件关联（.md）".into();
         strings.preferences_associate_formats = "关联格式".into();
         strings.preferences_file_associations_checking = "正在检查文件关联...".into();
-        strings.preferences_file_associations_associated = "已关联到 Velotype。".into();
+        strings.preferences_file_associations_associated = "已关联到 Typers。".into();
         strings.preferences_file_associations_pending =
-            "请在系统默认应用设置中确认选择 Velotype。".into();
+            "请在系统默认应用设置中确认选择 Typers。".into();
         strings.preferences_file_associations_failed = "无法检查或更新文件关联：{error}".into();
         strings.preferences_updates_auto_download = "自动下载更新".into();
         strings.preferences_updates_auto_download_hint = "启动时自动检查并下载最新正式版".into();
@@ -1907,7 +1968,7 @@ impl I18nStrings {
                 "Drop a Markdown file (.md or .markdown) to open it in this window.".into(),
             info_dialog_ok: "OK".into(),
             help_check_updates_title: "Check for Updates".into(),
-            help_check_updates_message: "Checking the latest Velotype version...".into(),
+            help_check_updates_message: "Checking the latest Typers version...".into(),
             update_available_title: "Update Available".into(),
             update_available_message_template:
                 "Current version: {current}\nLatest version: {latest}\nOpen GitHub Releases to download it?"
@@ -1920,8 +1981,8 @@ impl I18nStrings {
                 .into(),
             update_open_release: "Open Releases".into(),
             update_later: "Later".into(),
-            update_downloading: "Downloading and verifying Velotype {version}...".into(),
-            update_ready_message: "Velotype {version} has been downloaded and verified. Install it and restart now?".into(),
+            update_downloading: "Downloading and verifying Typers {version}...".into(),
+            update_ready_message: "Typers {version} has been downloaded and verified. Install it and restart now?".into(),
             update_restart: "Update and Restart".into(),
             update_status_ready: "Update to {version} and Restart".into(),
             update_save_first_message: "Save this window's changes, then click Update and Restart again. Saving will keep the window open.".into(),
@@ -1929,12 +1990,12 @@ impl I18nStrings {
             preferences_file_associations: "Markdown File Association (.md)".into(),
             preferences_associate_formats: "Associate Formats".into(),
             preferences_file_associations_checking: "Checking file associations...".into(),
-            preferences_file_associations_associated: "Associated with Velotype.".into(),
-            preferences_file_associations_pending: "Confirm Velotype in your system's default-app settings.".into(),
+            preferences_file_associations_associated: "Associated with Typers.".into(),
+            preferences_file_associations_pending: "Confirm Typers in your system's default-app settings.".into(),
             preferences_file_associations_failed: "Could not check or update file associations: {error}".into(),
             preferences_updates_auto_download: "Automatically Download Updates".into(),
             preferences_updates_auto_download_hint: "Automatically check for and download the latest stable version on startup.".into(),
-            help_about_title: "About Velotype".into(),
+            help_about_title: "About Typers".into(),
             help_about_message: "Author: All project contributors".into(),
             help_about_github_label: "GitHub".into(),
             help_about_star_message:
@@ -1978,6 +2039,12 @@ impl I18nStrings {
             image_paste_picgo_waiting: "Waiting for image links...".into(),
             config_import_failed_title: "Config Import Failed".into(),
             preferences_window_title: "Preferences".into(),
+            preferences_search_placeholder: "Search settings…".into(),
+            preferences_search_empty: "No matching settings".into(),
+            preferences_updates_title: "Updates".into(),
+            preferences_fonts_title: "Fonts".into(),
+            preferences_status_bar_items_title: "Visible items".into(),
+
             preferences_nav_file: "File".into(),
             preferences_nav_theme: "Theme".into(),
             preferences_nav_image: "Image".into(),
@@ -2043,6 +2110,8 @@ impl I18nStrings {
             preferences_shortcut_jump_to_bottom: "Jump to Bottom".into(),
             preferences_shortcut_select_left: "Select Left".into(),
             preferences_shortcut_select_right: "Select Right".into(),
+            preferences_shortcut_select_up: "Select Up".into(),
+            preferences_shortcut_select_down: "Select Down".into(),
             preferences_shortcut_word_select_left: "Word Select Left".into(),
             preferences_shortcut_word_select_right: "Word Select Right".into(),
             preferences_shortcut_select_home: "Select to Line Start".into(),
@@ -2067,7 +2136,7 @@ impl I18nStrings {
             preferences_shortcut_quit_application: "Quit Application".into(),
             preferences_shortcut_close_window: "Close Window".into(),
             preferences_shortcut_dismiss_transient_ui: "Dismiss Temporary UI".into(),
-            preferences_shortcut_toggle_view_mode: "Toggle View Mode".into(),
+            preferences_shortcut_toggle_view_mode: "Toggle Source Code Mode".into(),
             preferences_shortcut_toggle_workspace: "Toggle Workspace".into(),
             workspace_tab_files: "Files".into(),
             workspace_tab_outline: "Outline".into(),
@@ -2584,11 +2653,11 @@ mod tests {
         );
         assert_eq!(
             strings.preferences_file_associations_associated,
-            "已关联到 Velotype。"
+            "已关联到 Typers。"
         );
         assert_eq!(
             strings.help_check_updates_message,
-            "正在检查 Velotype 的最新版本..."
+            "正在检查 Typers 的最新版本..."
         );
         assert_eq!(strings.update_open_release, "前往下载");
         assert_eq!(strings.help_about_github_label, "GitHub");

@@ -280,6 +280,129 @@ pub(super) fn expanded_display_cursor_offset_for_clean(
 }
 
 impl ExpandedInlineProjection {
+    /// Maps projected link syntax through its actual serialized label and
+    /// suffix. Emphasis markers and escaped label text can make display bytes
+    /// differ from Markdown bytes, even when both describe the same link.
+    pub(super) fn link_range_to_markdown(
+        &self,
+        title: &InlineTextTree,
+        run: &ExpandedLinkRun,
+        range: Range<usize>,
+    ) -> Range<usize> {
+        let map = title.markdown_offset_map();
+        let markdown = map.markdown();
+        let source_start = if run.start_fragment_index == 0 {
+            0
+        } else {
+            InlineTextTree::from_fragments(title.fragments[..run.start_fragment_index].to_vec())
+                .serialize_markdown()
+                .len()
+        };
+        let source_end = source_start
+            + InlineTextTree::from_fragments(
+                title.fragments[run.start_fragment_index..run.end_fragment_index].to_vec(),
+            )
+            .serialize_markdown()
+            .len();
+        let middle_len = run.link.middle_marker().map(str::len).unwrap_or(0);
+        let suffix_len = middle_len
+            + run
+                .link
+                .editable_text()
+                .as_ref()
+                .map(String::len)
+                .unwrap_or(0)
+            + run.link.close_marker().len();
+        let label_source_start = source_start + run.link.open_marker().len();
+        let label_source_end = source_end - suffix_len;
+        let label_display_start = run.display_range.start + run.link.open_marker().len();
+        let label_display_end = run.target_display_range.start - middle_len;
+        let display = self.cache.visible_text();
+
+        // Fully expanded labels already match their canonical spelling.
+        if let Some(source) = markdown.get(source_start..source_end)
+            && Some(source) == display.get(run.display_range.clone())
+        {
+            return crate::text_offsets::normalize_utf8_range(
+                markdown,
+                source_start + range.start - run.display_range.start
+                    ..source_start + range.end - run.display_range.start,
+            );
+        }
+
+        let map_offset = |offset: usize| {
+            if offset <= label_display_start {
+                return source_start + offset - run.display_range.start;
+            }
+            if offset >= label_display_end {
+                return label_source_end + offset - label_display_end;
+            }
+
+            let segment = self
+                .segments
+                .iter()
+                .filter(|segment| {
+                    segment.display_range.start >= label_display_start
+                        && segment.display_range.end <= label_display_end
+                        && offset >= segment.display_range.start
+                        && offset <= segment.display_range.end
+                })
+                .min_by_key(|segment| {
+                    !matches!(
+                        segment.kind,
+                        ExpandedInlineSegmentKind::OpeningDelimiter(_)
+                            | ExpandedInlineSegmentKind::ClosingDelimiter(_)
+                    )
+                });
+            if let Some(segment) = segment {
+                let clean = segment.clean_range.start;
+                let anchor = map
+                    .visible_to_markdown_offset(clean)
+                    .clamp(label_source_start, label_source_end);
+                if matches!(
+                    segment.kind,
+                    ExpandedInlineSegmentKind::OpeningDelimiter(_)
+                        | ExpandedInlineSegmentKind::ClosingDelimiter(_)
+                ) {
+                    // Several generated delimiters can share a clean caret.
+                    // Find this marker within that canonical delimiter region.
+                    let mut start = anchor;
+                    let mut end = anchor;
+                    while start > label_source_start
+                        && map.markdown_to_visible_offset(start - 1) == clean
+                    {
+                        start -= 1;
+                    }
+                    while end < label_source_end && map.markdown_to_visible_offset(end + 1) == clean
+                    {
+                        end += 1;
+                    }
+                    if let Some(marker) = display.get(segment.display_range.clone())
+                        && let Some(relative) = markdown
+                            .get(start..end)
+                            .and_then(|delimiters| delimiters.find(marker))
+                    {
+                        return start + relative + offset - segment.display_range.start;
+                    }
+                    return anchor;
+                }
+                let clean =
+                    clean + (offset - segment.display_range.start).min(segment.clean_range.len());
+                return map
+                    .visible_to_markdown_offset(clean)
+                    .clamp(label_source_start, label_source_end);
+            }
+
+            let clean = self.display_to_clean[offset];
+            map.visible_to_markdown_offset(clean)
+                .clamp(label_source_start, label_source_end)
+        };
+        crate::text_offsets::normalize_utf8_range(
+            markdown,
+            map_offset(range.start)..map_offset(range.end),
+        )
+    }
+
     /// Builds a temporary editing view for fragments touched by the selection
     /// or IME mark, preserving byte maps back to clean visible text.
     ///
@@ -331,6 +454,7 @@ impl ExpandedInlineProjection {
                         link: None,
                         footnote: None,
                         math: None,
+                        image: false,
                     });
                     segments.push(ExpandedInlineSegment {
                         display_range: display_cursor..display_cursor + open_len,
@@ -353,6 +477,7 @@ impl ExpandedInlineProjection {
                         link: None,
                         footnote: Some(footnote.clone()),
                         math: None,
+                        image: false,
                     });
                     segments.push(ExpandedInlineSegment {
                         display_range: display_cursor..display_cursor + id_len,
@@ -388,6 +513,7 @@ impl ExpandedInlineProjection {
                         link: None,
                         footnote: None,
                         math: None,
+                        image: false,
                     });
                     segments.push(ExpandedInlineSegment {
                         display_range: display_cursor..display_cursor + close_len,
@@ -463,6 +589,7 @@ impl ExpandedInlineProjection {
                         link: None,
                         footnote: None,
                         math: None,
+                        image: false,
                     });
                     segments.push(ExpandedInlineSegment {
                         display_range: display_cursor..display_cursor + open_len,
@@ -522,6 +649,7 @@ impl ExpandedInlineProjection {
                             link: None,
                             footnote: None,
                             math: None,
+                            image: false,
                         });
                         segments.push(ExpandedInlineSegment {
                             display_range: display_cursor..display_cursor + middle_len,
@@ -549,6 +677,7 @@ impl ExpandedInlineProjection {
                                 link: Some(link.clone()),
                                 footnote: None,
                                 math: None,
+                                image: false,
                             });
                             segments.push(ExpandedInlineSegment {
                                 display_range: display_cursor..display_cursor + target_len,
@@ -574,6 +703,7 @@ impl ExpandedInlineProjection {
                         link: None,
                         footnote: None,
                         math: None,
+                        image: false,
                     });
                     segments.push(ExpandedInlineSegment {
                         display_range: display_cursor..display_cursor + close_len,
@@ -1025,6 +1155,7 @@ fn push_projected_fragment(
             link: None,
             footnote: None,
             math: None,
+            image: false,
         });
         segments.push(ExpandedInlineSegment {
             display_range: *display_cursor..*display_cursor + marker_len,
@@ -1071,6 +1202,7 @@ fn push_projected_fragment(
             link: None,
             footnote: None,
             math: None,
+            image: false,
         });
         segments.push(ExpandedInlineSegment {
             display_range: *display_cursor..*display_cursor + marker_len,

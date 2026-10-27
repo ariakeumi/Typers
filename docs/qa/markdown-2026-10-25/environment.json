@@ -1,0 +1,17 @@
+{
+  "source": "/Users/umi/Downloads/markdown-test.md",
+  "bytes": 11975,
+  "lines": 651,
+  "sha256": "00f5a2388936f01acb2838060cccc1b7c9f86ce690d55085a6201e3bae869947",
+  "git_head": "07a24a9b5b953539dede8e61a1f7d9d0adbba590",
+  "/Applications/Typers.app/Contents/MacOS/velotype": {
+    "bytes": 35294448,
+    "mtime": 1792932679.2160177,
+    "sha256": "1094f401893bcbce1dbfaa98a5e5e94b4e1506afd34d2cba10a2b58f26ff232f"
+  },
+  "/Users/umi/Documents/typer/target/release/velotype": {
+    "bytes": 35500720,
+    "mtime": 1792932613.8111818,
+    "sha256": "6d40b5da37b641a5606b48381a49c89a66fafd1408c05f2d8cc71259515643e9"
+  }
+}
