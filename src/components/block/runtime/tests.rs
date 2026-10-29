@@ -31,6 +31,40 @@ fn assert_only_code_range(block: &Block, expected: Range<usize>) {
 }
 
 #[gpui::test]
+async fn clipboard_paste_keeps_identifier_underscores_literal(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    for (initial, selection, expected) in [
+        ("", 0..0, "df_stun_r"),
+        ("before old after", 7..10, "before df_stun_r after"),
+    ] {
+        let block = cx.new(|cx| {
+            Block::with_record(
+                cx,
+                BlockRecord::new(BlockKind::Paragraph, InlineTextTree::plain(initial)),
+            )
+        });
+        cx.update(|window, cx| {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string("df_stun_r".to_string()));
+            block.update(cx, |block, cx| {
+                block.selected_range = selection;
+                block.on_paste(&crate::components::Paste, window, cx);
+                assert_eq!(block.record.title.visible_text(), expected);
+                assert!(block.inline_spans().iter().all(|span| !span.style.italic));
+                let reloaded = InlineTextTree::from_markdown(&block.record.title_markdown());
+                assert_eq!(reloaded.visible_text(), expected);
+                assert!(
+                    reloaded
+                        .render_cache()
+                        .spans()
+                        .iter()
+                        .all(|span| !span.style.italic)
+                );
+            });
+        });
+    }
+}
+
+#[gpui::test]
 async fn unicode_link_projection_ranges_keep_markdown_scalar_boundaries(cx: &mut TestAppContext) {
     for source in [
         "[带 title 的链接](https://example.com \"悬停提示文字\")",

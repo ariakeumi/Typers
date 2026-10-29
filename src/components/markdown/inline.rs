@@ -1873,7 +1873,7 @@ fn parse_until(
                 }
                 _ => {
                     matches_sequence(tokens, index, &end_delim.close())
-                        && can_close_emphasis(tokens, index)
+                        && can_close_formatting(tokens, index, *end_delim)
                 }
             };
 
@@ -2939,7 +2939,9 @@ fn has_closing_delimiter(tokens: &[CharToken], index: usize, delimiter: Delimite
             continue;
         }
 
-        if matches_sequence(tokens, cursor, &close_str) {
+        if matches_sequence(tokens, cursor, &close_str)
+            && can_close_formatting(tokens, cursor, delimiter)
+        {
             // Emphasis spans must enclose at least one character; a close
             // sitting immediately after the open (e.g. `**` or `*` `*`) is an
             // empty span and is treated as literal text instead.
@@ -3516,12 +3518,66 @@ fn set_style_flag(mut style: InlineStyle, flag: StyleFlag, enabled: bool) -> Inl
     style
 }
 
-/// Whether emphasis has a non-whitespace token after its opener.
+/// Whether emphasis can open here, keeping intraword underscores literal.
 fn can_open_emphasis(tokens: &[CharToken], index: usize, len: usize) -> bool {
+    if tokens[index].ch == '_' {
+        let (left_flanking, right_flanking, before, _) = underscore_flanking(tokens, index);
+        return left_flanking && (!right_flanking || before.is_some_and(is_emphasis_punctuation));
+    }
     tokens
         .get(index + len)
         .map(|token| !token.ch.is_whitespace())
         .unwrap_or(false)
+}
+
+/// Underscore boundaries are measured around the entire delimiter run, even
+/// when recursive parsing consumes a triple run as bold plus italic.
+fn underscore_flanking(
+    tokens: &[CharToken],
+    index: usize,
+) -> (bool, bool, Option<char>, Option<char>) {
+    let mut start = index;
+    while start > 0 && tokens[start - 1].ch == '_' {
+        start -= 1;
+    }
+    let mut end = index + 1;
+    while end < tokens.len() && tokens[end].ch == '_' {
+        end += 1;
+    }
+    let before = start.checked_sub(1).map(|index| tokens[index].ch);
+    let after = tokens.get(end).map(|token| token.ch);
+    let before_space = before.is_none_or(char::is_whitespace);
+    let after_space = after.is_none_or(char::is_whitespace);
+    let before_punctuation = before.is_some_and(is_emphasis_punctuation);
+    let after_punctuation = after.is_some_and(is_emphasis_punctuation);
+    let left_flanking = !after_space && (!after_punctuation || before_space || before_punctuation);
+    let right_flanking = !before_space && (!before_punctuation || after_space || after_punctuation);
+    (left_flanking, right_flanking, before, after)
+}
+
+/// CommonMark punctuation includes Unicode symbols as well as punctuation.
+fn is_emphasis_punctuation(ch: char) -> bool {
+    if ch.is_ascii() {
+        return ch.is_ascii_punctuation();
+    }
+    static PUNCTUATION: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"^[\p{P}\p{S}]$").expect("valid Unicode punctuation pattern")
+    });
+    PUNCTUATION.is_match(ch.encode_utf8(&mut [0; 4]))
+}
+
+/// Use the same closer rules in lookahead and parsing so an invalid intraword
+/// underscore cannot commit an opener and discard its formatting markers.
+fn can_close_formatting(tokens: &[CharToken], index: usize, delimiter: Delimiter) -> bool {
+    if matches!(
+        delimiter,
+        Delimiter::BoldMarkdown { marker: '_' } | Delimiter::ItalicMarkdown { marker: '_' }
+    ) {
+        let (left_flanking, right_flanking, _, after) = underscore_flanking(tokens, index);
+        right_flanking && (!left_flanking || after.is_some_and(is_emphasis_punctuation))
+    } else {
+        can_close_emphasis(tokens, index)
+    }
 }
 
 /// Whether a script marker has an ASCII owner and body start.
@@ -3689,6 +3745,103 @@ mod tests {
 
         assert_eq!(tree.visible_text(), "a b");
         assert_eq!(tree.serialize_markdown(), "*a* **b**");
+    }
+
+    #[test]
+    fn intraword_underscores_stay_literal_through_import_and_roundtrip() {
+        for source in [
+            "df_stun_r",
+            "foo__bar__baz",
+            "__foo__bar",
+            "foo__bar__",
+            "_foo_bar",
+            "foo_bar_",
+            "пристаням_стремятся_",
+            "变量_名称_后缀",
+            "e\u{301}_stun_r",
+        ] {
+            let mut tree = InlineTextTree::from_markdown(source);
+            for _ in 0..3 {
+                assert_eq!(tree.visible_text(), source, "{source:?}");
+                assert!(
+                    tree.render_cache()
+                        .spans()
+                        .iter()
+                        .all(|span| { !span.style.italic && !span.style.bold }),
+                    "{source:?}"
+                );
+                tree = InlineTextTree::from_markdown(&tree.serialize_markdown());
+            }
+        }
+    }
+
+    #[test]
+    fn pasted_and_typed_identifiers_preserve_underscores_and_cursor_offsets() {
+        let source = "df_stun_r";
+        let empty = InlineTextTree::plain("");
+        let pasted =
+            empty.replace_visible_range(0..0, source, InlineInsertionAttributes::default());
+        assert_eq!(pasted.tree.visible_text(), source);
+        for offset in 0..=source.len() {
+            assert_eq!(pasted.map_offset(offset), offset);
+        }
+
+        let mut typed = empty;
+        for ch in source.chars() {
+            let end = typed.visible_text().len();
+            typed = typed
+                .replace_visible_range(
+                    end..end,
+                    &ch.to_string(),
+                    typed.attributes_for_insertion_at(end),
+                )
+                .tree;
+        }
+        assert_eq!(typed.visible_text(), source);
+        assert!(
+            typed
+                .render_cache()
+                .spans()
+                .iter()
+                .all(|span| !span.style.italic)
+        );
+    }
+
+    #[test]
+    fn underscore_emphasis_skips_intraword_closers_and_accepts_punctuation() {
+        for (source, visible, bold) in [
+            ("_df_stun_r_", "df_stun_r", false),
+            ("__df_stun_r__", "df_stun_r", true),
+            ("_(bar)_", "(bar)", false),
+            ("_（bar）_", "（bar）", false),
+            ("_💡bar💡_", "💡bar💡", false),
+        ] {
+            let tree = InlineTextTree::from_markdown(source);
+            assert_eq!(tree.visible_text(), visible, "{source:?}");
+            assert!(
+                tree.render_cache()
+                    .spans()
+                    .iter()
+                    .all(|span| { span.style.bold == bold && span.style.italic != bold }),
+                "{source:?}"
+            );
+            let reparsed = InlineTextTree::from_markdown(&tree.serialize_markdown());
+            assert_eq!(reparsed.visible_text(), visible, "{source:?}");
+        }
+
+        let tree = InlineTextTree::from_markdown("foo-_(bar)_");
+        assert_eq!(tree.visible_text(), "foo-(bar)");
+        assert!(tree.render_cache().style_at(4).italic);
+
+        let nested = InlineTextTree::from_markdown("___df_stun_r___");
+        assert_eq!(nested.visible_text(), "df_stun_r");
+        assert!(
+            nested
+                .render_cache()
+                .spans()
+                .iter()
+                .all(|span| span.style.bold && span.style.italic)
+        );
     }
 
     #[test]

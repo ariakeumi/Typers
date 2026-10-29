@@ -130,6 +130,7 @@ pub(crate) fn install_writing_keybindings(cx: &mut App) {
     }
     if cfg!(target_os = "macos") {
         bindings.push(KeyBinding::new("cmd-alt-f", action(Replace), None));
+        bindings.push(KeyBinding::new("cmd-alt-c", action(CodeBlock), None));
     }
     bindings.push(KeyBinding::new("f3", action(FindNext), None));
     bindings.push(KeyBinding::new("shift-f3", action(FindPrevious), None));
@@ -716,6 +717,22 @@ impl Editor {
     }
 
     fn apply_writing_format(&mut self, command: WritingCommand, cx: &mut Context<Self>) {
+        // Empty rendered paragraphs are source separators, with no text
+        // selection mapping. Convert the live block instead of formatting the
+        // previous source selection returned as a fallback for those gaps.
+        if command == WritingCommand::CodeBlock
+            && self.view_mode == crate::editor::ViewMode::Rendered
+            && self.cross_block_selection.is_none()
+            && let Some(target) = self.current_edit_target_from_state(cx)
+            && !target.read(cx).is_table_cell()
+            && Self::is_empty_paragraph_separator(target.read(cx))
+        {
+            self.finalize_pending_undo_capture(cx);
+            self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
+            target.update(cx, |block, cx| block.enter_code_block(None, cx));
+            self.focus_block(target.entity_id());
+            return;
+        }
         let source = self.serialized_document_text(cx);
         let selection = self.capture_source_selection_snapshot(cx).range;
         if let Some((source, selection)) = format_source(&source, selection, command) {
@@ -1240,6 +1257,227 @@ mod tests {
     fn draw(cx: &mut VisualTestContext) {
         cx.update(|window, cx| window.draw(cx).clear(cx));
         cx.run_until_parked();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    async fn option_command_c_on_new_empty_line_keeps_previous_paragraph(cx: &mut TestAppContext) {
+        init(cx);
+        let (editor, visual) =
+            cx.add_window_view(|_, cx| Editor::from_markdown(cx, "previous".into(), None));
+        editor.update(visual, |editor, cx| {
+            let paragraph = editor.document.first_root().unwrap().clone();
+            editor.focus_block_range(&paragraph, 8..8, cx);
+        });
+        draw(visual);
+        visual.simulate_keystrokes("enter");
+        draw(visual);
+        editor.read_with(visual, |editor, cx| {
+            let target = editor.current_edit_target_from_state(cx).unwrap();
+            assert_eq!(
+                target.read(cx).kind(),
+                crate::components::BlockKind::Paragraph
+            );
+            assert_eq!(target.read(cx).record.title.visible_text(), "");
+        });
+        let before = editor.read_with(visual, |editor, cx| editor.serialized_document_text(cx));
+        visual.simulate_keystrokes("cmd-alt-c");
+        draw(visual);
+        editor.read_with(visual, |editor, cx| {
+            let first = editor.document.first_root().unwrap().read(cx);
+            assert_eq!(first.kind(), crate::components::BlockKind::Paragraph);
+            assert_eq!(first.record.title.visible_text(), "previous");
+            let target = editor.current_edit_target_from_state(cx).unwrap();
+            assert!(target.read(cx).kind().is_code_block());
+            assert_eq!(target.read(cx).record.title.visible_text(), "");
+            assert_eq!(target.read(cx).selected_range, 0..0);
+        });
+        let created = editor.read_with(visual, |editor, cx| editor.serialized_document_text(cx));
+        visual.simulate_keystrokes("cmd-z");
+        draw(visual);
+        assert_eq!(
+            editor.read_with(visual, |editor, cx| editor.serialized_document_text(cx)),
+            before
+        );
+        visual.simulate_keystrokes("cmd-shift-z");
+        draw(visual);
+        assert_eq!(
+            editor.read_with(visual, |editor, cx| editor.serialized_document_text(cx)),
+            created
+        );
+        visual.simulate_input("df_stun_r");
+        draw(visual);
+        editor.read_with(visual, |editor, cx| {
+            let target = editor.current_edit_target_from_state(cx).unwrap();
+            assert!(target.read(cx).kind().is_code_block());
+            assert_eq!(target.read(cx).record.title.visible_text(), "df_stun_r");
+            assert_eq!(
+                editor
+                    .document
+                    .first_root()
+                    .unwrap()
+                    .read(cx)
+                    .record
+                    .title
+                    .visible_text(),
+                "previous"
+            );
+        });
+    }
+
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    async fn option_command_c_wraps_selection_in_code_block_in_both_views(cx: &mut TestAppContext) {
+        init(cx);
+        for source_mode in [false, true] {
+            for source in ["", "alpha", "alpha\n\nbeta"] {
+                let (editor, visual) =
+                    cx.add_window_view(|_, cx| Editor::from_markdown(cx, source.into(), None));
+                draw(visual);
+                editor.update(visual, |editor, cx| {
+                    if source_mode {
+                        editor.toggle_view_mode_from_ui(cx);
+                    }
+                    let len = editor.serialized_document_text(cx).len();
+                    editor.apply_selection_snapshot_in_current_mode(
+                        &crate::editor::UndoSelectionSnapshot {
+                            range: if source == "alpha" { 2..2 } else { 0..len },
+                            reversed: false,
+                        },
+                        cx,
+                    );
+                });
+                draw(visual);
+                visual.simulate_keystrokes("cmd-alt-c");
+                draw(visual);
+                editor.read_with(visual, |editor, cx| {
+                    let markdown = editor.serialized_document_text(cx);
+                    assert_eq!(markdown.trim_end(), format!("```\n{source}\n```"));
+                    if !source_mode {
+                        assert!(
+                            editor
+                                .document
+                                .first_root()
+                                .unwrap()
+                                .read(cx)
+                                .kind()
+                                .is_code_block()
+                        );
+                    }
+                });
+                visual.simulate_keystrokes("cmd-z");
+                draw(visual);
+                assert_eq!(
+                    editor.read_with(visual, |editor, cx| editor.serialized_document_text(cx)),
+                    source
+                );
+            }
+        }
+    }
+
+    #[gpui::test]
+    async fn code_command_converts_only_the_focused_empty_paragraph(cx: &mut TestAppContext) {
+        init(cx);
+        for (source, empty_index) in [
+            ("\n\nbefore", 0),
+            ("before\n\n\nafter", 1),
+            ("before\n\n", 1),
+            ("before\n\n\n\n", 2),
+        ] {
+            let (editor, visual) =
+                cx.add_window_view(|_, cx| Editor::from_markdown(cx, source.into(), None));
+            let original_blocks = editor.read_with(visual, |editor, cx| {
+                editor
+                    .document
+                    .visible_blocks()
+                    .into_iter()
+                    .map(|visible| {
+                        let block = visible.entity.read(cx);
+                        (
+                            visible.entity.clone(),
+                            block.kind(),
+                            block.record.title.visible_text(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            });
+            let empty = original_blocks[empty_index].0.clone();
+            assert_eq!(original_blocks[empty_index].2, "");
+            editor.update(visual, |editor, cx| {
+                editor.focus_block_range(&empty, 0..0, cx)
+            });
+            draw(visual);
+            visual.dispatch_action(action(WritingCommand::CodeBlock));
+            draw(visual);
+            editor.read_with(visual, |editor, cx| {
+                assert_eq!(
+                    editor.document.visible_blocks().len(),
+                    original_blocks.len()
+                );
+                for (index, (entity, original_kind, original_text)) in
+                    original_blocks.iter().enumerate()
+                {
+                    let block = entity.read(cx);
+                    assert_eq!(block.record.title.visible_text(), *original_text);
+                    if index == empty_index {
+                        assert!(block.kind().is_code_block());
+                        assert_eq!(editor.current_edit_target_from_state(cx).unwrap(), *entity);
+                        assert_eq!(block.selected_range, 0..0);
+                    } else {
+                        assert_eq!(block.kind(), *original_kind);
+                    }
+                }
+            });
+            visual.dispatch_action(action(WritingCommand::Undo));
+            draw(visual);
+            assert_eq!(
+                editor.read_with(visual, |editor, cx| editor.serialized_document_text(cx)),
+                source
+            );
+        }
+    }
+
+    #[gpui::test]
+    async fn heading_hints_follow_focus_without_moving_or_changing_text(cx: &mut TestAppContext) {
+        init(cx);
+        let source =
+            "# One\n\n## Two\n\n### Three\n\n#### Four\n\n##### Five\n\n###### Six\n\nBody";
+        let (editor, visual) =
+            cx.add_window_view(|_, cx| Editor::from_markdown(cx, source.into(), None));
+        draw(visual);
+        let blocks = editor.read_with(visual, |editor, _cx| {
+            editor
+                .document
+                .visible_blocks()
+                .into_iter()
+                .map(|block| block.entity.clone())
+                .collect::<Vec<_>>()
+        });
+        for (index, block) in blocks.iter().enumerate() {
+            let before = block.read_with(visual, |block, _| block.last_bounds.unwrap());
+            visual.update(|window, cx| block.read(cx).focus_handle(cx).focus(window, cx));
+            draw(visual);
+            let hint = visual.debug_bounds("heading-level-hint");
+            if (2..=4).contains(&index) {
+                let hint = hint.expect("focused H3/H4/H5 should show its level hint");
+                let after = block.read_with(visual, |block, _| block.last_bounds.unwrap());
+                assert_eq!(before, after, "focusing a heading must not shift its text");
+                assert!(hint.right() < after.left());
+                assert!(hint.top() >= after.top() && hint.bottom() <= after.bottom());
+            } else {
+                assert!(hint.is_none(), "only H3/H4/H5 should show a hint");
+            }
+        }
+        visual.update(|window, cx| blocks[2].read(cx).focus_handle(cx).focus(window, cx));
+        draw(visual);
+        assert!(visual.debug_bounds("heading-level-hint").is_some());
+        editor.update(visual, |editor, cx| editor.toggle_view_mode_from_ui(cx));
+        draw(visual);
+        assert!(visual.debug_bounds("heading-level-hint").is_none());
+        assert_eq!(
+            editor.read_with(visual, |editor, cx| editor.serialized_document_text(cx)),
+            source
+        );
     }
 
     #[gpui::test]

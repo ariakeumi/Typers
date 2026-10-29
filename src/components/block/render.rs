@@ -2227,6 +2227,37 @@ impl Render for Block {
             cx,
         );
 
+        // Keep the heading hint in the margin so focus never shifts the text
+        // or changes the editable/serialized content.
+        let focused_base = if focused && let BlockKind::Heading { level: 3..=5 } = self.kind() {
+            let (label, line_height) = match self.kind() {
+                BlockKind::Heading { level: 3 } => ("H3", t.h3_size * 1.43),
+                BlockKind::Heading { level: 4 } => ("H4", t.h4_size * 1.4),
+                _ => ("H5", t.h5_size * 1.4),
+            };
+            focused_base.relative().child(
+                div()
+                    .id("heading-level-hint")
+                    .debug_selector(|| "heading-level-hint".into())
+                    .absolute()
+                    .left(px(depth_padding - 32.0 * self.document_zoom))
+                    .top(px(d.block_padding_y))
+                    .w(px(24.0 * self.document_zoom))
+                    .h(px(line_height))
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .font(FontSettings::code_font(cx))
+                    .font_weight(FontWeight::NORMAL)
+                    .text_size(px(10.0 * self.document_zoom))
+                    .line_height(px(12.0 * self.document_zoom))
+                    .text_color(c.text_placeholder)
+                    .child(label),
+            )
+        } else {
+            focused_base
+        };
+
         if showing_rendered_image && self.kind() == BlockKind::Paragraph {
             let viewport_width = f32::from(window.viewport_size().width.max(px(1.0)));
             let max_width = px(effective_image_width(self, viewport_width, d));

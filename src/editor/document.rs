@@ -729,6 +729,12 @@ fn collect_list_item_region(lines: &[String], start: usize, marker_indent_column
         }
 
         let (indent_columns, _) = leading_indent_columns_and_bytes(line);
+        // Lazy list continuations are paragraph text. A fence at the item's
+        // own indentation starts a separate block even without a blank line;
+        // indented fences remain available to the native child-block parser.
+        if indent_columns <= marker_indent_columns && parse_opening_fence(line).is_some() {
+            return index.saturating_sub(pending_blank_lines);
+        }
         if indent_columns > marker_indent_columns || pending_blank_lines == 0 {
             pending_blank_lines = 0;
             index += 1;
@@ -2503,6 +2509,49 @@ mod tests {
                 "let x = 1;\nlet y = 2;"
             );
         });
+    }
+
+    #[gpui::test]
+    async fn unindented_fences_after_list_items_import_as_root_code_blocks(
+        cx: &mut TestAppContext,
+    ) {
+        // No blank line separates either list label from its root-level fence.
+        // Keep shell punctuation in the fixture, without using real credentials.
+        let first_code = "echo example | cat\nprintf '%s' done";
+        let second_code = "ssh-keygen -t ed25519\nchmod 700 ~/.ssh";
+        for marker in ["-", "1.", "- [ ]"] {
+            for (fence, language) in [("```", None), ("~~~sh", Some("sh"))] {
+                let close = &fence[..3];
+                let source = format!(
+                    "{marker} first\n{fence}\n{first_code}\n{close}\n\n{marker} second\n{fence}\n{second_code}\n{close}"
+                );
+                let editor = cx.new(|cx| Editor::from_markdown(cx, source, None));
+                editor.update(cx, |editor, cx| {
+                    for _ in 0..2 {
+                        let visible = editor.document.visible_blocks();
+                        assert_eq!(visible.len(), 4);
+                        for (label_index, label, content) in
+                            [(0, "first", first_code), (2, "second", second_code)]
+                        {
+                            let label_block = visible[label_index].entity.read(cx);
+                            assert!(label_block.kind().is_list_item());
+                            assert_eq!(label_block.display_text(), label);
+                            assert!(label_block.children.is_empty());
+                            let code = visible[label_index + 1].entity.read(cx);
+                            assert_eq!(
+                                code.kind(),
+                                BlockKind::CodeBlock {
+                                    language: language.map(Into::into)
+                                }
+                            );
+                            assert_eq!(code.display_text(), content);
+                        }
+                        editor.toggle_view_mode(cx);
+                        editor.toggle_view_mode(cx);
+                    }
+                });
+            }
+        }
     }
 
     #[gpui::test]
