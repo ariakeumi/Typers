@@ -665,13 +665,25 @@ impl Editor {
         for (range, replacement) in edits.into_iter().rev() {
             source.replace_range(range, &replacement);
         }
-        self.commit_source_edit(source, caret..caret, cx);
+        self.commit_source_edit(
+            source,
+            UndoSelectionSnapshot {
+                range: caret..caret,
+                reversed: false,
+            },
+            cx,
+        );
         self.pending_focus = None;
         self.refresh_search(true, cx);
     }
 
     /// A replacement/formatting command is one undo step, including Replace All.
-    fn commit_source_edit(&mut self, source: String, range: Range<usize>, cx: &mut Context<Self>) {
+    fn commit_source_edit(
+        &mut self,
+        source: String,
+        selection: UndoSelectionSnapshot,
+        cx: &mut Context<Self>,
+    ) {
         if self.writing.read_only {
             return;
         }
@@ -684,10 +696,7 @@ impl Editor {
         self.restore_history_entry(
             &HistoryEntry {
                 source_text: source,
-                selection: UndoSelectionSnapshot {
-                    range,
-                    reversed: false,
-                },
+                selection,
                 timestamp: std::time::Instant::now(),
                 kind: UndoCaptureKind::NonCoalescible,
             },
@@ -717,6 +726,12 @@ impl Editor {
     }
 
     fn apply_writing_format(&mut self, command: WritingCommand, cx: &mut Context<Self>) {
+        if self.writing.read_only {
+            return;
+        }
+        if self.apply_live_heading_format(command, cx) {
+            return;
+        }
         // Empty rendered paragraphs are source separators, with no text
         // selection mapping. Convert the live block instead of formatting the
         // previous source selection returned as a fallback for those gaps.
@@ -734,10 +749,66 @@ impl Editor {
             return;
         }
         let source = self.serialized_document_text(cx);
-        let selection = self.capture_source_selection_snapshot(cx).range;
-        if let Some((source, selection)) = format_source(&source, selection, command) {
+        let mut selection = self.capture_source_selection_snapshot(cx);
+        if let Some((source, range)) = format_source(&source, selection.range.clone(), command) {
+            selection.range = range;
             self.commit_source_edit(source, selection, cx);
         }
+    }
+
+    /// Keep the entity, inline projection and measured rows when only typography
+    /// changes. Reimporting the document discards all three and moves the caret.
+    fn apply_live_heading_format(
+        &mut self,
+        command: WritingCommand,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        use crate::components::BlockKind;
+        use WritingCommand::*;
+        let kind = match command {
+            Paragraph => BlockKind::Paragraph,
+            Heading1 => BlockKind::Heading { level: 1 },
+            Heading2 => BlockKind::Heading { level: 2 },
+            Heading3 => BlockKind::Heading { level: 3 },
+            Heading4 => BlockKind::Heading { level: 4 },
+            Heading5 => BlockKind::Heading { level: 5 },
+            Heading6 => BlockKind::Heading { level: 6 },
+            _ => return false,
+        };
+        if self.view_mode != super::ViewMode::Rendered || self.cross_block_selection.is_some() {
+            return false;
+        }
+        let Some(target) = self.current_edit_target_from_state(cx) else {
+            return false;
+        };
+        let block = target.read(cx);
+        if block.is_table_cell()
+            || !matches!(
+                block.kind(),
+                BlockKind::Paragraph | BlockKind::Heading { .. }
+            )
+            || block.record.title.visible_text().contains('\n')
+        {
+            return false;
+        }
+        if block.kind() == kind {
+            return true;
+        }
+        self.finalize_pending_undo_capture(cx);
+        self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
+        target.update(cx, |block, cx| {
+            block.record.kind = kind;
+            block.record.raw_fallback = None;
+            block.sync_edit_mode_from_kind();
+            block.marked_range = None;
+            block.vertical_motion_x = None;
+            block.cursor_blink_epoch = std::time::Instant::now();
+            cx.notify();
+        });
+        self.mark_dirty(cx);
+        self.request_active_block_scroll_into_view(cx);
+        self.finalize_pending_undo_capture(cx);
+        true
     }
 
     pub(super) fn search_owns_focus(&self, window: &Window, cx: &App) -> bool {
@@ -1166,13 +1237,39 @@ fn format_source(
                 TaskList => "- [ ] ",
                 _ => "",
             };
-            text.split('\n')
+            let replacement = text
+                .split('\n')
                 .map(|line| {
                     let content = strip_block_prefix(line);
                     format!("{prefix}{content}")
                 })
                 .collect::<Vec<_>>()
-                .join("\n")
+                .join("\n");
+            // Prefix edits change source offsets, not the selected characters.
+            // Map both endpoints independently, including a selection ending
+            // just after the final newline (outside the replaced line range).
+            let map_offset = |offset: usize| {
+                let mut old_start = start;
+                let mut new_start = start;
+                for line in text.split('\n') {
+                    let content = strip_block_prefix(line);
+                    let removed = line.len() - content.len();
+                    if offset <= old_start + line.len() {
+                        return new_start
+                            + prefix.len()
+                            + offset
+                                .saturating_sub(old_start + removed)
+                                .min(content.len());
+                    }
+                    old_start += line.len() + 1;
+                    new_start += prefix.len() + content.len() + 1;
+                }
+                start + replacement.len() + offset.saturating_sub(end)
+            };
+            let range = map_offset(selection.start)..map_offset(selection.end);
+            let mut output = source.to_owned();
+            output.replace_range(start..end, &replacement);
+            return Some((output, range));
         }
         _ => return None,
     };
@@ -1715,6 +1812,268 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn heading_shortcuts_preserve_live_blocks_caret_and_selection(cx: &mut TestAppContext) {
+        init(cx);
+        let (editor, visual) = cx.add_window_view(|_, cx| {
+            Editor::from_markdown(cx, "before\n\n标题 Hello 😀\n\nafter".into(), None)
+        });
+        let target = editor.update(visual, |editor, cx| {
+            let target = editor
+                .document
+                .visible_blocks()
+                .iter()
+                .find(|row| row.entity.read(cx).display_text() == "标题 Hello 😀")
+                .unwrap()
+                .entity
+                .clone();
+            editor.focus_block_range(&target, "标题 He".len().."标题 He".len(), cx);
+            target
+        });
+        draw(visual);
+        let ids = editor.read_with(visual, |editor, _| {
+            editor
+                .document
+                .visible_blocks()
+                .iter()
+                .map(|row| row.entity.entity_id())
+                .collect::<Vec<_>>()
+        });
+        for key in ["2", "1", "6", "3", "4", "5", "alt-0"] {
+            visual.simulate_keystrokes(&format!(
+                "{}-{key}",
+                if cfg!(target_os = "macos") {
+                    "cmd"
+                } else {
+                    "ctrl"
+                }
+            ));
+            draw(visual);
+            editor.read_with(visual, |editor, cx| {
+                assert_eq!(
+                    editor
+                        .document
+                        .visible_blocks()
+                        .iter()
+                        .map(|row| row.entity.entity_id())
+                        .collect::<Vec<_>>(),
+                    ids,
+                    "formatting must retain measured rows and focus handles"
+                );
+                assert_eq!(editor.active_entity_id, Some(target.entity_id()));
+                assert_eq!(
+                    target.read(cx).kind(),
+                    match key {
+                        "alt-0" => crate::components::BlockKind::Paragraph,
+                        _ => crate::components::BlockKind::Heading {
+                            level: key.parse().unwrap()
+                        },
+                    }
+                );
+                assert_eq!(
+                    target.read(cx).selected_range,
+                    "标题 He".len().."标题 He".len()
+                );
+            });
+        }
+        target.update(visual, |block, cx| {
+            block.selected_range = "标题 ".len().."标题 Hello".len();
+            block.selection_reversed = true;
+            cx.notify();
+        });
+        visual.dispatch_action(action(WritingCommand::Heading2));
+        draw(visual);
+        target.read_with(visual, |block, _| {
+            assert_eq!(block.selected_range, "标题 ".len().."标题 Hello".len());
+            assert!(block.selection_reversed);
+        });
+        let formatted = editor.read_with(visual, |editor, cx| editor.serialized_document_text(cx));
+        visual.dispatch_action(action(WritingCommand::Heading2));
+        draw(visual);
+        assert_eq!(
+            editor.read_with(visual, |editor, _| editor.undo_history.len()),
+            8
+        );
+        visual.dispatch_action(action(WritingCommand::Undo));
+        draw(visual);
+        editor.read_with(visual, |editor, cx| {
+            let block = editor.current_edit_target_from_state(cx).unwrap();
+            assert_eq!(
+                block.read(cx).kind(),
+                crate::components::BlockKind::Paragraph
+            );
+            assert_eq!(
+                block.read(cx).selected_range,
+                "标题 ".len().."标题 Hello".len()
+            );
+            assert!(block.read(cx).selection_reversed);
+        });
+        visual.dispatch_action(action(WritingCommand::Redo));
+        draw(visual);
+        editor.read_with(visual, |editor, cx| {
+            assert_eq!(editor.serialized_document_text(cx), formatted);
+            assert!(
+                editor
+                    .current_edit_target_from_state(cx)
+                    .unwrap()
+                    .read(cx)
+                    .selection_reversed
+            );
+        });
+    }
+
+    #[test]
+    fn heading_source_format_preserves_selection_offsets() {
+        assert_eq!(
+            format_source("## Hello", 6..6, WritingCommand::Heading1).unwrap(),
+            ("# Hello".into(), 5..5)
+        );
+        assert_eq!(
+            format_source("Hello", 1..4, WritingCommand::Heading3).unwrap(),
+            ("### Hello".into(), 5..8)
+        );
+        assert_eq!(
+            format_source("## 中文\n### world\ntail", 6..14, WritingCommand::Heading1).unwrap(),
+            ("# 中文\n# world\ntail".into(), 5..11)
+        );
+        assert_eq!(
+            format_source("## a\nnext", 3..5, WritingCommand::Heading3).unwrap(),
+            ("### a\nnext".into(), 4..6)
+        );
+        assert_eq!(
+            format_source("", 0..0, WritingCommand::Heading1).unwrap(),
+            ("# ".into(), 2..2)
+        );
+    }
+
+    #[gpui::test]
+    async fn heading_shortcut_keeps_long_document_scroll_stable(cx: &mut TestAppContext) {
+        init(cx);
+        let source = (0..120)
+            .map(|i| format!("Paragraph {i}"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let (editor, visual) = cx.add_window_view(|_, cx| Editor::from_markdown(cx, source, None));
+        let target = editor.update(visual, |editor, cx| {
+            let target = editor
+                .document
+                .visible_blocks()
+                .iter()
+                .find(|row| row.entity.read(cx).display_text() == "Paragraph 60")
+                .unwrap()
+                .entity
+                .clone();
+            editor.focus_block_range(&target, 5..5, cx);
+            target
+        });
+        for _ in 0..12 {
+            draw(visual);
+        }
+        editor.update(visual, |editor, _| {
+            let mut offset = editor.scroll_handle.offset();
+            offset.y -= editor.last_scroll_viewport_size.unwrap().height / 3.0;
+            editor.scroll_handle.set_offset(offset);
+        });
+        for _ in 0..6 {
+            draw(visual);
+        }
+        let before = editor.read_with(visual, |editor, _| editor.scroll_handle.offset());
+        assert!(before.y < gpui::px(-500.0));
+        for command in [
+            WritingCommand::Heading1,
+            WritingCommand::Heading6,
+            WritingCommand::Paragraph,
+        ] {
+            visual.dispatch_action(action(command));
+            for _ in 0..8 {
+                draw(visual);
+                editor.read_with(visual, |editor, cx| {
+                    assert!(
+                        (editor.scroll_handle.offset().y - before.y).abs() < gpui::px(0.5),
+                        "heading formatting must not discard preceding row heights"
+                    );
+                    assert_eq!(editor.active_entity_id, Some(target.entity_id()));
+                    assert_eq!(target.read(cx).selected_range, 5..5);
+                });
+            }
+        }
+    }
+
+    #[gpui::test]
+    async fn heading_shortcut_preserves_inline_projection(cx: &mut TestAppContext) {
+        init(cx);
+        let (editor, visual) = cx.add_window_view(|_, cx| {
+            Editor::from_markdown(cx, "**Hello** [链接](https://example.com)".into(), None)
+        });
+        draw(visual);
+        visual.simulate_keystrokes("home right right right");
+        draw(visual);
+        let target = editor.read_with(visual, |editor, cx| {
+            editor.current_edit_target_from_state(cx).unwrap()
+        });
+        let (text, selection) = target.read_with(visual, |block, _| {
+            (
+                block.display_text().to_owned(),
+                block.selected_range.clone(),
+            )
+        });
+        assert!(text.contains("**"));
+        visual.dispatch_action(action(WritingCommand::Heading2));
+        draw(visual);
+        target.read_with(visual, |block, _| {
+            assert_eq!(block.display_text(), text);
+            assert_eq!(block.selected_range, selection);
+        });
+        visual.simulate_input("X");
+        draw(visual);
+        editor.read_with(visual, |editor, cx| {
+            assert_eq!(
+                editor.serialized_document_text(cx),
+                "## **HeXllo** [链接](https://example.com)"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn heading_source_selection_direction_survives_format_and_history(
+        cx: &mut TestAppContext,
+    ) {
+        init(cx);
+        let editor = cx.new(|cx| {
+            let mut editor = Editor::from_markdown(cx, "## 中文\n\n### world".into(), None);
+            editor.toggle_view_mode(cx);
+            editor
+        });
+        editor.update(cx, |editor, cx| {
+            let original = editor.serialized_document_text(cx);
+            let range = 6..original.len();
+            editor
+                .document
+                .first_root()
+                .unwrap()
+                .update(cx, |block, _| {
+                    block.selected_range = range.clone();
+                    block.selection_reversed = true;
+                });
+            editor.apply_writing_format(WritingCommand::Heading1, cx);
+            let formatted = editor.serialized_document_text(cx);
+            assert_eq!(formatted, "# 中文\n# \n# world");
+            let selection = editor.capture_source_selection_snapshot(cx);
+            assert_eq!(selection.range, 5..formatted.len());
+            assert!(selection.reversed);
+            editor.undo_document(cx);
+            assert_eq!(editor.serialized_document_text(cx), original);
+            assert_eq!(editor.capture_source_selection_snapshot(cx).range, range);
+            assert!(editor.capture_source_selection_snapshot(cx).reversed);
+            editor.redo_document(cx);
+            assert_eq!(
+                editor.capture_source_selection_snapshot(cx).range,
+                selection.range
+            );
+            assert!(editor.capture_source_selection_snapshot(cx).reversed);
+        });
+    }
+
+    #[gpui::test]
     async fn repeated_heading_changes_keep_escaped_text_and_history_bounded(
         cx: &mut TestAppContext,
     ) {
@@ -1728,16 +2087,16 @@ mod tests {
         let editor = cx.new(|cx| Editor::from_markdown(cx, markdown.into(), None));
         let original = editor.read_with(cx, |editor, cx| editor.serialized_document_text(cx));
         let body = original.split_once('\n').unwrap().1;
-        let mut retired = Vec::new();
+        let blocks = editor.read_with(cx, |editor, _| {
+            editor
+                .document
+                .visible_blocks()
+                .iter()
+                .map(|block| block.entity.downgrade())
+                .collect::<Vec<_>>()
+        });
         for round in 0..64 {
             editor.update(cx, |editor, cx| {
-                retired.extend(
-                    editor
-                        .document
-                        .visible_blocks()
-                        .iter()
-                        .map(|block| block.entity.downgrade()),
-                );
                 let (command, heading) = if round % 2 == 0 {
                     (WritingCommand::Heading2, "## Heading")
                 } else {
@@ -1757,7 +2116,7 @@ mod tests {
                 );
             });
             cx.run_until_parked();
-            assert!(retired.iter().all(|block| block.upgrade().is_none()));
+            assert!(blocks.iter().all(|block| block.upgrade().is_some()));
         }
         editor.update(cx, |editor, cx| {
             for _ in 0..64 {
@@ -1785,6 +2144,8 @@ mod tests {
             }
             assert_eq!(editor.serialized_document_text(cx), original);
         });
+        cx.run_until_parked();
+        assert!(blocks.iter().all(|block| block.upgrade().is_none()));
     }
 
     #[gpui::test]
