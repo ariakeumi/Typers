@@ -1896,7 +1896,7 @@ impl I18nStrings {
             image_placeholder: "图片".into(),
             image_loading_without_alt: "正在加载图片...".into(),
             image_loading_with_alt_template: "正在加载 {alt}".into(),
-            code_language_placeholder: "语言".into(),
+            code_language_placeholder: "代码语言".into(),
             status_bar_files: "侧边栏".into(),
             status_bar_mode_source: "源码".into(),
             status_bar_mode_rendered: "渲染".into(),

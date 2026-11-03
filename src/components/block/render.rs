@@ -2777,19 +2777,18 @@ impl Render for Block {
                     );
 
                 if show_language_input {
-                    let input_height = d.code_language_input_height
-                        + d.code_language_input_padding_y * 2.0
-                        + d.code_language_input_border_width * 2.0;
+                    // Keep the popover out of the block's footprint so focusing
+                    // code or its language input never shifts following blocks.
                     div()
                         .w_full()
                         .relative()
-                        .pb(px(input_height + d.code_language_input_gap))
                         .child(code_panel)
-                        .child(
+                        .child(deferred(
                             div()
                                 .absolute()
                                 .right(px(d.code_block_padding_x))
-                                .bottom(px(0.0))
+                                .top(relative(1.0))
+                                .mt(px(d.code_language_input_gap))
                                 .occlude()
                                 .key_context(BLOCK_EDITOR_CONTEXT)
                                 .track_focus(&self.code_language_focus_handle)
@@ -2839,7 +2838,7 @@ impl Render for Block {
                                     cx.entity(),
                                     language_placeholder,
                                 )),
-                        )
+                        ))
                         .into_any_element()
                 } else {
                     code_panel.into_any_element()
@@ -3509,7 +3508,10 @@ mod tests {
     use crate::components::{TableAxisKind, TableAxisMarker};
     use crate::i18n::I18nManager;
     use crate::theme::{Theme, ThemeManager};
-    use gpui::{AppContext, Hsla, Rgba, TestAppContext, px};
+    use gpui::{
+        AppContext, Context, Entity, Hsla, IntoElement, Render, Rgba, TestAppContext, Window, div,
+        prelude::*, px,
+    };
 
     #[gpui::test]
     fn media_width_uses_editor_column_after_sidebar_layout(cx: &mut TestAppContext) {
@@ -3673,6 +3675,79 @@ mod tests {
 
         assert_color_near(parent.background.unwrap(), 0x11, 0x22, 0x33, 0xff);
         assert!(child.background.is_none());
+    }
+
+    #[gpui::test]
+    async fn code_language_input_keeps_following_paragraph_in_place(cx: &mut TestAppContext) {
+        struct CodeAndParagraph {
+            code: Entity<Block>,
+            paragraph: Entity<Block>,
+        }
+
+        impl Render for CodeAndParagraph {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .child(self.code.clone())
+                    .child(self.paragraph.clone())
+            }
+        }
+
+        cx.update(|cx| {
+            I18nManager::init(cx);
+            ThemeManager::init(cx);
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CodeAndParagraph {
+            code: cx.new(|cx| {
+                Block::with_record(
+                    cx,
+                    BlockRecord::new(
+                        BlockKind::CodeBlock { language: None },
+                        InlineTextTree::plain("first line\nsecond line"),
+                    ),
+                )
+            }),
+            paragraph: cx.new(|cx| {
+                Block::with_record(
+                    cx,
+                    BlockRecord::new(BlockKind::Paragraph, InlineTextTree::plain("下一行文字")),
+                )
+            }),
+        });
+        let (code, paragraph) =
+            view.read_with(cx, |view, _| (view.code.clone(), view.paragraph.clone()));
+        let code_focus = code.read_with(cx, |block, _| block.focus_handle.clone());
+        let language_focus =
+            code.read_with(cx, |block, _| block.code_language_focus_handle.clone());
+        let paragraph_focus = paragraph.read_with(cx, |block, _| block.focus_handle.clone());
+        cx.update(|window, cx| {
+            paragraph_focus.focus(window, cx);
+            window.draw(cx).clear(cx);
+        });
+        cx.run_until_parked();
+        let code_bounds = code.read_with(cx, |block, _| block.last_bounds.unwrap());
+        let paragraph_bounds = paragraph.read_with(cx, |block, _| block.last_bounds.unwrap());
+
+        for (focus, input_visible) in [
+            (&code_focus, true),
+            (&language_focus, true),
+            (&paragraph_focus, false),
+        ] {
+            cx.update(|window, cx| {
+                focus.focus(window, cx);
+                window.draw(cx).clear(cx);
+            });
+            cx.run_until_parked();
+            code.read_with(cx, |block, _| {
+                assert_eq!(block.last_bounds, Some(code_bounds));
+                assert_eq!(block.code_language_last_bounds.is_some(), input_visible);
+            });
+            paragraph.read_with(cx, |block, _| {
+                assert_eq!(block.last_bounds, Some(paragraph_bounds));
+            });
+        }
     }
 
     #[gpui::test]
