@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Typers 项目横幅](assets/icon/velotype-banner.png)
+![Typers 项目横幅](assets/icon/typers.png)
 
 **基于 Rust 和 GPUI 的原生 Markdown 编辑器。**
 
